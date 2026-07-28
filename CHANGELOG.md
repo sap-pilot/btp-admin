@@ -6,9 +6,13 @@
 - **Move `npx playwright install chromium` from `start` to `postinstall`** — Chromium is now installed once during `npm install` via the `postinstall` hook instead of on every app start; `PLAYWRIGHT_BROWSERS_PATH=./pw-browsers` is set in both scripts so the browser is installed into `server/pw-browsers/` (inside the CF module path), persists through droplet packaging, and is found at the same relative path at runtime; `server/pw-browsers/` is gitignored
 - **`responseTime` reported as ~50-year value on early browser failure** — when `getBrowser()` threw before the `start = Date.now()` assignment (e.g. Chromium not installed), `responseTime` was computed as `Date.now() - 0`, producing a value of ~1 785 251 065 819 ms; it is now returned as `0` when `start` was never set
 
+### Security
+- **Path traversal guard in sync download** — `downloadOne()` and `downloadBatch()` now resolve the final write path with `node:path` `resolve()` and verify it falls within `RESPONSE_DIR` before writing; a malicious or misconfigured producer that returns a crafted `folder` name (e.g. `..`) or ZIP entry path can no longer write files outside the response directory
+
 ### Changed
 - **Memory raised to 2 G** — `mta.yaml` module memory increased from 1 G to 2 G; headless Chrome was hitting OOM under concurrent check load at 1 G
-- **`SYNC_REMOTE_BATCH_SIZE` default increased to 200** — the default number of files per batch-download request increased from 100 to 200; overridable via the `SYNC_REMOTE_BATCH_SIZE` env var; the server-side cap remains 500
+- **`SYNC_REMOTE_BATCH_SIZE` default increased to 200**
+- **Build artifacts removed from version control** — `client/tsconfig.tsbuildinfo` (TypeScript incremental build cache) and `shared/types.js` (compiled CommonJS stub) are no longer tracked; both are generated at build time and were causing noisy diffs; `**/*.tsbuildinfo` and `shared/*.js` added to `.gitignore` — the default number of files per batch-download request increased from 100 to 200; overridable via the `SYNC_REMOTE_BATCH_SIZE` env var; the server-side cap remains 500
 
 ## [v1.0.0] - 2026-07-17
 

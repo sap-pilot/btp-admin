@@ -3,7 +3,7 @@ import { get as httpsGet, request as httpsRequest } from 'node:https';
 import { gunzip } from 'node:zlib';
 import { promisify } from 'node:util';
 import { mkdir, writeFile, utimes } from 'node:fs/promises';
-import { join } from 'node:path';
+import { join, resolve as resolvePath } from 'node:path';
 import { createHmac } from 'node:crypto';
 import { config } from '../config.js';
 import { logger } from '../logger.js';
@@ -268,9 +268,14 @@ async function downloadOne(
   const { buf, transferred, decompressed } = await fetchRaw(url, syncKeyHeader());
 
   const [folder, filename] = filePath.split('/');
+  const target = resolvePath(config.RESPONSE_DIR, folder!, filename!);
+  if (!target.startsWith(resolvePath(config.RESPONSE_DIR) + '/')) {
+    logger.warn({ path: filePath }, 'Skipping file: path traversal detected');
+    return { transferred: 0, decompressed: 0 };
+  }
   const dir = join(config.RESPONSE_DIR, folder!);
   await mkdir(dir, { recursive: true });
-  await writeFile(join(dir, filename!), buf);
+  await writeFile(target, buf);
   logger.debug({ path: filePath }, 'Downloaded file');
 
   return { transferred, decompressed };
@@ -284,13 +289,19 @@ async function downloadBatch(
   const { buf: zip, transferred } = await fetchPost(url, JSON.stringify({ paths: filePaths }), syncKeyHeader());
   const entries = extractZip(zip);
 
+  const safeBase = resolvePath(config.RESPONSE_DIR);
   await Promise.all(
     entries.map(async ({ name, data }) => {
       const parts = name.split('/');
       if (parts.length !== 2 || !parts[0] || !parts[1]) return;
+      const target = resolvePath(config.RESPONSE_DIR, parts[0], parts[1]);
+      if (!target.startsWith(safeBase + '/')) {
+        logger.warn({ name }, 'Skipping ZIP entry: path traversal detected');
+        return;
+      }
       const dir = join(config.RESPONSE_DIR, parts[0]);
       await mkdir(dir, { recursive: true });
-      await writeFile(join(dir, parts[1]), data);
+      await writeFile(target, data);
     }),
   );
 

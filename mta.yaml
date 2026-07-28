@@ -27,6 +27,7 @@ modules:
         - npm run build --prefix ..
       ignore:
         - response/
+        - pw-browsers/
     properties:
       CONFIG_FILE: ./config.json
     requires:

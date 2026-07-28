@@ -1,4 +1,6 @@
 dist/
+**/*.tsbuildinfo
+shared/*.js
 edmx/
 gen/
 node_modules/
