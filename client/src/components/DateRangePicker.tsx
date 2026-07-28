@@ -131,7 +131,7 @@ export default function DateRangePicker({ open, onClose, onApply, fromDate: init
   }
 
   return (
-    <Dialog open={open} onOpenChange={v => { if (!v) onClose(); }}>
+    <Dialog open={open} onOpenChange={(v: boolean) => { if (!v) onClose(); }}>
       <DialogContent className="max-w-[95vw] sm:max-w-md">
         <DialogHeader>
           <DialogTitle className="text-sm">Select Date Range</DialogTitle>

@@ -1,5 +1,5 @@
 import { Component, lazy, Suspense, type ReactNode, type ErrorInfo } from 'react';
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, Navigate } from 'react-router';
 
 const Overview = lazy(() => import('@/pages/Overview'));
 const History = lazy(() => import('@/pages/History'));

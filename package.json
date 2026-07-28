@@ -24,5 +24,9 @@
     "typecheck": "npm run typecheck --workspace=client && npm run typecheck --workspace=server",
     "test": "npm run test --workspace=client && npm run test --workspace=server"
   },
-  "devDependencies": {}
+  "devDependencies": {},
+  "overrides": {
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8"
+  }
 }

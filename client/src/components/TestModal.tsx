@@ -168,7 +168,7 @@ export default function TestModal({ serviceName, open, onClose, onComplete }: Pr
   const totalCount = result?.details.length ?? 0;
 
   return (
-    <Dialog open={open} onOpenChange={o => { if (!o) handleClose(); }}>
+    <Dialog open={open} onOpenChange={(o: boolean) => { if (!o) handleClose(); }}>
       <DialogContent className="max-w-3xl max-h-[85vh] flex flex-col gap-3">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2 flex-wrap">

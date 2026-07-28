@@ -134,7 +134,7 @@ export default function ResponseDetailModal({ file, serviceName, onClose, auth }
     : null;
 
   return (
-    <Dialog open={!!file} onOpenChange={open => { if (!open) onClose(); }}>
+    <Dialog open={!!file} onOpenChange={(open: boolean) => { if (!open) onClose(); }}>
       <DialogContent className="max-w-4xl h-[85vh] flex flex-col">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">

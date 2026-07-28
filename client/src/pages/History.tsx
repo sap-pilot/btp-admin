@@ -4,7 +4,7 @@ import { useLiveEvents } from '@/hooks/useLiveEvents';
 function fmtUptime(n: number): string {
   return parseFloat(n.toFixed(2)) === 100 ? '100%' : `${n.toFixed(2)}%`;
 }
-import { Link, useLocation, useNavigate, useParams } from 'react-router-dom';
+import { Link, useLocation, useNavigate, useParams } from 'react-router';
 import type { EvaluationMode, HistoryFile, ServiceConfig, ServiceSummary, SiteConfig } from '@shared/types';
 import StatusDots from '@/components/StatusDots';
 import ResponseTimeChart from '@/components/ResponseTimeChart';
@@ -580,7 +580,7 @@ export default function History() {
               <span title={adminTooltip}>
                 <Select
                   value={scheduleValue}
-                  onValueChange={v => void applySchedule(Number(v))}
+                  onValueChange={(v: string) => void applySchedule(Number(v))}
                   disabled={scheduleInterval === null || (auth.enabled && auth.loggedIn && !auth.isAdmin)}
                 >
                   <SelectTrigger className="h-8 text-xs w-36">
@@ -599,7 +599,7 @@ export default function History() {
 
             <Select
               value={starredMode ? 'starred' : (range.mode === 'dateRange' ? '' : String(range.hours))}
-              onValueChange={v => {
+              onValueChange={(v: string) => {
                 if (v === 'starred') { setStarredMode(true); setFilterTag('starred'); setSearchParam({ tag: 'starred', hours: null }); }
                 else if (v === 'range') { setDatePickerOpen(true); }
                 else setRange({ mode: 'hours', hours: Number(v) });
@@ -683,7 +683,7 @@ export default function History() {
                   <span title={adminTooltip}>
                     <Select
                       value={scheduleValue}
-                      onValueChange={v => void applySchedule(Number(v))}
+                      onValueChange={(v: string) => void applySchedule(Number(v))}
                       disabled={scheduleInterval === null || (auth.enabled && auth.loggedIn && !auth.isAdmin)}
                     >
                       <SelectTrigger className="h-9 text-xs w-full">
@@ -701,7 +701,7 @@ export default function History() {
               <div className="flex items-center gap-2">
                 <Select
                   value={starredMode ? 'starred' : (range.mode === 'dateRange' ? '' : String(range.hours))}
-                  onValueChange={v => {
+                  onValueChange={(v: string) => {
                     if (v === 'starred') { setStarredMode(true); setFilterTag('starred'); setSearchParam({ tag: 'starred', hours: null }); setMenuOpen(false); }
                     else if (v === 'range') { setDatePickerOpen(true); setMenuOpen(false); }
                     else setRange({ mode: 'hours', hours: Number(v) });
@@ -941,7 +941,7 @@ export default function History() {
                       ))}
                     </SelectContent>
                   </Select>
-                  <Select value={filterLocation} onValueChange={v => { setFilterLocation(v); setSearchParam({ location: v === 'all' ? null : v }); }}>
+                  <Select value={filterLocation} onValueChange={(v: string) => { setFilterLocation(v); setSearchParam({ location: v === 'all' ? null : v }); }}>
                     <SelectTrigger className="h-7 text-xs w-auto min-w-[9rem] max-w-[14rem]">
                       <SelectValue />
                     </SelectTrigger>
@@ -952,7 +952,7 @@ export default function History() {
                       ))}
                     </SelectContent>
                   </Select>
-                  <Select value={filterStatus} onValueChange={v => { setFilterStatus(v); setSearchParam({ status: v === 'all' ? null : v }); }}>
+                  <Select value={filterStatus} onValueChange={(v: string) => { setFilterStatus(v); setSearchParam({ status: v === 'all' ? null : v }); }}>
                     <SelectTrigger className="h-7 text-xs w-40">
                       <SelectValue />
                     </SelectTrigger>
@@ -967,7 +967,7 @@ export default function History() {
                       <SelectItem value="504" className="text-xs">TIMEOUT</SelectItem>
                     </SelectContent>
                   </Select>
-                  <Select value={filterTag} onValueChange={v => { setFilterTag(v); setSearchParam({ tag: v === 'all' ? null : v }); }}>
+                  <Select value={filterTag} onValueChange={(v: string) => { setFilterTag(v); setSearchParam({ tag: v === 'all' ? null : v }); }}>
                     <SelectTrigger className="h-7 text-xs w-28">
                       <SelectValue />
                     </SelectTrigger>
@@ -1100,7 +1100,7 @@ export default function History() {
       />
 
       {/* Confirmation dialog for evaluation mode changes */}
-      <AlertDialog open={evalConfirmOpen} onOpenChange={open => { if (!open) cancelEvalMode(); }}>
+      <AlertDialog open={evalConfirmOpen} onOpenChange={(open: boolean) => { if (!open) cancelEvalMode(); }}>
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>

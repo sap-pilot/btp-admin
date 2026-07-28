@@ -1,6 +1,6 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { parseFilename } from '@/lib/parseFilename';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router';
 import type { ServiceWithHistory, HistoryFile, LandscapeConfig, ServiceSummary, SiteConfig } from '@shared/types';
 import StatusDots from '@/components/StatusDots';
 import type { NodeStatus } from '@/components/LandscapeDiagram';
@@ -411,7 +411,7 @@ export default function Overview() {
             </Badge>
             <Select
               value={range.mode === 'dateRange' ? '' : String(range.hours)}
-              onValueChange={v => {
+              onValueChange={(v: string) => {
                 if (v === 'range') { setDatePickerOpen(true); }
                 else setRange({ mode: 'hours', hours: Number(v) });
               }}
@@ -489,7 +489,7 @@ export default function Overview() {
               <div className="flex items-center gap-2">
                 <Select
                   value={range.mode === 'dateRange' ? '' : String(range.hours)}
-                  onValueChange={v => {
+                  onValueChange={(v: string) => {
                     if (v === 'range') { setDatePickerOpen(true); setMenuOpen(false); }
                     else setRange({ mode: 'hours', hours: Number(v) });
                   }}
