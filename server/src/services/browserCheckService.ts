@@ -83,7 +83,7 @@ export async function runBrowserIasLogin(
     logger.info({ service: serviceName, endpoint: ep.name, finalUrl: page.url() }, 'Browser check passed');
     responseTime = Date.now() - start;
   } catch (err) {
-    responseTime = Date.now() - start;
+    responseTime = start > 0 ? Date.now() - start : 0;
     message = err instanceof Error ? err.message : String(err);
     logger.warn({ service: serviceName, endpoint: ep.name, err }, 'Browser check failed');
   }

@@ -1,5 +1,15 @@
 # Changelog
 
+## [v1.0.1] - 2026-07-20
+
+### Fixed
+- **Move `npx playwright install chromium` from `start` to `postinstall`** — Chromium is now installed once during `npm install` via the `postinstall` hook instead of on every app start; `PLAYWRIGHT_BROWSERS_PATH=./pw-browsers` is set in both scripts so the browser is installed into `server/pw-browsers/` (inside the CF module path), persists through droplet packaging, and is found at the same relative path at runtime; `server/pw-browsers/` is gitignored
+- **`responseTime` reported as ~50-year value on early browser failure** — when `getBrowser()` threw before the `start = Date.now()` assignment (e.g. Chromium not installed), `responseTime` was computed as `Date.now() - 0`, producing a value of ~1 785 251 065 819 ms; it is now returned as `0` when `start` was never set
+
+### Changed
+- **Memory raised to 2 G** — `mta.yaml` module memory increased from 1 G to 2 G; headless Chrome was hitting OOM under concurrent check load at 1 G
+- **`SYNC_REMOTE_BATCH_SIZE` default increased to 200** — the default number of files per batch-download request increased from 100 to 200; overridable via the `SYNC_REMOTE_BATCH_SIZE` env var; the server-side cap remains 500
+
 ## [v1.0.0] - 2026-07-17
 
 ### Added

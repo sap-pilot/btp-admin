@@ -1,13 +1,13 @@
 _schema-version: "3.3"
 ID: btp-status
-version: 1.0.0
+version: 1.0.1
 
 modules:
   - name: btp-status
     type: nodejs
     path: server
     parameters:
-      memory: 1G         # Chrome is memory-hungry — 512M is not enough
+      memory: 2G         # Chrome is memory-hungry — 512M is not enough
       disk-quota: 4G     # Chrome + libs are large
       # docker:
       #   image: sapux/btp-status:latest

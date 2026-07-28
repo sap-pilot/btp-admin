@@ -21,5 +21,6 @@ server/public/
 *.mtar
 mtad.yaml
 response/
+server/pw-browsers/
 .env
 *.local

@@ -1,15 +1,16 @@
 {
   "name": "btp-status-server",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "private": true,
   "type": "module",
   "main": "dist/index.js",
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "build": "tsc",
-    "start": "npx playwright install chromium && node dist/index.js",
+    "start": "PLAYWRIGHT_BROWSERS_PATH=./pw-browsers node dist/index.js",
     "lint": "tsc --noEmit",
     "typecheck": "tsc --noEmit",
+    "postinstall": "PLAYWRIGHT_BROWSERS_PATH=./pw-browsers npx playwright install chromium",
     "test": "node --test dist/**/*.test.js 2>/dev/null || echo 'No tests'"
   },
   "dependencies": {

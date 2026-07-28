@@ -1,6 +1,6 @@
 {
   "name": "btp-status",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "private": true,
   "workspaces": [
     "client",
@@ -19,6 +19,7 @@
     "deploy": "cf deploy mta_archives/btp-status.mtar -f --retries 1",
     "deploy-bg": "cf deploy mta_archives/btp-status.mtar -f --retries 1 --strategy blue-green --skip-testing-phase",
     "start": "npm run start --workspace=server",
+    "postinstall": "npm run postinstall --workspace=server",
     "lint": "npm run lint --workspace=client && npm run lint --workspace=server",
     "typecheck": "npm run typecheck --workspace=client && npm run typecheck --workspace=server",
     "test": "npm run test --workspace=client && npm run test --workspace=server"
