@@ -5,11 +5,11 @@ function fmtUptime(n: number): string {
   return parseFloat(n.toFixed(2)) === 100 ? '100%' : `${n.toFixed(2)}%`;
 }
 import { Link, useLocation, useNavigate, useParams } from 'react-router';
-import type { EvaluationMode, HistoryFile, ServiceConfig, ServiceSummary, SiteConfig } from '@shared/types';
-import StatusDots from '@/components/StatusDots';
-import ResponseTimeChart from '@/components/ResponseTimeChart';
-import ResponseDetailModal from '@/components/ResponseDetailModal';
-import TestModal from '@/components/TestModal';
+import type { EvaluationMode, HistoryFile, ServiceConfig, ServiceSummary } from '@shared/types';
+import StatusDots from '@/components/status/StatusDots';
+import ResponseTimeChart from '@/components/status/ResponseTimeChart';
+import ResponseDetailModal from '@/components/status/ResponseDetailModal';
+import TestModal from '@/components/status/TestModal';
 import { useTimeRange, fmtDateRange } from '@/hooks/useTimeRange';
 import DateRangePicker from '@/components/DateRangePicker';
 import { parseFilename } from '@/lib/parseFilename';
@@ -29,11 +29,10 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { ArrowLeft, AlertCircle, ChevronDown, ExternalLink, Menu, PlayCircle, RefreshCw, Star, Sun, Moon, X } from 'lucide-react';
-import { useTheme } from '@/hooks/useTheme';
+import { ArrowLeft, AlertCircle, ChevronDown, ExternalLink, MoreHorizontal, PanelLeft, PlayCircle, RefreshCw, Star } from 'lucide-react';
 import { useWindowWidth } from '@/hooks/useWindowWidth';
 import { useAuth } from '@/hooks/useAuth';
-import AuthButton from '@/components/AuthButton';
+import { useSidebar } from '@/components/AppLayout';
 
 const HOUR_OPTIONS = [
   { value: '1', label: 'Last 1 hour' },
@@ -81,12 +80,12 @@ export default function History() {
   const { name = '' } = useParams<{ name: string }>();
   const location = useLocation();
   const navigate = useNavigate();
-  const backTo = new URLSearchParams(location.search).get('from') ?? '/overview';
+  const backTo = new URLSearchParams(location.search).get('from') ?? '/status/overview';
   const autoOpenFilename = (location.state as { autoOpenFilename?: string } | null)?.autoOpenFilename;
   const autoOpenHandled = useRef(false);
   const initialHash = useRef(location.hash.slice(1));
-  const { theme, toggleTheme } = useTheme();
   const auth = useAuth();
+  const { toggle: toggleSidebar } = useSidebar();
   const adminTooltip = auth.enabled && auth.loggedIn && !auth.isAdmin
     ? 'Condition and schedule change are available for BTP_Status_Admin only; Contact security to get this role collection assigned to enable them'
     : undefined;
@@ -110,7 +109,6 @@ export default function History() {
   }
   const [datePickerOpen, setDatePickerOpen] = useState(false);
   const [maxStorageDays, setMaxStorageDays] = useState(7);
-  const [sites, setSites] = useState<SiteConfig[]>([]);
   const [summaries, setSummaries] = useState<ServiceSummary[]>([]);
   const [files, setFiles] = useState<HistoryFile[]>([]);
   const [service, setService] = useState<ServiceConfig | null>(null);
@@ -128,7 +126,6 @@ export default function History() {
 
   // Schedule
   const [scheduleInterval, setScheduleInterval] = useState<number | null>(null);
-  const [menuOpen, setMenuOpen] = useState(false);
   const [lastChecked, setLastChecked] = useState<Date>(new Date());
 
   // Table filters — initialise from URL params so diagram node clicks pre-filter
@@ -151,30 +148,29 @@ export default function History() {
   }, [location.search]);
 
   useEffect(() => {
-    fetch('/api/services')
+    fetch('/api/status/services')
       .then(r => r.json() as Promise<ServiceConfig[]>)
       .then(svcs => {
         const found = svcs.find(s => s.name === name);
-        if (!found) { navigate('/overview'); return; }
+        if (!found) { navigate('/status/overview'); return; }
         setService(found);
       })
       .catch(() => null);
-    fetch('/api/info')
-      .then(r => r.json() as Promise<{ maxStorageDays?: number; syncRemote?: boolean; sites?: SiteConfig[] }>)
+    fetch('/api/status/info')
+      .then(r => r.json() as Promise<{ maxStorageDays?: number; syncRemote?: boolean }>)
       .then(d => {
         if (d.maxStorageDays !== undefined) setMaxStorageDays(d.maxStorageDays);
         setSyncAvailable(!!d.syncRemote);
-        if (d.sites) setSites(d.sites);
       })
       .catch(() => null);
   }, [name, navigate]);
 
   useEffect(() => {
-    fetch(`/api/eval-mode/${encodeURIComponent(name)}`)
+    fetch(`/api/status/eval-mode/${encodeURIComponent(name)}`)
       .then(r => r.json() as Promise<{ mode: EvaluationMode }>)
       .then(d => setEvalMode(d.mode))
       .catch(() => null);
-    fetch(`/api/schedule/${encodeURIComponent(name)}`)
+    fetch(`/api/status/schedule/${encodeURIComponent(name)}`)
       .then(r => r.json() as Promise<{ intervalSeconds: number }>)
       .then(d => setScheduleInterval(d.intervalSeconds))
       .catch(() => null);
@@ -185,7 +181,7 @@ export default function History() {
   const fetchHistory = useCallback(() => {
     setLoading(true);
     setError(null);
-    fetch(`/api/history/${encodeURIComponent(name)}?${effectiveQueryString}`)
+    fetch(`/api/status/history/${encodeURIComponent(name)}?${effectiveQueryString}`)
       .then(r => {
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         return r.json() as Promise<{ lastModified: number; files: string[] }>;
@@ -203,7 +199,7 @@ export default function History() {
 
   const fetchDelta = useCallback(() => {
     const since = lastFetchTsRef.current - 5_000;
-    fetch(`/api/history/${encodeURIComponent(name)}?since=${since}`)
+    fetch(`/api/status/history/${encodeURIComponent(name)}?since=${since}`)
       .then(r => r.ok ? r.json() as Promise<{ lastModified: number; files: string[] }> : null)
       .then(data => {
         if (data === null) return;
@@ -233,7 +229,7 @@ export default function History() {
   useLiveEvents(range.mode === 'dateRange' ? null : name, fetchDelta);
 
   useEffect(() => {
-    fetch(`/api/service-summary?${queryString}`)
+    fetch(`/api/status/service-summary?${queryString}`)
       .then(r => r.json() as Promise<ServiceSummary[]>)
       .then(d => setSummaries(d))
       .catch(() => null);
@@ -245,7 +241,7 @@ export default function History() {
 
   function openFile(file: HistoryFile | null) {
     setSelected(file);
-    const base = `/service/${encodeURIComponent(name)}`;
+    const base = `/status/service/${encodeURIComponent(name)}`;
     const search = window.location.search;
     if (file) {
       const hash = file.filename.replace(/\.(json|png)$/, '');
@@ -271,7 +267,7 @@ export default function History() {
 
   async function applyEvalMode(m: EvaluationMode) {
     try {
-      await fetch(`/api/eval-mode/${encodeURIComponent(name)}`, {
+      await fetch(`/api/status/eval-mode/${encodeURIComponent(name)}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ mode: m }),
@@ -306,7 +302,7 @@ export default function History() {
 
   async function applySchedule(intervalSeconds: number) {
     try {
-      await fetch(`/api/schedule/${encodeURIComponent(name)}`, {
+      await fetch(`/api/status/schedule/${encodeURIComponent(name)}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ intervalSeconds }),
@@ -419,7 +415,7 @@ export default function History() {
       ? f.filename.replace(/\.json$/, '.starred.json')
       : f.filename.replace('.starred.json', '.json');
     try {
-      const res = await fetch(`/api/star/${encodeURIComponent(name)}/${encodeURIComponent(f.filename)}`, {
+      const res = await fetch(`/api/status/star/${encodeURIComponent(name)}/${encodeURIComponent(f.filename)}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ star: newStar }),
@@ -431,18 +427,6 @@ export default function History() {
           : file,
       ));
     } catch { /* ignore */ }
-  }
-
-  const currentSite = sites.find(s => {
-    try { return new URL(s.url).origin === window.location.origin; } catch { return false; }
-  }) ?? null;
-  const siteLabel = currentSite?.name ?? 'BTP Status';
-
-  function navigateToSite(siteUrl: string) {
-    const params = new URLSearchParams(window.location.search);
-    const path = `/service/${encodeURIComponent(name)}`;
-    const qs = params.toString();
-    window.location.href = siteUrl.replace(/\/$/, '') + path + (qs ? '?' + qs : '');
   }
 
   // Build schedule select value — may not match a preset if config uses a custom interval
@@ -457,302 +441,186 @@ export default function History() {
   }
 
   return (
-    <div className="min-h-screen bg-background text-foreground">
-      {/* Header */}
-      <header className="border-b border-border sticky top-0 bg-background z-10">
-        <div className="max-w-7xl mx-auto px-4 py-3 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <Link
-              to={backTo}
-              className="flex items-center gap-1 text-muted-foreground hover:text-foreground transition-colors text-sm"
-            >
-              <ArrowLeft className="h-4 w-4" />
-              {siteLabel}
-            </Link>
-            {sites.length >= 2 && (
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <button className="text-muted-foreground hover:text-foreground transition-colors -ml-1" title="Switch site">
-                    <ChevronDown className="h-3.5 w-3.5" />
-                  </button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="start">
-                  {sites.map(s => (
+    <div className="flex flex-col h-full bg-background text-foreground">
+      {/* Page toolbar */}
+      <div className="border-b border-border bg-background px-3 flex items-center gap-2 shrink-0 min-h-[52px]">
+        <button
+          onClick={toggleSidebar}
+          className="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-accent/50 transition-colors shrink-0"
+          title="Toggle sidebar"
+        >
+          <PanelLeft className="h-4 w-4" />
+        </button>
+        <Link
+          to={backTo}
+          className="flex items-center gap-1 text-muted-foreground hover:text-foreground transition-colors text-sm"
+        >
+          <ArrowLeft className="h-4 w-4" />
+          Status Overview
+        </Link>
+        <span className="text-muted-foreground">/</span>
+        <span className="font-semibold text-sm">{name}</span>
+        {summaries.length > 0 && (
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <button className="text-muted-foreground hover:text-foreground transition-colors" title="Switch service">
+                <ChevronDown className="h-4 w-4" />
+              </button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="start" className="w-60 max-h-80 overflow-y-auto">
+              {Object.entries(
+                summaries.reduce<Record<string, ServiceSummary[]>>((acc, s) => {
+                  (acc[s.group] ??= []).push(s);
+                  return acc;
+                }, {}),
+              ).map(([group, svcs], gi) => (
+                <div key={group}>
+                  {gi > 0 && <DropdownMenuSeparator />}
+                  <DropdownMenuLabel className="text-xs font-normal text-muted-foreground px-2 py-1">
+                    {group}
+                  </DropdownMenuLabel>
+                  {svcs.map(s => (
                     <DropdownMenuItem
-                      key={s.url}
-                      className={`text-xs cursor-pointer${s.url === (currentSite?.url ?? '') ? ' font-semibold' : ''}`}
-                      onSelect={() => navigateToSite(s.url)}
+                      key={s.name}
+                      onSelect={() => navigate(`/status/service/${encodeURIComponent(s.name)}`)}
+                      className="flex items-center gap-2 cursor-pointer"
                     >
-                      {s.name}
-                      {s.url === (currentSite?.url ?? '') && (
-                        <span className="text-muted-foreground text-xs ml-auto pl-3">current</span>
-                      )}
+                      <span className={`w-2 h-2 rounded-full flex-shrink-0 ${statusDotClass(s.rangeStatus)}`} />
+                      <span className={`truncate flex-1 ${s.name === name ? 'font-semibold' : ''}`}>{s.name}</span>
+                      {s.name === name && <span className="text-muted-foreground text-xs ml-auto flex-shrink-0">current</span>}
                     </DropdownMenuItem>
                   ))}
-                </DropdownMenuContent>
-              </DropdownMenu>
-            )}
-            <span className="text-muted-foreground">/</span>
-            <h1 className="text-base font-semibold">{name}</h1>
-            {summaries.length > 0 && (
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <button
-                    className="text-muted-foreground hover:text-foreground transition-colors"
-                    title="Switch service"
-                  >
-                    <ChevronDown className="h-4 w-4" />
-                  </button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="start" className="w-60 max-h-80 overflow-y-auto">
-                  {Object.entries(
-                    summaries.reduce<Record<string, ServiceSummary[]>>((acc, s) => {
-                      (acc[s.group] ??= []).push(s);
-                      return acc;
-                    }, {}),
-                  ).map(([group, svcs], gi) => (
-                    <div key={group}>
-                      {gi > 0 && <DropdownMenuSeparator />}
-                      <DropdownMenuLabel className="text-xs font-normal text-muted-foreground px-2 py-1">
-                        {group}
-                      </DropdownMenuLabel>
-                      {svcs.map(s => (
-                        <DropdownMenuItem
-                          key={s.name}
-                          onSelect={() => navigate(`/service/${encodeURIComponent(s.name)}`)}
-                          className="flex items-center gap-2 cursor-pointer"
-                        >
-                          <span className={`w-2 h-2 rounded-full flex-shrink-0 ${statusDotClass(s.rangeStatus)}`} />
-                          <span className={`truncate flex-1 ${s.name === name ? 'font-semibold' : ''}`}>
-                            {s.name}
-                          </span>
-                          {s.name === name && (
-                            <span className="text-muted-foreground text-xs ml-auto flex-shrink-0">current</span>
-                          )}
-                        </DropdownMenuItem>
-                      ))}
-                    </div>
-                  ))}
-                </DropdownMenuContent>
-              </DropdownMenu>
-            )}
-            {service?.homepage && (
-              <a
-                href={service.homepage}
-                target="_blank"
-                rel="noopener noreferrer"
-                title={`Open ${name} homepage`}
-                className="text-muted-foreground hover:text-foreground transition-colors"
-              >
-                <ExternalLink className="h-4 w-4" />
-              </a>
-            )}
-            {service && (
-              <Badge variant="outline" className="text-xs">
-                {service.group}
-              </Badge>
-            )}
-          </div>
-          {/* Desktop controls */}
-          <div className="hidden sm:flex items-center gap-2">
-            {/* Evaluation Mode selector — hidden when XSUAA enabled + not logged in; disabled when logged in but not admin */}
-            {(!auth.enabled || auth.loggedIn) && (
-              <span title={adminTooltip}>
-                <Select
-                  value={evalMode}
-                  onValueChange={handleEvalModeChange}
-                  disabled={auth.enabled && auth.loggedIn && !auth.isAdmin}
-                >
-                  <SelectTrigger className={`h-8 text-xs w-36 ${evalTriggerClass(evalMode)}`}>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="condition" className="text-xs">Condition Based</SelectItem>
-                    <SelectItem value="alwaysok" className="text-xs text-emerald-400">Always OK</SelectItem>
-                    <SelectItem value="alwayserror" className="text-xs text-red-400">Always Error</SelectItem>
-                  </SelectContent>
-                </Select>
-              </span>
-            )}
-
-            {/* Schedule selector — hidden when XSUAA enabled + not logged in; disabled when logged in but not admin */}
-            {(!auth.enabled || auth.loggedIn) && (
-              <span title={adminTooltip}>
-                <Select
-                  value={scheduleValue}
-                  onValueChange={(v: string) => void applySchedule(Number(v))}
-                  disabled={scheduleInterval === null || (auth.enabled && auth.loggedIn && !auth.isAdmin)}
-                >
-                  <SelectTrigger className="h-8 text-xs w-36">
-                    <SelectValue placeholder="Schedule…" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {scheduleOptions.map(o => (
-                      <SelectItem key={o.value} value={o.value} className="text-xs">
-                        {o.label}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </span>
-            )}
-
-            <Select
-              value={starredMode ? 'starred' : (range.mode === 'dateRange' ? '' : String(range.hours))}
-              onValueChange={(v: string) => {
-                if (v === 'starred') { setStarredMode(true); setFilterTag('starred'); setSearchParam({ tag: 'starred', hours: null }); }
-                else if (v === 'range') { setDatePickerOpen(true); }
-                else setRange({ mode: 'hours', hours: Number(v) });
-              }}
-            >
-              <SelectTrigger className="w-36 h-8 text-xs">
-                {!starredMode && range.mode === 'dateRange'
-                  ? <span className="truncate">{fmtDateRange(range.fromDate, range.untilDate)}</span>
-                  : <SelectValue />
-                }
-              </SelectTrigger>
-              <SelectContent>
-                {HOUR_OPTIONS.map(o => (
-                  <SelectItem key={o.value} value={o.value} className="text-xs">
-                    {o.label}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            {(!auth.enabled || auth.loggedIn) && (
-              <Button
-                size="sm"
-                variant="outline"
-                className="h-8 gap-1.5 text-xs"
-                onClick={() => setTestOpen(true)}
-              >
-                <PlayCircle className="h-3.5 w-3.5" />
-                Run Test
-              </Button>
-            )}
-            {syncAvailable && (!auth.enabled || auth.loggedIn) && (
-              <button
-                onClick={() => void runSync()}
-                disabled={syncing}
-                className="text-muted-foreground hover:text-foreground disabled:opacity-40 disabled:cursor-not-allowed"
-                title="Sync response files from remote"
-              >
-                <RefreshCw className={`h-4 w-4 ${syncing ? 'animate-spin text-blue-400' : ''}`} />
-              </button>
-            )}
-            <button
-              onClick={toggleTheme}
-              className="text-muted-foreground hover:text-foreground"
-              title={theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'}
-            >
-              {theme === 'dark' ? <Moon className="h-4 w-4" /> : <Sun className="h-4 w-4" />}
-            </button>
-            <AuthButton auth={auth} />
-          </div>
-          {/* Mobile hamburger */}
-          <button
-            className="sm:hidden text-muted-foreground hover:text-foreground p-1"
-            onClick={() => setMenuOpen(o => !o)}
-            title={menuOpen ? 'Close menu' : 'Open menu'}
-          >
-            {menuOpen ? <X className="h-5 w-5" /> : <Menu className="h-5 w-5" />}
-          </button>
-        </div>
-        {/* Mobile dropdown menu */}
-        {menuOpen && (
-          <div className="sm:hidden border-t border-border bg-background">
-            <div className="max-w-7xl mx-auto px-4 py-3 space-y-3">
-              {(!auth.enabled || auth.loggedIn) && (
-                <div className="grid grid-cols-2 gap-2">
-                  <span title={adminTooltip}>
-                    <Select
-                      value={evalMode}
-                      onValueChange={handleEvalModeChange}
-                      disabled={auth.enabled && auth.loggedIn && !auth.isAdmin}
-                    >
-                      <SelectTrigger className={`h-9 text-xs w-full ${evalTriggerClass(evalMode)}`}>
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="condition" className="text-xs">Condition Based</SelectItem>
-                        <SelectItem value="alwaysok" className="text-xs text-emerald-400">Always OK</SelectItem>
-                        <SelectItem value="alwayserror" className="text-xs text-red-400">Always Error</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </span>
-                  <span title={adminTooltip}>
-                    <Select
-                      value={scheduleValue}
-                      onValueChange={(v: string) => void applySchedule(Number(v))}
-                      disabled={scheduleInterval === null || (auth.enabled && auth.loggedIn && !auth.isAdmin)}
-                    >
-                      <SelectTrigger className="h-9 text-xs w-full">
-                        <SelectValue placeholder="Schedule…" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {scheduleOptions.map(o => (
-                          <SelectItem key={o.value} value={o.value} className="text-xs">{o.label}</SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </span>
                 </div>
-              )}
-              <div className="flex items-center gap-2">
-                <Select
-                  value={starredMode ? 'starred' : (range.mode === 'dateRange' ? '' : String(range.hours))}
-                  onValueChange={(v: string) => {
-                    if (v === 'starred') { setStarredMode(true); setFilterTag('starred'); setSearchParam({ tag: 'starred', hours: null }); setMenuOpen(false); }
-                    else if (v === 'range') { setDatePickerOpen(true); setMenuOpen(false); }
-                    else setRange({ mode: 'hours', hours: Number(v) });
-                  }}
-                >
-                  <SelectTrigger className="flex-1 h-9 text-xs">
-                    {!starredMode && range.mode === 'dateRange'
-                      ? <span className="truncate">{fmtDateRange(range.fromDate, range.untilDate)}</span>
-                      : <SelectValue />
-                    }
-                  </SelectTrigger>
-                  <SelectContent>
-                    {HOUR_OPTIONS.map(o => (
-                      <SelectItem key={o.value} value={o.value} className="text-xs">{o.label}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-                {(!auth.enabled || auth.loggedIn) && (
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    className="h-9 gap-1.5 text-xs"
-                    onClick={() => { setTestOpen(true); setMenuOpen(false); }}
-                  >
-                    <PlayCircle className="h-3.5 w-3.5" />
-                    Run Test
-                  </Button>
-                )}
-                {syncAvailable && (!auth.enabled || auth.loggedIn) && (
-                  <button
-                    onClick={() => { void runSync(); setMenuOpen(false); }}
-                    disabled={syncing}
-                    className="text-muted-foreground hover:text-foreground disabled:opacity-40 disabled:cursor-not-allowed"
-                    title="Sync response files from remote"
-                  >
-                    <RefreshCw className={`h-4 w-4 ${syncing ? 'animate-spin text-blue-400' : ''}`} />
-                  </button>
-                )}
-                <button
-                  onClick={toggleTheme}
-                  className="text-muted-foreground hover:text-foreground"
-                  title={theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'}
-                >
-                  {theme === 'dark' ? <Moon className="h-4 w-4" /> : <Sun className="h-4 w-4" />}
-                </button>
-                <AuthButton auth={auth} />
-              </div>
-            </div>
-          </div>
+              ))}
+            </DropdownMenuContent>
+          </DropdownMenu>
         )}
-      </header>
+        {service?.homepage && (
+          <a href={service.homepage} target="_blank" rel="noopener noreferrer" title={`Open ${name} homepage`}
+            className="text-muted-foreground hover:text-foreground transition-colors">
+            <ExternalLink className="h-4 w-4" />
+          </a>
+        )}
+        {/* Desktop controls */}
+        <div className="ml-auto hidden sm:flex items-center gap-2">
+          {(!auth.enabled || auth.loggedIn) && (
+            <span title={adminTooltip}>
+              <Select value={evalMode} onValueChange={handleEvalModeChange} disabled={auth.enabled && auth.loggedIn && !auth.isAdmin}>
+                <SelectTrigger className={`h-8 text-xs w-36 ${evalTriggerClass(evalMode)}`}><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="condition" className="text-xs">Condition Based</SelectItem>
+                  <SelectItem value="alwaysok" className="text-xs text-emerald-400">Always OK</SelectItem>
+                  <SelectItem value="alwayserror" className="text-xs text-red-400">Always Error</SelectItem>
+                </SelectContent>
+              </Select>
+            </span>
+          )}
+          {(!auth.enabled || auth.loggedIn) && (
+            <span title={adminTooltip}>
+              <Select value={scheduleValue} onValueChange={(v: string) => void applySchedule(Number(v))}
+                disabled={scheduleInterval === null || (auth.enabled && auth.loggedIn && !auth.isAdmin)}>
+                <SelectTrigger className="h-8 text-xs w-36"><SelectValue placeholder="Schedule…" /></SelectTrigger>
+                <SelectContent>
+                  {scheduleOptions.map(o => <SelectItem key={o.value} value={o.value} className="text-xs">{o.label}</SelectItem>)}
+                </SelectContent>
+              </Select>
+            </span>
+          )}
+          <Select
+            value={starredMode ? 'starred' : (range.mode === 'dateRange' ? '' : String(range.hours))}
+            onValueChange={(v: string) => {
+              if (v === 'starred') { setStarredMode(true); setFilterTag('starred'); setSearchParam({ tag: 'starred', hours: null }); }
+              else if (v === 'range') { setDatePickerOpen(true); }
+              else setRange({ mode: 'hours', hours: Number(v) });
+            }}
+          >
+            <SelectTrigger className="w-36 h-8 text-xs">
+              {!starredMode && range.mode === 'dateRange'
+                ? <span className="truncate">{fmtDateRange(range.fromDate, range.untilDate)}</span>
+                : <SelectValue />
+              }
+            </SelectTrigger>
+            <SelectContent>
+              {HOUR_OPTIONS.map(o => <SelectItem key={o.value} value={o.value} className="text-xs">{o.label}</SelectItem>)}
+            </SelectContent>
+          </Select>
+          {(!auth.enabled || auth.loggedIn) && (
+            <Button size="sm" variant="outline" className="h-8 gap-1.5 text-xs" onClick={() => setTestOpen(true)}>
+              <PlayCircle className="h-3.5 w-3.5" />Run Test
+            </Button>
+          )}
+          {syncAvailable && (!auth.enabled || auth.loggedIn) && (
+            <button onClick={() => void runSync()} disabled={syncing}
+              className="text-muted-foreground hover:text-foreground disabled:opacity-40 disabled:cursor-not-allowed"
+              title="Sync response files from remote">
+              <RefreshCw className={`h-4 w-4 ${syncing ? 'animate-spin text-blue-400' : ''}`} />
+            </button>
+          )}
+        </div>
+
+        {/* Mobile collapsed menu */}
+        <div className="ml-auto flex sm:hidden items-center">
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <button className="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-accent/50 transition-colors" title="More options">
+                <MoreHorizontal className="h-4 w-4" />
+              </button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-52">
+              <DropdownMenuLabel className="text-xs text-muted-foreground font-normal">Time Range</DropdownMenuLabel>
+              {HOUR_OPTIONS.filter(o => o.value !== 'range' && o.value !== 'starred').map(o => (
+                <DropdownMenuItem
+                  key={o.value}
+                  className={`text-xs cursor-pointer${!starredMode && range.mode === 'hours' && String(range.hours) === o.value ? ' font-semibold' : ''}`}
+                  onSelect={() => { setStarredMode(false); setRange({ mode: 'hours', hours: Number(o.value) }); }}
+                >
+                  {o.label}
+                </DropdownMenuItem>
+              ))}
+              <DropdownMenuItem className="text-xs cursor-pointer" onSelect={() => setDatePickerOpen(true)}>Date Range…</DropdownMenuItem>
+              <DropdownMenuItem className={`text-xs cursor-pointer${starredMode ? ' font-semibold' : ''}`}
+                onSelect={() => { setStarredMode(true); setFilterTag('starred'); setSearchParam({ tag: 'starred', hours: null }); }}>
+                All Time Starred
+              </DropdownMenuItem>
+              {(!auth.enabled || auth.loggedIn) && (
+                <>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuLabel className="text-xs text-muted-foreground font-normal">Evaluation Mode</DropdownMenuLabel>
+                  {(['condition', 'alwaysok', 'alwayserror'] as const).map(m => (
+                    <DropdownMenuItem
+                      key={m}
+                      className={`text-xs cursor-pointer${evalMode === m ? ' font-semibold' : ''}${auth.enabled && auth.loggedIn && !auth.isAdmin ? ' opacity-50 pointer-events-none' : ''}`}
+                      onSelect={() => handleEvalModeChange(m)}
+                    >
+                      {m === 'condition' ? 'Condition Based' : m === 'alwaysok' ? 'Always OK' : 'Always Error'}
+                    </DropdownMenuItem>
+                  ))}
+                  <DropdownMenuSeparator />
+                  <DropdownMenuLabel className="text-xs text-muted-foreground font-normal">Schedule</DropdownMenuLabel>
+                  {scheduleOptions.map(o => (
+                    <DropdownMenuItem
+                      key={o.value}
+                      className={`text-xs cursor-pointer${scheduleValue === o.value ? ' font-semibold' : ''}${scheduleInterval === null || (auth.enabled && auth.loggedIn && !auth.isAdmin) ? ' opacity-50 pointer-events-none' : ''}`}
+                      onSelect={() => void applySchedule(Number(o.value))}
+                    >
+                      {o.label}
+                    </DropdownMenuItem>
+                  ))}
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem className="text-xs cursor-pointer" onSelect={() => setTestOpen(true)}>
+                    <PlayCircle className="h-3.5 w-3.5 mr-2" />Run Test
+                  </DropdownMenuItem>
+                </>
+              )}
+              {syncAvailable && (!auth.enabled || auth.loggedIn) && (
+                <DropdownMenuItem className="text-xs cursor-pointer" disabled={syncing} onSelect={() => void runSync()}>
+                  <RefreshCw className={`h-3.5 w-3.5 mr-2 ${syncing ? 'animate-spin text-blue-400' : ''}`} />Sync
+                </DropdownMenuItem>
+              )}
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
+      </div>
 
       <DateRangePicker
         open={datePickerOpen}
@@ -763,7 +631,7 @@ export default function History() {
         maxStorageDays={maxStorageDays}
       />
 
-      <main className="max-w-7xl mx-auto px-4 py-6 space-y-6">
+      <main className="flex-1 overflow-auto px-4 py-6 space-y-6">
         {error && (
           <div className="flex items-center gap-2 text-destructive text-sm">
             <AlertCircle className="h-4 w-4" />

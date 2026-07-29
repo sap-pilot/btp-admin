@@ -1,6 +1,6 @@
 import { getAllServices, getService } from './configService.js';
 import { checkService } from './healthCheckService.js';
-import { logger } from '../logger.js';
+import { logger } from '../../logger.js';
 
 // Timer key: "${serviceName}/${endpointIdx}"
 const timers = new Map<string, ReturnType<typeof setInterval>>();

@@ -1,7 +1,7 @@
 import { readdir, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
-import { config } from '../config.js';
-import { logger } from '../logger.js';
+import { config } from '../../config.js';
+import { logger } from '../../logger.js';
 import { parseFilename } from './responseStore.js';
 
 let timer: ReturnType<typeof setInterval> | null = null;

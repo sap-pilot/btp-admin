@@ -1,20 +1,20 @@
 _schema-version: "3.3"
-ID: btp-status
-version: 1.0.1
+ID: btp-admin
+version: 1.1.0
 
 modules:
-  - name: btp-status
+  - name: btp-admin
     type: nodejs
     path: server
     parameters:
       memory: 2G         # Chrome is memory-hungry — 512M is not enough
       disk-quota: 4G     # Chrome + libs are large
       # docker:
-      #   image: sapux/btp-status:latest
+      #   image: sapux/btp-admin:latest
       buildpacks:
         - https://github.com/cloudfoundry/apt-buildpack
         - nodejs_buildpack
-      host: btp-status-${org}-${space}
+      host: btp-admin-${org}-${space}
       enable-ssh: true
       keep-existing:
         env: true
@@ -31,14 +31,14 @@ modules:
     properties:
       CONFIG_FILE: ./config.json
     requires:
-      - name: btp-status-xsuaa
+      - name: btp-admin-xsuaa
 
 resources:
-  - name: btp-status-xsuaa
+  - name: btp-admin-xsuaa
     type: org.cloudfoundry.managed-service
     parameters:
       config:
-        xsappname: btp-status
+        xsappname: btp-admin
       path: ./xs-security.json
       service: xsuaa
       service-plan: application

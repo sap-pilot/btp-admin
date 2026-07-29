@@ -1,21 +1,22 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { parseFilename } from '@/lib/parseFilename';
 import { Link, useNavigate } from 'react-router';
-import type { ServiceWithHistory, HistoryFile, LandscapeConfig, ServiceSummary, SiteConfig } from '@shared/types';
-import StatusDots from '@/components/StatusDots';
-import type { NodeStatus } from '@/components/LandscapeDiagram';
-const LandscapeDiagram = lazy(() => import('@/components/LandscapeDiagram'));
+import type { ServiceWithHistory, HistoryFile, LandscapeConfig, ServiceSummary } from '@shared/types';
+import StatusDots from '@/components/status/StatusDots';
+import type { NodeStatus } from '@/components/status/LandscapeDiagram';
+const LandscapeDiagram = lazy(() => import('@/components/status/LandscapeDiagram'));
 import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
-import { AlertCircle, ChevronDown, Menu, RefreshCw, Sun, Moon, ExternalLink, X, Zap } from 'lucide-react';
-import { useTheme } from '@/hooks/useTheme';
+import { AlertCircle, MoreHorizontal, RefreshCw, ExternalLink, PanelLeft, PlayCircle } from 'lucide-react';
 import { useWindowWidth } from '@/hooks/useWindowWidth';
 import { useAuth } from '@/hooks/useAuth';
+import { useTheme } from '@/hooks/useTheme';
+import { useSidebar } from '@/components/AppLayout';
 import { useTimeRange, fmtDateRange } from '@/hooks/useTimeRange';
-import AuthButton from '@/components/AuthButton';
 import DateRangePicker from '@/components/DateRangePicker';
 import { useLiveEvents } from '@/hooks/useLiveEvents';
 
@@ -91,8 +92,9 @@ function getUptimePct(history: HistoryFile[]): number {
 
 export default function Overview() {
   const navigate = useNavigate();
-  const { theme, toggleTheme } = useTheme();
   const auth = useAuth();
+  const { theme } = useTheme();
+  const { toggle: toggleSidebar } = useSidebar();
   const windowWidth = useWindowWidth();
   // max-w-7xl (1280px) page with px-4 (32px) → page content width
   // table-fixed: service col w-56 (224px) + stats col w-40 (160px) + 3×px-4 cells (96px)
@@ -126,30 +128,25 @@ export default function Overview() {
   const [testingAll, setTestingAll] = useState(false);
   const [syncAvailable, setSyncAvailable] = useState(false);
   const [syncing, setSyncing] = useState(false);
-  const [serverCity, setServerCity] = useState<string>('');
-  const [menuOpen, setMenuOpen] = useState(false);
   const [statusFilter, setStatusFilter] = useState<'failed' | 'partial' | null>(() => {
     const s = new URLSearchParams(window.location.search).get('status');
     return s === 'failed' ? 'failed' : s === 'partial' ? 'partial' : null;
   });
   const [landscapes, setLandscapes] = useState<LandscapeConfig[]>([]);
-  const [sites, setSites] = useState<SiteConfig[]>([]);
   const [activeLandscape, setActiveLandscape] = useState<string>(() => {
     const h = window.location.hash;
     return h.startsWith('#landscape-') ? decodeURIComponent(h.slice('#landscape-'.length)) : '';
   });
 
   useEffect(() => {
-    fetch('/api/info')
-      .then(r => r.json() as Promise<{ syncRemote: boolean; city?: string; sites?: SiteConfig[]; maxStorageDays?: number }>)
+    fetch('/api/status/info')
+      .then(r => r.json() as Promise<{ syncRemote: boolean; maxStorageDays?: number }>)
       .then(d => {
         setSyncAvailable(d.syncRemote);
-        if (d.city && d.city !== 'unknown') setServerCity(d.city);
-        if (d.sites) setSites(d.sites);
         if (d.maxStorageDays !== undefined) setMaxStorageDays(d.maxStorageDays);
       })
       .catch(() => null);
-    fetch('/api/landscapes')
+    fetch('/api/status/landscapes')
       .then(r => r.json() as Promise<LandscapeConfig[]>)
       .then(ls => {
         setLandscapes(ls);
@@ -166,7 +163,7 @@ export default function Overview() {
     silentRefreshRef.current = false;
     if (!silent) setLoading(true);
     setError(null);
-    fetch(`/api/overview?${queryString}`)
+    fetch(`/api/status/overview?${queryString}`)
       .then(r => {
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         return r.json() as Promise<{ lastModified: number; services: ServiceWithHistory[] }>;
@@ -181,7 +178,7 @@ export default function Overview() {
       })
       .catch(e => setError(String(e)))
       .finally(() => setLoading(false));
-    fetch(`/api/service-summary?${queryString}`)
+    fetch(`/api/status/service-summary?${queryString}`)
       .then(r => r.json() as Promise<ServiceSummary[]>)
       .then(d => setSummaries(d))
       .catch(() => null);
@@ -189,7 +186,7 @@ export default function Overview() {
 
   const handleLiveUpdate = useCallback(() => {
     const since = lastFetchTsRef.current - 5_000;
-    fetch(`/api/overview?since=${since}`)
+    fetch(`/api/status/overview?since=${since}`)
       .then(r => r.json() as Promise<{ lastModified: number; services: ServiceWithHistory[] }>)
       .then(({ lastModified, services }) => {
         lastFetchTsRef.current = lastModified;
@@ -211,7 +208,7 @@ export default function Overview() {
         setLastRefresh(new Date());
       })
       .catch(() => null);
-    fetch(`/api/service-summary?${queryString}`)
+    fetch(`/api/status/service-summary?${queryString}`)
       .then(r => r.json() as Promise<ServiceSummary[]>)
       .then(d => setSummaries(d))
       .catch(() => null);
@@ -244,7 +241,7 @@ export default function Overview() {
     try {
       await Promise.all(
         data.map(svc =>
-          fetch(`/api/check/${encodeURIComponent(svc.name)}`).catch(() => null),
+          fetch(`/api/status/check/${encodeURIComponent(svc.name)}`).catch(() => null),
         ),
       );
     } finally {
@@ -335,212 +332,144 @@ export default function Overview() {
     window.location.hash = `#landscape-${encodeURIComponent(name)}`;
   }
 
-  const currentSite = sites.find(s => {
-    try { return new URL(s.url).origin === window.location.origin; } catch { return false; }
-  }) ?? null;
-  const currentSiteUrl = currentSite?.url ?? '';
-
-  const appTitle = currentSite?.name ?? (serverCity ? `${serverCity} - BTP Status` : 'BTP Status');
-
-  useEffect(() => {
-    document.title = appTitle;
-  }, [appTitle]);
-
-  function handleSiteSwitch(url: string) {
-    if (url && url !== currentSiteUrl) window.location.replace(url);
-  }
-
   function toServiceUrl(svcName: string, endpoint?: string): string {
     const params = new URLSearchParams();
     if (endpoint) params.set('endpoint', endpoint);
     if (statusFilter) params.set('status', statusFilter);
-    params.set('from', statusFilter ? `/overview?status=${statusFilter}` : '/overview');
-    return `/service/${encodeURIComponent(svcName)}?${params.toString()}`;
+    params.set('from', statusFilter ? `/status/overview?status=${statusFilter}` : '/status/overview');
+    return `/status/service/${encodeURIComponent(svcName)}?${params.toString()}`;
   }
 
   return (
-    <div className="min-h-screen bg-background text-foreground">
-      {/* Header */}
-      <header className="border-b border-border sticky top-0 bg-background z-10">
-        <div className="max-w-7xl mx-auto px-4 py-3 flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <img src="/images/favicon-32x32.png" alt="" className="h-5 w-5" />
-            <h1 className="text-base sm:text-lg font-semibold">{appTitle}</h1>
-            {sites.length >= 2 && (
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <button className="text-muted-foreground hover:text-foreground transition-colors" title="Switch site">
-                    <ChevronDown className="h-3.5 w-3.5" />
-                  </button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="start">
-                  {sites.map(s => (
-                    <DropdownMenuItem
-                      key={s.url}
-                      className={`text-xs cursor-pointer${s.url === currentSiteUrl ? ' font-semibold' : ''}`}
-                      onSelect={() => handleSiteSwitch(s.url)}
-                    >
-                      {s.name}
-                    </DropdownMenuItem>
-                  ))}
-                </DropdownMenuContent>
-              </DropdownMenu>
-            )}
-            <a
-              href="https://github.com/sap-pilot/btp-status/releases"
-              target="_blank"
-              rel="noopener noreferrer"
-              title={`v${__APP_VERSION__}+${__COMMIT_HASH__} built at: ${new Date(__BUILD_DATE__).toLocaleString(undefined, { timeZoneName: 'short' })}`}
-              className="text-xs text-muted-foreground font-mono hover:text-foreground transition-colors"
-            >
-              v{__APP_VERSION__}+{__COMMIT_HASH__}
-            </a>
-          </div>
-          {/* Desktop controls */}
-          <div className="hidden sm:flex items-center gap-3">
-            <Badge
-              variant={anyCurrentlyFailing ? 'destructive' : 'outline'}
-              className={
-                anyCurrentlyFailing ? '' :
-                anyImperfect ? 'border-yellow-600 text-yellow-400' :
-                'bg-green-600 hover:bg-green-600 border-green-600 text-white'
-              }
-              title={`${healthyEndpoints} out of ${totalEndpoints} endpoints are healthy (for yellow status — some previous check failed but latest was successful)`}
-            >
-              {healthyEndpoints}/{totalEndpoints} healthy
-            </Badge>
-            <Select
-              value={range.mode === 'dateRange' ? '' : String(range.hours)}
-              onValueChange={(v: string) => {
-                if (v === 'range') { setDatePickerOpen(true); }
-                else setRange({ mode: 'hours', hours: Number(v) });
-              }}
-            >
-              <SelectTrigger className="w-36 h-8 text-xs">
-                {range.mode === 'dateRange'
-                  ? <span className="truncate">{fmtDateRange(range.fromDate, range.untilDate)}</span>
-                  : <SelectValue />
-                }
-              </SelectTrigger>
-              <SelectContent>
-                {HOUR_OPTIONS.map(o => (
-                  <SelectItem key={o.value} value={o.value} className="text-xs">
-                    {o.label}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            {(!auth.enabled || auth.loggedIn) && (
-              <button
-                onClick={() => void runAllTests()}
-                disabled={testingAll || data.length === 0}
-                className="text-muted-foreground hover:text-foreground disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-1 text-xs"
-                title="Run health checks for all services"
-              >
-                <Zap className={`h-4 w-4 ${testingAll ? 'animate-pulse text-yellow-400' : ''}`} />
-                {testingAll ? 'Running…' : 'Test all'}
-              </button>
-            )}
-            {syncAvailable && (!auth.enabled || auth.loggedIn) && (
-              <button
-                onClick={() => void runSync()}
-                disabled={syncing}
-                className="text-muted-foreground hover:text-foreground disabled:opacity-40 disabled:cursor-not-allowed"
-                title="Sync response files from remote"
-              >
-                <RefreshCw className={`h-4 w-4 ${syncing ? 'animate-spin text-blue-400' : ''}`} />
-              </button>
-            )}
-            <button
-              onClick={toggleTheme}
-              className="text-muted-foreground hover:text-foreground"
-              title={theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'}
-            >
-              {theme === 'dark' ? <Moon className="h-4 w-4" /> : <Sun className="h-4 w-4" />}
-            </button>
-            <AuthButton auth={auth} />
-          </div>
-          {/* Mobile hamburger */}
+    <div className="flex flex-col h-full bg-background text-foreground">
+      {/* Page toolbar */}
+      <div className="border-b border-border bg-background px-3 flex items-center gap-3 shrink-0 min-h-[52px]">
+        {/* Left: sidebar toggle + page title */}
+        <div className="flex items-center gap-2">
           <button
-            className="sm:hidden text-muted-foreground hover:text-foreground p-1"
-            onClick={() => setMenuOpen(o => !o)}
-            title={menuOpen ? 'Close menu' : 'Open menu'}
+            onClick={toggleSidebar}
+            className="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-accent/50 transition-colors"
+            title="Toggle sidebar"
           >
-            {menuOpen ? <X className="h-5 w-5" /> : <Menu className="h-5 w-5" />}
+            <PanelLeft className="h-4 w-4" />
           </button>
+          <span className="text-sm font-semibold">Status Overview</span>
         </div>
-        {/* Mobile dropdown menu */}
-        {menuOpen && (
-          <div className="sm:hidden border-t border-border bg-background">
-            <div className="max-w-7xl mx-auto px-4 py-3 space-y-3">
-              <div className="flex items-center justify-between">
-                <Badge
-                  variant={anyCurrentlyFailing ? 'destructive' : 'outline'}
-                  className={
-                    anyCurrentlyFailing ? '' :
-                    anyImperfect ? 'border-yellow-600 text-yellow-400' :
-                    'bg-green-600 hover:bg-green-600 border-green-600 text-white'
-                  }
-                  title={`${healthyEndpoints} out of ${totalEndpoints} endpoints are healthy (for yellow status — some previous check failed but latest was successful)`}
+
+        {/* Right: desktop controls */}
+        <div className="ml-auto hidden sm:flex items-center gap-2">
+          <Badge
+            variant={anyCurrentlyFailing ? 'destructive' : 'outline'}
+            className={
+              anyCurrentlyFailing ? '' :
+              anyImperfect ? 'border-yellow-600 text-yellow-400' :
+              'bg-green-600 hover:bg-green-600 border-green-600 text-white'
+            }
+            title={`${healthyEndpoints} out of ${totalEndpoints} endpoints are healthy`}
+          >
+            {healthyEndpoints}/{totalEndpoints} healthy
+          </Badge>
+          <Select
+            value={range.mode === 'dateRange' ? '' : String(range.hours)}
+            onValueChange={(v: string) => {
+              if (v === 'range') { setDatePickerOpen(true); }
+              else setRange({ mode: 'hours', hours: Number(v) });
+            }}
+          >
+            <SelectTrigger className="w-36 h-8 text-xs">
+              {range.mode === 'dateRange'
+                ? <span className="truncate">{fmtDateRange(range.fromDate, range.untilDate)}</span>
+                : <SelectValue />
+              }
+            </SelectTrigger>
+            <SelectContent>
+              {HOUR_OPTIONS.map(o => (
+                <SelectItem key={o.value} value={o.value} className="text-xs">{o.label}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          {(!auth.enabled || auth.loggedIn) && (
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-8 gap-1.5 text-xs"
+              onClick={() => void runAllTests()}
+              disabled={testingAll || data.length === 0}
+              title="Run health checks for all services"
+            >
+              <PlayCircle className={`h-3.5 w-3.5 ${testingAll ? 'animate-pulse text-yellow-400' : ''}`} />
+              {testingAll ? 'Running…' : 'Test All'}
+            </Button>
+          )}
+          {syncAvailable && (!auth.enabled || auth.loggedIn) && (
+            <button
+              onClick={() => void runSync()}
+              disabled={syncing}
+              className="text-muted-foreground hover:text-foreground disabled:opacity-40 disabled:cursor-not-allowed"
+              title="Sync response files from remote"
+            >
+              <RefreshCw className={`h-4 w-4 ${syncing ? 'animate-spin text-blue-400' : ''}`} />
+            </button>
+          )}
+        </div>
+
+        {/* Right: mobile collapsed menu */}
+        <div className="ml-auto flex sm:hidden items-center gap-2">
+          <Badge
+            variant={anyCurrentlyFailing ? 'destructive' : 'outline'}
+            className={
+              anyCurrentlyFailing ? '' :
+              anyImperfect ? 'border-yellow-600 text-yellow-400' :
+              'bg-green-600 hover:bg-green-600 border-green-600 text-white'
+            }
+          >
+            {healthyEndpoints}/{totalEndpoints}
+          </Badge>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <button className="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-accent/50 transition-colors" title="More options">
+                <MoreHorizontal className="h-4 w-4" />
+              </button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-48">
+              <DropdownMenuLabel className="text-xs text-muted-foreground font-normal">Time Range</DropdownMenuLabel>
+              {HOUR_OPTIONS.filter(o => o.value !== 'range').map(o => (
+                <DropdownMenuItem
+                  key={o.value}
+                  className={`text-xs cursor-pointer${range.mode === 'hours' && String(range.hours) === o.value ? ' font-semibold' : ''}`}
+                  onSelect={() => setRange({ mode: 'hours', hours: Number(o.value) })}
                 >
-                  {healthyEndpoints}/{totalEndpoints} healthy
-                </Badge>
-              </div>
-              <div className="flex items-center gap-2">
-                <Select
-                  value={range.mode === 'dateRange' ? '' : String(range.hours)}
-                  onValueChange={(v: string) => {
-                    if (v === 'range') { setDatePickerOpen(true); setMenuOpen(false); }
-                    else setRange({ mode: 'hours', hours: Number(v) });
-                  }}
-                >
-                  <SelectTrigger className="flex-1 h-9 text-xs">
-                    {range.mode === 'dateRange'
-                      ? <span className="truncate">{fmtDateRange(range.fromDate, range.untilDate)}</span>
-                      : <SelectValue />
-                    }
-                  </SelectTrigger>
-                  <SelectContent>
-                    {HOUR_OPTIONS.map(o => (
-                      <SelectItem key={o.value} value={o.value} className="text-xs">{o.label}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-                {(!auth.enabled || auth.loggedIn) && (
-                  <button
-                    onClick={() => void runAllTests()}
+                  {o.label}
+                </DropdownMenuItem>
+              ))}
+              <DropdownMenuItem className="text-xs cursor-pointer" onSelect={() => setDatePickerOpen(true)}>
+                Date Range…
+              </DropdownMenuItem>
+              {(!auth.enabled || auth.loggedIn) && (
+                <>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem
+                    className="text-xs cursor-pointer"
                     disabled={testingAll || data.length === 0}
-                    className="text-muted-foreground hover:text-foreground disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-1 text-xs"
-                    title="Run health checks for all services"
+                    onSelect={() => void runAllTests()}
                   >
-                    <Zap className={`h-4 w-4 ${testingAll ? 'animate-pulse text-yellow-400' : ''}`} />
-                    {testingAll ? 'Running…' : 'Test all'}
-                  </button>
-                )}
-                {syncAvailable && (!auth.enabled || auth.loggedIn) && (
-                  <button
-                    onClick={() => void runSync()}
-                    disabled={syncing}
-                    className="text-muted-foreground hover:text-foreground disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-1 text-xs"
-                    title="Sync response files from remote"
-                  >
-                    <RefreshCw className={`h-4 w-4 ${syncing ? 'animate-spin text-blue-400' : ''}`} />
-                    {syncing ? 'Syncing…' : 'Sync'}
-                  </button>
-                )}
-                <button
-                  onClick={toggleTheme}
-                  className="text-muted-foreground hover:text-foreground"
-                  title={theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'}
+                    <PlayCircle className="h-3.5 w-3.5 mr-2" />{testingAll ? 'Running…' : 'Test All'}
+                  </DropdownMenuItem>
+                </>
+              )}
+              {syncAvailable && (!auth.enabled || auth.loggedIn) && (
+                <DropdownMenuItem
+                  className="text-xs cursor-pointer"
+                  disabled={syncing}
+                  onSelect={() => void runSync()}
                 >
-                  {theme === 'dark' ? <Moon className="h-4 w-4" /> : <Sun className="h-4 w-4" />}
-                </button>
-                <AuthButton auth={auth} />
-              </div>
-            </div>
-          </div>
-        )}
-      </header>
+                  <RefreshCw className={`h-3.5 w-3.5 mr-2 ${syncing ? 'animate-spin text-blue-400' : ''}`} />Sync
+                </DropdownMenuItem>
+              )}
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
+      </div>
 
       <DateRangePicker
         open={datePickerOpen}
@@ -551,7 +480,7 @@ export default function Overview() {
         maxStorageDays={maxStorageDays}
       />
 
-      <main className="max-w-7xl mx-auto px-4 py-6 space-y-6">
+      <main className="flex-1 overflow-auto px-4 py-6 space-y-6">
         {loading && <span className="text-xs text-muted-foreground">Loading…</span>}
 
         {error && (
@@ -655,7 +584,7 @@ export default function Overview() {
                           serviceStatuses={lsStatuses}
                           serviceNames={lsNames}
                           isDark={theme === 'dark'}
-                          returnUrl={`/overview#landscape-${encodeURIComponent(ls.name)}`}
+                          returnUrl={`/status/overview#landscape-${encodeURIComponent(ls.name)}`}
                         />
                       </Suspense>
                     </TabsContent>

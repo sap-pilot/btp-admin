@@ -76,7 +76,7 @@ export default function ResponseDetailModal({ file, serviceName, onClose, auth }
     setRetryRecords([]);
     setRetrySidecars([]);
     setCollapsedRetries(new Set());
-    fetch(`/api/history/${encodeURIComponent(serviceName)}/${encodeURIComponent(file.filename)}`)
+    fetch(`/api/status/history/${encodeURIComponent(serviceName)}/${encodeURIComponent(file.filename)}`)
       .then(r => {
         if (r.status === 401) { setNeedsAuth(true); throw new Error('401'); }
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
@@ -109,7 +109,7 @@ export default function ResponseDetailModal({ file, serviceName, onClose, auth }
       if (record.retryFiles && record.retryFiles.length > 0) {
         const retryResults = await Promise.all(
           record.retryFiles.map(f =>
-            fetch(`/api/history/${encodeURIComponent(serviceName)}/${encodeURIComponent(f)}`)
+            fetch(`/api/status/history/${encodeURIComponent(serviceName)}/${encodeURIComponent(f)}`)
               .then(r => r.ok ? r.json() as Promise<ResponseRecord> : null)
               .catch(() => null),
           ),

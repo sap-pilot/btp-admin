@@ -1,5 +1,23 @@
 # Changelog
 
+## [v1.1.0] - 2026-07-28
+
+### Added
+- **Collapsible sidebar navigation** — replaced the per-page header with a persistent collapsible sidebar on the left; sidebar contains: app title + site switcher at the top, nav items in the middle (Status Overview, Homepage [under construction], Destinations [under construction]), and theme toggle + auth button at the bottom; collapsed state shows icons only (~56 px wide), expanded state shows labels (~224 px); collapse state is controlled via a toggle button inside the sidebar
+- **App-level layout** — new `AppLayout` component wraps all routes with a full-screen `flex h-screen` shell; the sidebar has a fixed width and the main area takes the remaining width with its own vertical scroll; pages no longer carry their own `min-h-screen` wrapper
+- **Sidebar auth button** — when XSUAA is configured and the user is logged in, the sidebar bottom shows an avatar (initials circle) + name in expanded mode and avatar only in collapsed mode; a dropdown provides Log out; unauthenticated shows a Log in button with icon
+- **Sidebar toggle in page toolbar** — each page toolbar has a `PanelLeft` toggle button at the top-left (same height as the sidebar header) that collapses/expands the sidebar; the sidebar toggle is no longer in the sidebar bottom row; sidebar collapsed state is managed in `AppLayout` via React context (`useSidebar()`)
+- **"Test All" button on Status Overview** — restyled from plain icon+text to a shadcn `Button` (outline, sm) with a `PlayCircle` icon, matching the "Run Test" button on the service detail page
+
+### Changed
+- **App renamed to `btp-admin`** — MTA ID, CF module name, XSUAA resource name, host, and all `package.json` names updated from `btp-status*` to `btp-admin*`; version bumped to `1.1.0`
+- **Status API moved to `/api/status/*`** — all status-related endpoints are now under `/api/status/`: `/api/status/overview`, `/api/status/history/:name`, `/api/status/service-summary`, `/api/status/landscapes`, `/api/status/info`, `/api/status/eval-mode/:name`, `/api/status/schedule/:name`, `/api/status/services`, `/api/status/check/:name`, `/api/status/star/:name/:filename`; common endpoints `/api/me`, `/api/events`, `/api/sync`, `/api/browse`, `/api/download`, `/api/batch-download`, `/api/download-trigger` remain under `/api/`
+- **Server services reorganized to `services/status/`** — `configService`, `overrideService`, `conditionEvaluator`, `responseStore`, `browserCheckService`, `healthCheckService`, `schedulerService`, `syncService`, `housekeepingService` moved to `server/src/services/status/`; shared services (`authService`, `geoService`, `zipBuilder`, `liveEvents`) remain at `server/src/services/`
+- **Status routes split to `routes/status/api.ts`** — status-specific Express routes extracted to `server/src/routes/status/api.ts`, mounted at `/api/status`; `routes/api.ts` retains only common endpoints
+- **Client pages moved to `pages/status/`** — `Overview.tsx` and `History.tsx` moved to `client/src/pages/status/`; page-specific headers removed (now provided by sidebar)
+- **Client components moved to `components/status/`** — `StatusDots`, `LandscapeDiagram`, `ResponseDetailModal`, `ResponseTimeChart`, `TestModal` moved to `client/src/components/status/`; reusable `AuthButton`, `DateRangePicker` remain at `client/src/components/`
+- **UI routes updated** — `/overview` → `/status/overview`, `/service/:name` → `/status/service/:name`; old paths redirect to new paths; App.tsx now uses the `AppLayout` route wrapper
+
 ## [v1.0.1] - 2026-07-20
 
 ### Fixed
