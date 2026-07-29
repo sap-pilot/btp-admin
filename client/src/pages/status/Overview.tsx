@@ -137,7 +137,7 @@ const [statusFilter, setStatusFilter] = useState<'failed' | 'partial' | null>(()
   });
 
   useEffect(() => {
-    fetch('/api/status/info')
+    fetch('/api/info')
       .then(r => r.json() as Promise<{ maxStorageDays?: number }>)
       .then(d => {
         if (d.maxStorageDays !== undefined) setMaxStorageDays(d.maxStorageDays);

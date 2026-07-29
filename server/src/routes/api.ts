@@ -9,8 +9,15 @@ import { requireAuth, requireAdmin, requireSyncAuth, requireSyncAuthOrOpen } fro
 import type { AuthRequest } from '../middleware/requireAuth.js';
 import { userLabel } from '../services/authService.js';
 import { subscribe } from '../services/liveEvents.js';
+import { getSites } from '../services/status/configService.js';
+import { getCity } from '../services/geoService.js';
 
 const router = Router();
+
+// Public — exempt from session auth; used by the sidebar before login for site-switcher and title.
+router.get('/info', (_req, res) => {
+  res.json({ syncRemote: !!config.SYNC_REMOTE, city: getCity(), sites: getSites(), maxStorageDays: config.MAX_RESPONSE_STORAGE_DAYS });
+});
 
 router.get('/events', (req, res) => {
   const svc = typeof req.query['service'] === 'string' ? req.query['service'] : null;
