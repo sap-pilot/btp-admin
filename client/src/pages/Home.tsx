@@ -17,9 +17,9 @@ export default function Home() {
   const homepage = homepageRaw as HomepageData | null;
   const [editOpen, setEditOpen] = useState(false);
 
-  // Refresh homepage when a root file (e.g. homepage.json) is updated via sync
+  // Refresh homepage when homepage.json is updated via sync or remote edit
   useEffect(() => {
-    const es = new EventSource('/api/events?rootFiles=1');
+    const es = new EventSource('/api/events?homepage=1');
     es.addEventListener('update', () => refreshHomepage());
     return () => es.close();
   }, [refreshHomepage]);

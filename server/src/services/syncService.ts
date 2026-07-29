@@ -5,13 +5,13 @@ import { promisify } from 'node:util';
 import { mkdir, writeFile, utimes } from 'node:fs/promises';
 import { join, resolve as resolvePath } from 'node:path';
 import { createHmac } from 'node:crypto';
-import { config } from '../../config.js';
-import { logger } from '../../logger.js';
-import { browseResponseFiles, resolveSyncDuplicates, sanitizeName } from './responseStore.js';
-import type { BrowseFile } from './responseStore.js';
-import { extractZip } from '../zipBuilder.js';
-import { getSyncKey, getAllServices } from './configService.js';
-import { emit } from '../liveEvents.js';
+import { config } from '../config.js';
+import { logger } from '../logger.js';
+import { browseResponseFiles, resolveSyncDuplicates, sanitizeName } from './status/responseStore.js';
+import type { BrowseFile } from './status/responseStore.js';
+import { extractZip } from './zipBuilder.js';
+import { getSyncKey, getAllServices } from './status/configService.js';
+import { emit } from './liveEvents.js';
 
 const gunzipAsync = promisify(gunzip);
 const INDIVIDUAL_CONCURRENCY = 10;
@@ -263,40 +263,44 @@ function syncKeyHeader(): Record<string, string> {
 async function downloadOne(
   remoteBase: string,
   filePath: string,
+  remoteMtime?: number,
 ): Promise<{ transferred: number; decompressed: number }> {
   const url = `${remoteBase}/api/download?path=${encodeURIComponent(filePath)}`;
   const { buf, transferred, decompressed } = await fetchRaw(url, syncKeyHeader());
 
   const slash = filePath.indexOf('/');
+  let target: string;
   if (slash === -1) {
     // Root-level file (e.g. homepage.json)
-    const target = resolvePath(config.RESPONSE_DIR, filePath);
+    target = resolvePath(config.RESPONSE_DIR, filePath);
     if (!target.startsWith(resolvePath(config.RESPONSE_DIR) + '/')) {
       logger.warn({ path: filePath }, 'Skipping root file: path traversal detected');
       return { transferred: 0, decompressed: 0 };
     }
     await mkdir(config.RESPONSE_DIR, { recursive: true });
-    await writeFile(target, buf);
   } else {
     const folder = filePath.slice(0, slash);
     const filename = filePath.slice(slash + 1);
-    const target = resolvePath(config.RESPONSE_DIR, folder, filename);
+    target = resolvePath(config.RESPONSE_DIR, folder, filename);
     if (!target.startsWith(resolvePath(config.RESPONSE_DIR) + '/')) {
       logger.warn({ path: filePath }, 'Skipping file: path traversal detected');
       return { transferred: 0, decompressed: 0 };
     }
-    const dir = join(config.RESPONSE_DIR, folder);
-    await mkdir(dir, { recursive: true });
-    await writeFile(target, buf);
+    await mkdir(join(config.RESPONSE_DIR, folder), { recursive: true });
+  }
+  await writeFile(target, buf);
+  if (remoteMtime) {
+    const mt = new Date(remoteMtime);
+    try { await utimes(target, mt, mt); } catch { /* ignore — best-effort */ }
   }
   logger.debug({ path: filePath }, 'Downloaded file');
-
   return { transferred, decompressed };
 }
 
 async function downloadBatch(
   remoteBase: string,
   filePaths: string[],
+  remoteMtimes: Map<string, number>,
 ): Promise<{ transferred: number; decompressed: number }> {
   const url = `${remoteBase}/api/batch-download`;
   const { buf: zip, transferred } = await fetchPost(url, JSON.stringify({ paths: filePaths }), syncKeyHeader());
@@ -324,10 +328,14 @@ async function downloadBatch(
           logger.warn({ name }, 'Skipping ZIP entry: path traversal detected');
           return;
         }
-        const dir = join(config.RESPONSE_DIR, folder);
-        await mkdir(dir, { recursive: true });
+        await mkdir(join(config.RESPONSE_DIR, folder), { recursive: true });
       }
       await writeFile(target, data);
+      const mtime = remoteMtimes.get(name);
+      if (mtime) {
+        const mt = new Date(mtime);
+        try { await utimes(target, mt, mt); } catch { /* ignore — best-effort */ }
+      }
     }),
   );
 
@@ -416,7 +424,7 @@ export async function syncFromRemote(
 
       if (batchAvailable !== false) {
         try {
-            const result = await downloadBatch(remoteBase, chunk);
+            const result = await downloadBatch(remoteBase, chunk, remoteMtimes);
           totalTransferred += result.transferred;
           totalDecompressed += result.decompressed;
           batchAvailable = true;
@@ -437,7 +445,7 @@ export async function syncFromRemote(
       // Individual download mode
       for (let j = 0; j < chunk.length; j += INDIVIDUAL_CONCURRENCY) {
         const concurrentSlice = chunk.slice(j, j + INDIVIDUAL_CONCURRENCY);
-        const results = await Promise.all(concurrentSlice.map(f => downloadOne(remoteBase, f)));
+        const results = await Promise.all(concurrentSlice.map(f => downloadOne(remoteBase, f, remoteMtimes.get(f))));
         for (const r of results) {
           totalTransferred += r.transferred;
           totalDecompressed += r.decompressed;
@@ -445,20 +453,6 @@ export async function syncFromRemote(
       }
       logger.debug({ done: Math.min(i + batchSize, missing.length), total: missing.length }, 'Sync batch complete');
     }
-
-    // Restore remote mtimes on all downloaded files
-    await Promise.all(
-      missing.map(async (filePath) => {
-        const remoteMtime = remoteMtimes.get(filePath);
-        if (!remoteMtime) return;
-        const slash = filePath.indexOf('/');
-        const localPath = slash === -1
-          ? join(config.RESPONSE_DIR, filePath)
-          : join(config.RESPONSE_DIR, filePath.slice(0, slash), filePath.slice(slash + 1));
-        const mt = new Date(remoteMtime);
-        try { await utimes(localPath, mt, mt); } catch { /* ignore */ }
-      }),
-    );
 
     // Resolve starred/unstarred duplicates (folder files only — root files are just overwritten)
     const downloadedByFolder = new Map<string, string[]>();
@@ -502,8 +496,12 @@ export async function syncFromRemote(
       const svcName = folderToService[folder];
       if (svcName) emit(`service:${svcName}`, { service: svcName, ts });
     }
-    if (updatedRootFiles.length > 0) {
-      emit('root-files', { files: updatedRootFiles, ts });
+    if (updatedRootFiles.some(f => f.startsWith('homepage'))) {
+      emit('homepage', { ts });
+    }
+    const otherRootFiles = updatedRootFiles.filter(f => !f.startsWith('homepage'));
+    if (otherRootFiles.length > 0) {
+      emit('root', { files: otherRootFiles, ts });
     }
 
     return stats;

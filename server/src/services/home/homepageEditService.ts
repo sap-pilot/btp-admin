@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { config } from '../config.js';
-import { notifyCallbacks } from './status/syncService.js';
+import { config } from '../../config.js';
+import { notifyCallbacks } from '../syncService.js';
 
 const HOMEPAGE_PATH = join(config.RESPONSE_DIR, 'homepage.json');
 const CHANGELOG_PATH = join(config.RESPONSE_DIR, 'homepage-changelog.md');
