@@ -1,14 +1,15 @@
 import express from 'express';
 import { config } from './config.js';
-import { loadConfig } from './services/configService.js';
+import { loadConfig } from './services/status/configService.js';
 import { logger } from './logger.js';
-import { startScheduler, stopScheduler } from './services/schedulerService.js';
-import { syncFromRemote, setLastTriggerSyncTs, startIntervalFallback, stopIntervalFallback } from './services/syncService.js';
-import { startHousekeepingScheduler, stopHousekeepingScheduler } from './services/housekeepingService.js';
+import { startScheduler, stopScheduler } from './services/status/schedulerService.js';
+import { syncFromRemote, setLastTriggerSyncTs, startIntervalFallback, stopIntervalFallback } from './services/status/syncService.js';
+import { startHousekeepingScheduler, stopHousekeepingScheduler } from './services/status/housekeepingService.js';
 import { initGeo } from './services/geoService.js';
-import { closeBrowser } from './services/browserCheckService.js';
+import { closeBrowser } from './services/status/browserCheckService.js';
 import healthRouter from './routes/health.js';
 import apiRouter from './routes/api.js';
+import statusApiRouter from './routes/status/api.js';
 import authRouter from './routes/auth.js';
 import { errorHandler } from './middleware/errorHandler.js';
 import { compress } from './middleware/compress.js';
@@ -25,6 +26,7 @@ app.use('/health', healthRouter);
 app.use(authRouter);
 // API responses must never be cached — prevents 304s on repeated /api/download requests
 app.use('/api', (_req, res, next) => { res.setHeader('Cache-Control', 'no-store'); next(); });
+app.use('/api/status', statusApiRouter);
 app.use('/api', apiRouter);
 
 try {
@@ -36,7 +38,7 @@ try {
 app.use(errorHandler);
 
 const server = app.listen(config.PORT, () => {
-  logger.info({ port: config.PORT }, 'BTP Status server started');
+  logger.info({ port: config.PORT }, 'BTP Admin server started');
   if (config.SYNC_PROTECTION_OFF) {
     logger.warn('SYNC_PROTECTION_OFF is active — /api/browse and /api/batch-download require no authentication');
   }

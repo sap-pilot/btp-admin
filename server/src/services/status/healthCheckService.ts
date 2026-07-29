@@ -3,12 +3,12 @@ import { evaluateCondition } from './conditionEvaluator.js';
 import { saveResponse } from './responseStore.js';
 import { getEvaluationMode } from './overrideService.js';
 import { runBrowserIasLogin } from './browserCheckService.js';
-import { getCity } from './geoService.js';
-import { logger } from '../logger.js';
-import { config } from '../config.js';
-import { emit } from './liveEvents.js';
+import { getCity } from '../geoService.js';
+import { logger } from '../../logger.js';
+import { config } from '../../config.js';
+import { emit } from '../liveEvents.js';
 import { notifyCallbacks } from './syncService.js';
-import type { ConditionResult, ResponseRecord, CheckResult, EndpointCheckResult, RetryAttempt, EndpointConfig } from '../types/index.js';
+import type { ConditionResult, ResponseRecord, CheckResult, EndpointCheckResult, RetryAttempt, EndpointConfig } from '../../types/index.js';
 
 export type { CheckResult, EndpointCheckResult };
 

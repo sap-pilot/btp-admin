@@ -1,7 +1,7 @@
 import { existsSync } from 'node:fs';
 import { chromium, type Browser, type BrowserContext, type Page } from 'playwright';
-import { logger } from '../logger.js';
-import type { EndpointConfig } from '../types/index.js';
+import { logger } from '../../logger.js';
+import type { EndpointConfig } from '../../types/index.js';
 
 const SYSTEM_CHROME = '/usr/bin/google-chrome-stable';
 

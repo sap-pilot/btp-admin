@@ -1,4 +1,4 @@
-import type { ConditionResult } from '../types/index.js';
+import type { ConditionResult } from '../../types/index.js';
 
 interface EvalContext {
   status: number;

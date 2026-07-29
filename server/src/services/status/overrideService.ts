@@ -1,4 +1,4 @@
-import type { EvaluationMode } from '../types/index.js';
+import type { EvaluationMode } from '../../types/index.js';
 
 const evaluationModes = new Map<string, EvaluationMode>();
 const intervalOverrides = new Map<string, number>();

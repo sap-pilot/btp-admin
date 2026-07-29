@@ -1,8 +1,18 @@
 import { Component, lazy, Suspense, type ReactNode, type ErrorInfo } from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router';
+import AppLayout from '@/components/AppLayout';
 
-const Overview = lazy(() => import('@/pages/Overview'));
-const History = lazy(() => import('@/pages/History'));
+const StatusOverview = lazy(() => import('@/pages/status/Overview'));
+const StatusHistory = lazy(() => import('@/pages/status/History'));
+
+function ComingSoon({ title }: { title: string }) {
+  return (
+    <div className="flex flex-col h-full items-center justify-center gap-3 text-muted-foreground">
+      <p className="text-lg font-medium">{title}</p>
+      <p className="text-sm">Under construction</p>
+    </div>
+  );
+}
 
 interface EBState { error: Error | null }
 class ErrorBoundary extends Component<{ children: ReactNode }, EBState> {
@@ -19,7 +29,7 @@ class ErrorBoundary extends Component<{ children: ReactNode }, EBState> {
   render() {
     if (this.state.error) {
       return (
-        <div className="min-h-screen bg-background text-foreground flex items-center justify-center p-8">
+        <div className="flex h-full bg-background text-foreground items-center justify-center p-8">
           <div className="text-center space-y-3 max-w-md">
             <p className="text-destructive font-semibold">Something went wrong</p>
             <p className="text-sm text-muted-foreground break-words">{this.state.error.message}</p>
@@ -43,11 +53,17 @@ export default function App() {
       <BrowserRouter>
         <Suspense fallback={null}>
           <Routes>
-            <Route path="/overview" element={<Overview />} />
-            <Route path="/service/:name" element={<History />} />
-            <Route path="/history/:name" element={<Navigate to="/overview" replace />} />
-            <Route path="/" element={<Navigate to="/overview" replace />} />
-            <Route path="*" element={<Navigate to="/overview" replace />} />
+            <Route element={<AppLayout />}>
+              <Route path="/status/overview" element={<StatusOverview />} />
+              <Route path="/status/service/:name" element={<StatusHistory />} />
+              <Route path="/home" element={<ComingSoon title="Homepage" />} />
+              <Route path="/destination" element={<ComingSoon title="Destinations" />} />
+              {/* Legacy redirects */}
+              <Route path="/overview" element={<Navigate to="/status/overview" replace />} />
+              <Route path="/service/:name" element={<Navigate to="/status/overview" replace />} />
+              <Route path="/" element={<Navigate to="/status/overview" replace />} />
+              <Route path="*" element={<Navigate to="/status/overview" replace />} />
+            </Route>
           </Routes>
         </Suspense>
       </BrowserRouter>

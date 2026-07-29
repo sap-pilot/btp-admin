@@ -5,13 +5,13 @@ import { promisify } from 'node:util';
 import { mkdir, writeFile, utimes } from 'node:fs/promises';
 import { join, resolve as resolvePath } from 'node:path';
 import { createHmac } from 'node:crypto';
-import { config } from '../config.js';
-import { logger } from '../logger.js';
+import { config } from '../../config.js';
+import { logger } from '../../logger.js';
 import { browseResponseFiles, resolveSyncDuplicates, sanitizeName } from './responseStore.js';
 import type { BrowseFile } from './responseStore.js';
-import { extractZip } from './zipBuilder.js';
+import { extractZip } from '../zipBuilder.js';
 import { getSyncKey, getAllServices } from './configService.js';
-import { emit } from './liveEvents.js';
+import { emit } from '../liveEvents.js';
 
 const gunzipAsync = promisify(gunzip);
 const INDIVIDUAL_CONCURRENCY = 10;

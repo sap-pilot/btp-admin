@@ -142,7 +142,7 @@ export default function TestModal({ serviceName, open, onClose, onComplete }: Pr
     setCollapsedRetries(new Set());
     const start = Date.now();
     try {
-      const resp = await fetch(`/api/check/${encodeURIComponent(serviceName)}`);
+      const resp = await fetch(`/api/status/check/${encodeURIComponent(serviceName)}`);
       setElapsed(Date.now() - start);
       if (!resp.ok) {
         let msg = `Server error ${resp.status}`;

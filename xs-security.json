@@ -1,7 +1,7 @@
 {
-	"xsappname": "btp-status",
+	"xsappname": "btp-admin",
 	"tenant-mode": "dedicated",
-	"description": "File-backed status page and health checker for SAP BTP services",
+	"description": "BTP admin central with file-backed statuspage and homepage, destination checker and more",
 	"scopes": [
 		{
 			"name": "$XSAPPNAME.admin",
@@ -10,7 +10,7 @@
 	],
 	"role-templates": [
 		{
-			"name": "BTP_Status_Admin",
+			"name": "BTP_Admin",
 			"description": "Admin access to BTP Status — evaluation mode, schedule overrides, Run Test and Sync",
 			"scope-references": [
 				"$XSAPPNAME.admin"
@@ -19,10 +19,10 @@
 	],
 	"role-collections": [
 		{
-			"name": "BTP Status Admin",
+			"name": "BTP Admin",
 			"description": "Assign to users who need admin access to BTP Status",
 			"role-template-references": [
-				"$XSAPPNAME.BTP_Status_Admin"
+				"$XSAPPNAME.BTP_Admin"
 			]
 		}
 	],
