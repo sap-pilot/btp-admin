@@ -164,7 +164,7 @@ export default function AppSidebar() {
           collapsed ? (
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <button className={itemBase(true) + 'text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground w-full'} title="Resources">
+                <button className={itemBase(true) + 'text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground'} title="Resources">
                   <BookMarked className="h-4 w-4 shrink-0" />
                 </button>
               </DropdownMenuTrigger>
@@ -180,7 +180,7 @@ export default function AppSidebar() {
             <div>
               <button
                 onClick={() => setResourcesOpen(o => !o)}
-                className={itemBase(false) + 'text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground w-full'}
+                className={itemBase(false) + 'text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground'}
               >
                 <BookMarked className="h-4 w-4 shrink-0" />
                 <span className="truncate flex-1 text-left">Resources</span>
@@ -214,7 +214,7 @@ export default function AppSidebar() {
                 fetch('/api/sync', { method: 'POST' }).finally(() => setSyncing(false));
               }}
               disabled={syncing}
-              className={itemBase(collapsed) + 'text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground w-full disabled:opacity-40 disabled:cursor-not-allowed'}
+              className={itemBase(collapsed) + 'text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground disabled:opacity-40 disabled:cursor-not-allowed'}
               title="Sync"
             >
               <RefreshCw className={`h-4 w-4 shrink-0 ${syncing ? 'animate-spin text-blue-400' : ''}`} />
@@ -223,7 +223,7 @@ export default function AppSidebar() {
           )}
           <button
             onClick={toggleTheme}
-            className={itemBase(collapsed) + 'text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground w-full'}
+            className={itemBase(collapsed) + 'text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground'}
             title="Toggle Theme"
           >
             {theme === 'dark' ? <Moon className="h-4 w-4 shrink-0" /> : <Sun className="h-4 w-4 shrink-0" />}
@@ -239,7 +239,7 @@ export default function AppSidebar() {
             {!auth.loggedIn ? (
               <button
                 onClick={auth.login}
-                className={itemBase(collapsed) + 'w-full text-sidebar-foreground/70 hover:text-sidebar-accent-foreground hover:bg-sidebar-accent'}
+                className={itemBase(collapsed) + 'text-sidebar-foreground/70 hover:text-sidebar-accent-foreground hover:bg-sidebar-accent'}
                 title="Log in"
               >
                 <LogIn className="h-4 w-4 shrink-0" />
@@ -249,7 +249,7 @@ export default function AppSidebar() {
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
                   <button
-                    className={itemBase(collapsed) + 'w-full text-sidebar-foreground/70 hover:text-sidebar-accent-foreground hover:bg-sidebar-accent'}
+                    className={itemBase(collapsed) + 'text-sidebar-foreground/70 hover:text-sidebar-accent-foreground hover:bg-sidebar-accent'}
                     title={collapsed ? auth.firstName : undefined}
                   >
                     <div className="h-4 w-4 rounded-full bg-primary text-primary-foreground flex items-center justify-center text-[9px] font-bold leading-none select-none shrink-0">
