@@ -1,6 +1,18 @@
-import { createContext, useContext, useState } from 'react';
+import { createContext, useContext, useEffect, useState } from 'react';
 import { Outlet } from 'react-router';
 import AppSidebar from './AppSidebar';
+
+const COOKIE = 'sidebar-collapsed';
+const MAX_AGE = 365 * 24 * 60 * 60; // 1 year
+
+function readCookie(): boolean {
+  const m = document.cookie.match(/(?:^|;\s*)sidebar-collapsed=([^;]*)/);
+  return m?.[1] === '1';
+}
+
+function writeCookie(value: boolean) {
+  document.cookie = `${COOKIE}=${value ? '1' : '0'}; max-age=${MAX_AGE}; path=/; SameSite=Strict`;
+}
 
 interface SidebarCtx {
   collapsed: boolean;
@@ -14,7 +26,11 @@ export function useSidebar(): SidebarCtx {
 }
 
 export default function AppLayout() {
-  const [collapsed, setCollapsed] = useState(false);
+  const [collapsed, setCollapsed] = useState(readCookie);
+
+  useEffect(() => {
+    writeCookie(collapsed);
+  }, [collapsed]);
 
   return (
     <SidebarContext.Provider value={{ collapsed, toggle: () => setCollapsed(c => !c) }}>
