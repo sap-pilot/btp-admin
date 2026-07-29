@@ -151,27 +151,38 @@
             }
         ]
     },
-    "resources": [
+    "menus": [
         {
-            "title": "BTP Key Vault",
-            "url": "https://portal.azure.com/",
-            "target": "_blank",
-            "restricted": true
+            "title": "Security",
+            "restricted": true,
+            "children": [
+                {
+                    "title": "BTP Key Vault",
+                    "url": "https://portal.azure.com/",
+                    "target": "_blank",
+                    "restricted": true
+                }
+            ]
         },
         {
-            "title": "SAP BTP What's New",
-            "url": "https://help.sap.com/whats-new/cf0cb2cb149647329b5d02aa96303f56?locale=en-US",
-            "target": "_blank"
-        },
-        {
-            "title": "Developer Playbook",
-            "url": "https://help.sap.com/docs/btp",
-            "target": "_blank"
-        },
-        {
-            "title": "Report SAP Incident",
-            "url": "https://me.sap.com/servicessupport",
-            "target": "_blank"
+            "title": "Resources",
+            "children": [
+                {
+                    "title": "SAP BTP What's New",
+                    "url": "https://help.sap.com/whats-new/cf0cb2cb149647329b5d02aa96303f56?locale=en-US",
+                    "target": "_blank"
+                },
+                {
+                    "title": "Developer Playbook",
+                    "url": "https://help.sap.com/docs/btp",
+                    "target": "_blank"
+                },
+                {
+                    "title": "Report SAP Incident",
+                    "url": "https://me.sap.com/servicessupport",
+                    "target": "_blank"
+                }
+            ]
         }
     ],
     "templates": {

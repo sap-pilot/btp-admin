@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Link, useLocation } from 'react-router';
-import { LogIn, Sun, Moon, Activity, Home, Globe, LayoutGrid, ChevronDown, RefreshCw, BookMarked } from 'lucide-react';
+import { LogIn, Sun, Moon, Activity, Home, Globe, LayoutGrid, ChevronDown, RefreshCw, BookMarked, ShieldCheck } from 'lucide-react';
 import { useAuth } from '@/hooks/useAuth';
 import { useTheme } from '@/hooks/useTheme';
 import { useSidebar } from '@/components/AppLayout';
@@ -12,6 +12,17 @@ interface NavItem {
   href: string;
   icon: React.ReactNode;
   disabled?: boolean;
+}
+
+interface MenuItem {
+  title: string;
+  url: string;
+  target?: string;
+}
+
+interface MenuGroup {
+  title: string;
+  children: MenuItem[];
 }
 
 const NAV_ITEMS: NavItem[] = [
@@ -26,6 +37,14 @@ const itemBase = (collapsed: boolean) =>
     ? 'flex items-center justify-center py-2 mx-1 rounded-md text-sm transition-colors '
     : 'flex items-center gap-3 px-3 py-2 mx-1 rounded-md text-sm transition-colors ';
 
+function menuIcon(title: string) {
+  switch (title) {
+    case 'Security': return <ShieldCheck className="h-4 w-4 shrink-0" />;
+    case 'Resources': return <BookMarked className="h-4 w-4 shrink-0" />;
+    default: return <BookMarked className="h-4 w-4 shrink-0" />;
+  }
+}
+
 export default function AppSidebar() {
   const location = useLocation();
   const auth = useAuth();
@@ -35,13 +54,13 @@ export default function AppSidebar() {
   const [appTitle, setAppTitle] = useState('BTP Admin');
   const [syncAvailable, setSyncAvailable] = useState(false);
   const [syncing, setSyncing] = useState(false);
-  const [resources, setResources] = useState<{ title: string; url: string; target?: string }[]>([]);
-  const [resourcesOpen, setResourcesOpen] = useState(false);
+  const [menus, setMenus] = useState<MenuGroup[]>([]);
+  const [openMenus, setOpenMenus] = useState<Record<string, boolean>>({});
 
   useEffect(() => {
     fetch('/api/homepage')
-      .then(r => r.json() as Promise<{ resources?: { title: string; url: string; target?: string }[] } | null>)
-      .then(d => { setResources(d?.resources ?? []); })
+      .then(r => r.json() as Promise<{ menus?: MenuGroup[] } | null>)
+      .then(d => { setMenus(d?.menus ?? []); setOpenMenus({}); })
       .catch(() => null);
   }, [auth.loggedIn]);
 
@@ -84,8 +103,8 @@ export default function AppSidebar() {
   return (
     <aside className={`${w} ${border} shrink-0 flex flex-col border-sidebar-border bg-sidebar transition-[width] duration-200 overflow-hidden`}>
       {/* Header: logo + title + site switcher + version */}
-      <div className={`flex items-center border-b border-sidebar-border min-h-[52px] ${collapsed ? 'justify-center' : 'pl-4 pr-3 gap-2'}`}>
-        <img src="/images/favicon-32x32.png" alt="" className="h-4 w-4 shrink-0" />
+      <div className={`flex items-center border-b border-sidebar-border min-h-[52px] ${collapsed ? 'justify-center' : 'pl-2 pr-3 gap-2'}`}>
+        <img src="/images/favicon-32x32.png" alt="" className="h-8 w-8 shrink-0" />
         {!collapsed && (
           <div className="flex flex-col min-w-0 flex-1">
             <div className="flex items-center gap-1">
@@ -159,51 +178,57 @@ export default function AppSidebar() {
           })}
         </div>
 
-        {/* Resources section */}
-        {resources.length > 0 && (
-          collapsed ? (
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <button className={itemBase(true) + 'text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground'} title="Resources">
-                  <BookMarked className="h-4 w-4 shrink-0" />
-                </button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent side="right" align="end">
-                {resources.map(r => (
-                  <DropdownMenuItem key={r.url} className="text-sm cursor-pointer" asChild>
-                    <a href={r.url} target={r.target ?? '_blank'} rel="noopener noreferrer">{r.title}</a>
-                  </DropdownMenuItem>
-                ))}
-              </DropdownMenuContent>
-            </DropdownMenu>
-          ) : (
-            <div>
+        {/* Dynamic menu groups from homepage.json */}
+        {menus.map(menu => {
+          if (collapsed) {
+            return (
+              <DropdownMenu key={menu.title}>
+                <DropdownMenuTrigger asChild>
+                  <button
+                    className={itemBase(true) + 'text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground'}
+                    title={menu.title}
+                  >
+                    {menuIcon(menu.title)}
+                  </button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent side="right" align="end">
+                  {menu.children.map(c => (
+                    <DropdownMenuItem key={c.url} className="text-sm cursor-pointer" asChild>
+                      <a href={c.url} target={c.target ?? '_blank'} rel="noopener noreferrer">{c.title}</a>
+                    </DropdownMenuItem>
+                  ))}
+                </DropdownMenuContent>
+              </DropdownMenu>
+            );
+          }
+          return (
+            <div key={menu.title} className="flex flex-col">
               <button
-                onClick={() => setResourcesOpen(o => !o)}
+                onClick={() => setOpenMenus(o => ({ ...o, [menu.title]: !o[menu.title] }))}
                 className={itemBase(false) + 'text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground'}
               >
-                <BookMarked className="h-4 w-4 shrink-0" />
-                <span className="truncate flex-1 text-left">Resources</span>
-                <ChevronDown className={`h-3.5 w-3.5 shrink-0 transition-transform${resourcesOpen ? ' rotate-180' : ''}`} />
+                {menuIcon(menu.title)}
+                <span className="truncate flex-1 text-left">{menu.title}</span>
+                <ChevronDown className={`h-3.5 w-3.5 shrink-0 transition-transform${openMenus[menu.title] ? ' rotate-180' : ''}`} />
               </button>
-              {resourcesOpen && (
+              {openMenus[menu.title] && (
                 <div className="ml-6 mr-1 border-l border-sidebar-border py-0.5 flex flex-col gap-0.5">
-                  {resources.map(r => (
+                  {menu.children.map(c => (
                     <a
-                      key={r.url}
-                      href={r.url}
-                      target={r.target ?? '_blank'}
+                      key={c.url}
+                      href={c.url}
+                      target={c.target ?? '_blank'}
                       rel="noopener noreferrer"
                       className="flex h-7 min-w-0 items-center rounded-md pl-5 pr-3 text-sm text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground transition-colors"
                     >
-                      <span className="truncate">{r.title}</span>
+                      <span className="truncate">{c.title}</span>
                     </a>
                   ))}
                 </div>
               )}
             </div>
-          )
-        )}
+          );
+        })}
 
         {/* Sync + Theme toggle — float to bottom of nav */}
         <div className="mt-auto pt-1">

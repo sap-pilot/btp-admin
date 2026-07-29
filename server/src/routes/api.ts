@@ -39,11 +39,23 @@ router.get('/homepage', (req, res) => {
   }
   if (!raw) { res.json(null); return; }
   try {
-    const data = JSON.parse(raw) as { resources?: { restricted?: boolean }[]; [k: string]: unknown };
+    const data = JSON.parse(raw) as {
+      resources?: { restricted?: boolean }[];
+      menus?: { restricted?: boolean; children?: { restricted?: boolean }[] }[];
+      [k: string]: unknown;
+    };
     const x = getXsuaaConfig();
     const session = x ? readSessionFromRequest(req.headers.cookie ?? '', x.clientsecret) : null;
     if (Array.isArray(data.resources)) {
       data.resources = data.resources.filter(r => !r.restricted || !!session);
+    }
+    if (Array.isArray(data.menus)) {
+      data.menus = data.menus
+        .filter(m => !m.restricted || !!session)
+        .map(m => ({
+          ...m,
+          children: Array.isArray(m.children) ? m.children.filter(c => !c.restricted || !!session) : []
+        }));
     }
     res.json(data);
   } catch { res.status(500).json({ error: 'Failed to parse homepage.json' }); }

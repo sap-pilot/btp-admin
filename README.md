@@ -44,7 +44,7 @@ Azure Traffic Manager polls these health endpoints from multiple PoPs. When all 
 
 8. **Push-based two-instance sync for CF file persistence** — Cloud Foundry containers are ephemeral and lose local files on restart; the consumer instance sets `SYNC_REMOTE` + `SELF_URL` to point at the producer; on startup it downloads all existing files and registers itself as a webhook consumer; when the producer completes a health check it calls all registered `/api/download-trigger` webhooks; the consumer fetches only the delta (`GET /api/browse?since=<ms>`) and downloads new files via `POST /api/batch-download`; see [Remote Sync](#remote-sync)
 
-9. **BTP Homepage** — a configurable navigation hub at `/home` driven by `server/homepage.json` (or `HOMEPAGE_JSON` env var); organize your BTP subaccounts into tabs and directories; one column per subaccount, one row per service; a **Cockpit** row provides deep dropdown navigation with per-space sub-menus; other service rows resolve URLs from named templates with `{placeholder}` substitution; `restricted` resources in the sidebar are filtered to authenticated users only; copy `homepage-sample.json` as a starting point
+9. **BTP Homepage** — a configurable navigation hub at `/home` driven by `server/homepage.json` (or `HOMEPAGE_JSON` env var); organize your BTP subaccounts into tabs and directories; one column per subaccount, one row per service; a **Cockpit** row provides deep dropdown navigation with per-space sub-menus; other service rows resolve URLs from named templates with `{placeholder}` substitution; sidebar `menus` groups (e.g. Security, Resources) are filtered per `restricted` flag — unauthenticated users see only unrestricted items; copy `sample/homepage.json` as a starting point
 
 10. **Minimal server dependencies** — production runtime requires only Express (HTTP), Pino (logging), and Playwright (browser checks); all HTTP requests, crypto, gzip compression, and ZIP packaging use native Node.js APIs — no axios, no ORM, no utility libraries
 
@@ -68,11 +68,11 @@ Azure Traffic Manager polls these health endpoints from multiple PoPs. When all 
 npm install
 
 # 2. Copy sample config and fill in real values
-cp config-sample.json server/config.json
+cp sample/config.json server/config.json
 # Edit server/config.json with your real service endpoints and credentials
 
 # 3. (Optional) Set up the homepage
-cp homepage-sample.json server/homepage.json
+cp sample/homepage.json server/homepage.json
 # Edit server/homepage.json with your BTP global accounts and services
 
 # 4. Build client once, then start Express (serves UI + API on :3000)
@@ -107,7 +107,7 @@ The server resolves configuration in this priority order:
 1. **`CONFIG_JSON` env var** — JSON string with the full config (useful for BTP env properties, no file needed)
 2. **`CONFIG_FILE` env var / default** — path to a JSON file (default: `./config.json` relative to the `server/` working directory, i.e. `server/config.json` from the repo root)
 
-Create `server/config.json` (copy `server/config-sample.json` and fill in real values):
+Create `server/config.json` (copy `sample/config.json` and fill in real values):
 
 ```json
 {
