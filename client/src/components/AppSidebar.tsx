@@ -41,9 +41,9 @@ export default function AppSidebar() {
   useEffect(() => {
     fetch('/api/homepage')
       .then(r => r.json() as Promise<{ resources?: { title: string; url: string; target?: string }[] } | null>)
-      .then(d => { if (d?.resources) setResources(d.resources); })
+      .then(d => { setResources(d?.resources ?? []); })
       .catch(() => null);
-  }, []);
+  }, [auth.loggedIn]);
 
   useEffect(() => {
     const p = location.pathname;
@@ -82,18 +82,18 @@ export default function AppSidebar() {
   const border = collapsed ? 'border-r-0 md:border-r' : 'border-r';
 
   return (
-    <aside className={`${w} ${border} shrink-0 flex flex-col border-border bg-background transition-[width] duration-200 overflow-hidden`}>
+    <aside className={`${w} ${border} shrink-0 flex flex-col border-sidebar-border bg-sidebar transition-[width] duration-200 overflow-hidden`}>
       {/* Header: logo + title + site switcher + version */}
-      <div className={`flex items-center border-b border-border min-h-[52px] ${collapsed ? 'justify-center' : 'pl-4 pr-3 gap-2'}`}>
+      <div className={`flex items-center border-b border-sidebar-border min-h-[52px] ${collapsed ? 'justify-center' : 'pl-4 pr-3 gap-2'}`}>
         <img src="/images/favicon-32x32.png" alt="" className="h-4 w-4 shrink-0" />
         {!collapsed && (
           <div className="flex flex-col min-w-0 flex-1">
             <div className="flex items-center gap-1">
-              <span className="text-sm font-semibold truncate">{appTitle}</span>
+              <span className="text-sm font-semibold truncate text-sidebar-foreground">{appTitle}</span>
               {sites.length >= 2 && (
                 <DropdownMenu>
                   <DropdownMenuTrigger asChild>
-                    <button className="text-muted-foreground hover:text-foreground transition-colors shrink-0" title="Switch site">
+                    <button className="text-sidebar-foreground/50 hover:text-sidebar-foreground transition-colors shrink-0" title="Switch site">
                       <ChevronDown className="h-3.5 w-3.5" />
                     </button>
                   </DropdownMenuTrigger>
@@ -115,7 +115,7 @@ export default function AppSidebar() {
               )}
             </div>
             <span
-              className="text-[10px] text-muted-foreground leading-tight truncate"
+              className="text-[10px] text-sidebar-foreground/50 leading-tight truncate"
               title={`v${__APP_VERSION__}-${__COMMIT_HASH__} — built ${new Date(__BUILD_DATE__).toLocaleString()}`}
             >
               v{__APP_VERSION__}-{__COMMIT_HASH__}
@@ -131,10 +131,10 @@ export default function AppSidebar() {
           {NAV_ITEMS.map(item => {
             const active = !item.disabled && location.pathname.startsWith(item.href);
             const cls = item.disabled
-              ? itemBase(collapsed) + 'text-muted-foreground/50 cursor-not-allowed select-none'
+              ? itemBase(collapsed) + 'text-sidebar-foreground/40 cursor-not-allowed select-none'
               : active
-                ? itemBase(collapsed) + 'bg-accent text-accent-foreground font-medium'
-                : itemBase(collapsed) + 'text-muted-foreground hover:bg-accent/50 hover:text-foreground';
+                ? itemBase(collapsed) + 'bg-sidebar-accent text-sidebar-accent-foreground font-medium'
+                : itemBase(collapsed) + 'text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground';
 
             const inner = (
               <>
@@ -164,7 +164,7 @@ export default function AppSidebar() {
           collapsed ? (
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <button className={itemBase(true) + 'text-muted-foreground hover:bg-accent/50 hover:text-foreground w-full'} title="Resources">
+                <button className={itemBase(true) + 'text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground w-full'} title="Resources">
                   <BookMarked className="h-4 w-4 shrink-0" />
                 </button>
               </DropdownMenuTrigger>
@@ -180,21 +180,21 @@ export default function AppSidebar() {
             <div>
               <button
                 onClick={() => setResourcesOpen(o => !o)}
-                className={itemBase(false) + 'text-muted-foreground hover:bg-accent/50 hover:text-foreground w-full'}
+                className={itemBase(false) + 'text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground w-full'}
               >
                 <BookMarked className="h-4 w-4 shrink-0" />
                 <span className="truncate flex-1 text-left">Resources</span>
                 <ChevronDown className={`h-3.5 w-3.5 shrink-0 transition-transform${resourcesOpen ? ' rotate-180' : ''}`} />
               </button>
               {resourcesOpen && (
-                <div className="ml-6 mr-1 border-l border-border py-0.5 flex flex-col gap-0.5">
+                <div className="ml-6 mr-1 border-l border-sidebar-border py-0.5 flex flex-col gap-0.5">
                   {resources.map(r => (
                     <a
                       key={r.url}
                       href={r.url}
                       target={r.target ?? '_blank'}
                       rel="noopener noreferrer"
-                      className="flex h-7 min-w-0 items-center rounded-md pl-5 pr-3 text-sm text-muted-foreground hover:bg-accent/50 hover:text-foreground transition-colors"
+                      className="flex h-7 min-w-0 items-center rounded-md pl-5 pr-3 text-sm text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground transition-colors"
                     >
                       <span className="truncate">{r.title}</span>
                     </a>
@@ -214,7 +214,7 @@ export default function AppSidebar() {
                 fetch('/api/sync', { method: 'POST' }).finally(() => setSyncing(false));
               }}
               disabled={syncing}
-              className={itemBase(collapsed) + 'text-muted-foreground hover:bg-accent/50 hover:text-foreground w-full disabled:opacity-40 disabled:cursor-not-allowed'}
+              className={itemBase(collapsed) + 'text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground w-full disabled:opacity-40 disabled:cursor-not-allowed'}
               title="Sync"
             >
               <RefreshCw className={`h-4 w-4 shrink-0 ${syncing ? 'animate-spin text-blue-400' : ''}`} />
@@ -223,7 +223,7 @@ export default function AppSidebar() {
           )}
           <button
             onClick={toggleTheme}
-            className={itemBase(collapsed) + 'text-muted-foreground hover:bg-accent/50 hover:text-foreground w-full'}
+            className={itemBase(collapsed) + 'text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground w-full'}
             title="Toggle Theme"
           >
             {theme === 'dark' ? <Moon className="h-4 w-4 shrink-0" /> : <Sun className="h-4 w-4 shrink-0" />}
@@ -233,13 +233,13 @@ export default function AppSidebar() {
       </nav>
 
       {/* Bottom: auth */}
-      <div className="border-t border-border">
+      <div className="border-t border-sidebar-border">
         {auth.enabled ? (
           <div className="py-2">
             {!auth.loggedIn ? (
               <button
                 onClick={auth.login}
-                className={itemBase(collapsed) + 'w-full text-muted-foreground hover:text-foreground hover:bg-accent/50'}
+                className={itemBase(collapsed) + 'w-full text-sidebar-foreground/70 hover:text-sidebar-accent-foreground hover:bg-sidebar-accent'}
                 title="Log in"
               >
                 <LogIn className="h-4 w-4 shrink-0" />
@@ -249,7 +249,7 @@ export default function AppSidebar() {
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
                   <button
-                    className={itemBase(collapsed) + 'w-full text-muted-foreground hover:text-foreground hover:bg-accent/50'}
+                    className={itemBase(collapsed) + 'w-full text-sidebar-foreground/70 hover:text-sidebar-accent-foreground hover:bg-sidebar-accent'}
                     title={collapsed ? auth.firstName : undefined}
                   >
                     <div className="h-4 w-4 rounded-full bg-primary text-primary-foreground flex items-center justify-center text-[9px] font-bold leading-none select-none shrink-0">
