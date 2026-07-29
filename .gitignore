@@ -9,11 +9,8 @@ resources/
 mta_archives/
 tmp/
 
-config*.json
-!config-sample.json
-
-homepage*.json
-!homepage-sample.json
+server/config*.json
+server/homepage*.json
 
 default-env.json
 Makefile*.mta
