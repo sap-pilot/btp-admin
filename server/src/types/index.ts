@@ -39,6 +39,7 @@ export interface LandscapeConfig {
 export interface SiteConfig {
   name: string;
   url: string;
+  legacyUrls?: string[];
 }
 
 export interface AppConfig {

@@ -167,6 +167,7 @@ Create `server/config.json` (copy `sample/config.json` and fill in real values):
 | `sites` | array | List of deployed instances for the site-switcher dropdown (optional; dropdown hidden when fewer than 2 entries) |
 | `sites[].name` | string | Display name for the site (e.g. `"Ashburn"`, `"Frankfurt"`) |
 | `sites[].url` | string | Base URL of that deployed instance (e.g. `"https://btp-status-ashburn.cfapps.us10.hana.ondemand.com"`); the current site is matched by comparing the browser's `window.location.origin` against the configured URL's origin |
+| `sites[].legacyUrls` | string[] | Optional list of previous/alternative URLs for this site; also checked against `window.location.origin` when matching the current site (useful after a CF app rename or route migration) |
 | `services` | array | List of service configs |
 
 - Tip: compose landscape diagrams at [mermaid.live](https://mermaid.live/)

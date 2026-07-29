@@ -43,7 +43,7 @@ export default function Home() {
 
   const showEdit = !auth.enabled || auth.loggedIn;
   const canEdit = !auth.enabled || auth.isAdmin;
-  const editTooltip = canEdit ? 'Edit Homepage' : 'Only BTP_Admin can edit Homepage';
+  const editTooltip = canEdit ? 'Edit Homepage' : 'Contact BTP_Admin to edit homepage';
 
   return (
     <div className="flex flex-col h-full bg-background text-foreground">
