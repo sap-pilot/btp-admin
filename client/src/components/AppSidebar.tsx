@@ -45,6 +45,14 @@ function menuIcon(title: string) {
   }
 }
 
+function matchesOrigin(s: SiteConfig): boolean {
+  try {
+    const o = window.location.origin;
+    if (new URL(s.url).origin === o) return true;
+    return (s.legacyUrls ?? []).some(u => new URL(u).origin === o);
+  } catch { return false; }
+}
+
 export default function AppSidebar() {
   const location = useLocation();
   const auth = useAuth();
@@ -81,9 +89,7 @@ export default function AppSidebar() {
         if (d.syncRemote) setSyncAvailable(true);
         if (d.sites) {
           setSites(d.sites);
-          const current = d.sites.find(s => {
-            try { return new URL(s.url).origin === window.location.origin; } catch { return false; }
-          });
+          const current = d.sites.find(matchesOrigin);
           if (current) setAppTitle(current.name);
           else if (d.city && d.city !== 'unknown') setAppTitle(`${d.city} - BTP Admin`);
         } else if (d.city && d.city !== 'unknown') {
@@ -93,9 +99,7 @@ export default function AppSidebar() {
       .catch(() => null);
   }, []);
 
-  const currentSiteUrl = sites.find(s => {
-    try { return new URL(s.url).origin === window.location.origin; } catch { return false; }
-  })?.url ?? '';
+  const currentSiteUrl = sites.find(matchesOrigin)?.url ?? '';
 
   function handleSiteSwitch(url: string) {
     if (!url || url === currentSiteUrl) return;

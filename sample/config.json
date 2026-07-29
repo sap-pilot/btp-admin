@@ -7,7 +7,10 @@
   "sites": [
     {
       "name": "BTP Status (Region A)",
-      "url": "https://btp-status-instance-a.cfapps.us10.hana.ondemand.com"
+      "url": "https://btp-status-instance-a.cfapps.us10.hana.ondemand.com",
+      "legacyUrls": [
+        "https://btp-status-old.cfapps.us10.hana.ondemand.com"
+      ]
     },
     {
       "name": "BTP Status (Region B)",
