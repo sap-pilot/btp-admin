@@ -1,6 +1,6 @@
-# BTP Status
+# BTP Admin
 
-A lightweight, file-backed status page and health checker for SAP BTP services. Compatible with Azure Traffic Manager's HTTP probe mechanism and provides a Gatus-style admin dashboard for reviewing availability history.
+A lightweight, file-backed status page and admin dashboard for SAP BTP. Includes a health checker for Azure Traffic Manager integration, a service availability history view, and a configurable BTP Homepage that renders service links across subaccounts via a `homepage.json` descriptor.
 
 ![BTP Status Dashboard](doc/img/btp-status-compare.png)
 
@@ -44,7 +44,9 @@ Azure Traffic Manager polls these health endpoints from multiple PoPs. When all 
 
 8. **Push-based two-instance sync for CF file persistence** — Cloud Foundry containers are ephemeral and lose local files on restart; the consumer instance sets `SYNC_REMOTE` + `SELF_URL` to point at the producer; on startup it downloads all existing files and registers itself as a webhook consumer; when the producer completes a health check it calls all registered `/api/download-trigger` webhooks; the consumer fetches only the delta (`GET /api/browse?since=<ms>`) and downloads new files via `POST /api/batch-download`; see [Remote Sync](#remote-sync)
 
-9. **Minimal server dependencies** — production runtime requires only Express (HTTP), Pino (logging), and Playwright (browser checks); all HTTP requests, crypto, gzip compression, and ZIP packaging use native Node.js APIs — no axios, no ORM, no utility libraries
+9. **BTP Homepage** — a configurable navigation hub at `/home` driven by `server/homepage.json` (or `HOMEPAGE_JSON` env var); organize your BTP subaccounts into tabs and directories; one column per subaccount, one row per service; a **Cockpit** row provides deep dropdown navigation with per-space sub-menus; other service rows resolve URLs from named templates with `{placeholder}` substitution; `restricted` resources in the sidebar are filtered to authenticated users only; copy `homepage-sample.json` as a starting point
+
+10. **Minimal server dependencies** — production runtime requires only Express (HTTP), Pino (logging), and Playwright (browser checks); all HTTP requests, crypto, gzip compression, and ZIP packaging use native Node.js APIs — no axios, no ORM, no utility libraries
 
 10. **Live updates via Server-Sent Events** — the Overview and service detail pages update automatically when new check results arrive; the server pushes SSE `update` events through `GET /api/events` after every scheduled check, manual Run Test, or remote sync; the browser fetches only the delta (`?since=<ms>`) and merges new files into the current view without a full reload; live updates are scoped per service on the detail page (`?service=<name>`) and disabled in Date Range mode; the **Last Checked** stat card on both pages shows the time of the most recent data refresh in `HH:mm:ss` (24-hour) format, updates on every full load and live delta merge, and doubles as a sync shortcut — clicking it when authenticated triggers an immediate sync
 
@@ -66,14 +68,18 @@ Azure Traffic Manager polls these health endpoints from multiple PoPs. When all 
 npm install
 
 # 2. Copy sample config and fill in real values
-cp server/config-sample.json server/config.json
+cp config-sample.json server/config.json
 # Edit server/config.json with your real service endpoints and credentials
 
-# 3. Build client once, then start Express (serves UI + API on :3000)
+# 3. (Optional) Set up the homepage
+cp homepage-sample.json server/homepage.json
+# Edit server/homepage.json with your BTP global accounts and services
+
+# 4. Build client once, then start Express (serves UI + API on :3000)
 npm run dev
 ```
 
-Open http://localhost:3000/overview
+Open http://localhost:3000/status
 
 When iterating on the frontend, rebuild the client in a second terminal while the server keeps running:
 

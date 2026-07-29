@@ -10,7 +10,10 @@ mta_archives/
 tmp/
 
 config*.json
-!server/config-sample.json
+!config-sample.json
+
+homepage*.json
+!homepage-sample.json
 
 default-env.json
 Makefile*.mta

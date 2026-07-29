@@ -4,6 +4,7 @@ import AppLayout from '@/components/AppLayout';
 
 const StatusOverview = lazy(() => import('@/pages/status/Overview'));
 const StatusHistory = lazy(() => import('@/pages/status/History'));
+const HomePage = lazy(() => import('@/pages/Home'));
 
 function ComingSoon({ title }: { title: string }) {
   return (
@@ -56,7 +57,7 @@ export default function App() {
             <Route element={<AppLayout />}>
               <Route path="/status" element={<StatusOverview />} />
               <Route path="/status/:name" element={<StatusHistory />} />
-              <Route path="/home" element={<ComingSoon title="Homepage" />} />
+              <Route path="/home" element={<HomePage />} />
               <Route path="/apps" element={<ComingSoon title="Apps" />} />
               <Route path="/destinations" element={<ComingSoon title="Destinations" />} />
               <Route path="/" element={<Navigate to="/status" replace />} />
