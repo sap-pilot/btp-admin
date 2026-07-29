@@ -29,7 +29,7 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { ArrowLeft, AlertCircle, ChevronDown, ExternalLink, MoreHorizontal, PanelLeft, PlayCircle, RefreshCw, Star } from 'lucide-react';
+import { ArrowLeft, AlertCircle, ChevronDown, ExternalLink, MoreHorizontal, PanelLeft, PlayCircle, Star } from 'lucide-react';
 import { useWindowWidth } from '@/hooks/useWindowWidth';
 import { useAuth } from '@/hooks/useAuth';
 import { useSidebar } from '@/components/AppLayout';
@@ -80,7 +80,7 @@ export default function History() {
   const { name = '' } = useParams<{ name: string }>();
   const location = useLocation();
   const navigate = useNavigate();
-  const backTo = new URLSearchParams(location.search).get('from') ?? '/status/overview';
+  const backTo = new URLSearchParams(location.search).get('from') ?? '/status';
   const autoOpenFilename = (location.state as { autoOpenFilename?: string } | null)?.autoOpenFilename;
   const autoOpenHandled = useRef(false);
   const initialHash = useRef(location.hash.slice(1));
@@ -116,9 +116,6 @@ export default function History() {
   const [testOpen, setTestOpen] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [syncAvailable, setSyncAvailable] = useState(false);
-  const [syncing, setSyncing] = useState(false);
-
   // Evaluation mode
   const [evalMode, setEvalMode] = useState<EvaluationMode>('condition');
   const [pendingEvalMode, setPendingEvalMode] = useState<EvaluationMode | null>(null);
@@ -152,15 +149,14 @@ export default function History() {
       .then(r => r.json() as Promise<ServiceConfig[]>)
       .then(svcs => {
         const found = svcs.find(s => s.name === name);
-        if (!found) { navigate('/status/overview'); return; }
+        if (!found) { navigate('/status'); return; }
         setService(found);
       })
       .catch(() => null);
     fetch('/api/status/info')
-      .then(r => r.json() as Promise<{ maxStorageDays?: number; syncRemote?: boolean }>)
+      .then(r => r.json() as Promise<{ maxStorageDays?: number }>)
       .then(d => {
         if (d.maxStorageDays !== undefined) setMaxStorageDays(d.maxStorageDays);
-        setSyncAvailable(!!d.syncRemote);
       })
       .catch(() => null);
   }, [name, navigate]);
@@ -241,7 +237,7 @@ export default function History() {
 
   function openFile(file: HistoryFile | null) {
     setSelected(file);
-    const base = `/status/service/${encodeURIComponent(name)}`;
+    const base = `/status/${encodeURIComponent(name)}`;
     const search = window.location.search;
     if (file) {
       const hash = file.filename.replace(/\.(json|png)$/, '');
@@ -309,15 +305,6 @@ export default function History() {
       });
       setScheduleInterval(intervalSeconds);
     } catch { /* ignore */ }
-  }
-
-  async function runSync() {
-    setSyncing(true);
-    try {
-      await fetch('/api/sync', { method: 'POST' });
-      fetchHistory();
-    } catch { /* ignore */ }
-    setSyncing(false);
   }
 
   const failedCount = files.filter(f => f.overallStatus === 500 || f.overallStatus === 503 || f.overallStatus === 504).length;
@@ -482,7 +469,7 @@ export default function History() {
                   {svcs.map(s => (
                     <DropdownMenuItem
                       key={s.name}
-                      onSelect={() => navigate(`/status/service/${encodeURIComponent(s.name)}`)}
+                      onSelect={() => navigate(`/status/${encodeURIComponent(s.name)}`)}
                       className="flex items-center gap-2 cursor-pointer"
                     >
                       <span className={`w-2 h-2 rounded-full flex-shrink-0 ${statusDotClass(s.rangeStatus)}`} />
@@ -549,13 +536,6 @@ export default function History() {
               <PlayCircle className="h-3.5 w-3.5" />Run Test
             </Button>
           )}
-          {syncAvailable && (!auth.enabled || auth.loggedIn) && (
-            <button onClick={() => void runSync()} disabled={syncing}
-              className="text-muted-foreground hover:text-foreground disabled:opacity-40 disabled:cursor-not-allowed"
-              title="Sync response files from remote">
-              <RefreshCw className={`h-4 w-4 ${syncing ? 'animate-spin text-blue-400' : ''}`} />
-            </button>
-          )}
         </div>
 
         {/* Mobile collapsed menu */}
@@ -612,11 +592,6 @@ export default function History() {
                   </DropdownMenuItem>
                 </>
               )}
-              {syncAvailable && (!auth.enabled || auth.loggedIn) && (
-                <DropdownMenuItem className="text-xs cursor-pointer" disabled={syncing} onSelect={() => void runSync()}>
-                  <RefreshCw className={`h-3.5 w-3.5 mr-2 ${syncing ? 'animate-spin text-blue-400' : ''}`} />Sync
-                </DropdownMenuItem>
-              )}
             </DropdownMenuContent>
           </DropdownMenu>
         </div>
@@ -671,16 +646,12 @@ export default function History() {
               <div className="text-xs text-muted-foreground mt-1">Partially Failed</div>
             </CardContent>
           </Card>
-          <Card
-            className={`transition-colors${(!auth.enabled || auth.loggedIn) ? ' cursor-pointer hover:bg-muted/50' : ''}`}
-            onClick={(!auth.enabled || auth.loggedIn) ? () => void runSync() : undefined}
-            title={(!auth.enabled || auth.loggedIn) ? 'Click to sync' : undefined}
-          >
+          <Card>
             <CardContent className="pt-4 text-center">
-              <div className={`text-base sm:text-2xl font-bold tabular-nums${syncing ? ' opacity-50' : ''}`}>
+              <div className="text-base sm:text-2xl font-bold tabular-nums">
                 {lastChecked.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false })}
               </div>
-              <div className="text-xs text-muted-foreground mt-1">{syncing ? 'Syncing…' : 'Last Checked'}</div>
+              <div className="text-xs text-muted-foreground mt-1">Last Checked</div>
             </CardContent>
           </Card>
         </div>

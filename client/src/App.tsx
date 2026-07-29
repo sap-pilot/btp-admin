@@ -54,15 +54,13 @@ export default function App() {
         <Suspense fallback={null}>
           <Routes>
             <Route element={<AppLayout />}>
-              <Route path="/status/overview" element={<StatusOverview />} />
-              <Route path="/status/service/:name" element={<StatusHistory />} />
+              <Route path="/status" element={<StatusOverview />} />
+              <Route path="/status/:name" element={<StatusHistory />} />
               <Route path="/home" element={<ComingSoon title="Homepage" />} />
-              <Route path="/destination" element={<ComingSoon title="Destinations" />} />
-              {/* Legacy redirects */}
-              <Route path="/overview" element={<Navigate to="/status/overview" replace />} />
-              <Route path="/service/:name" element={<Navigate to="/status/overview" replace />} />
-              <Route path="/" element={<Navigate to="/status/overview" replace />} />
-              <Route path="*" element={<Navigate to="/status/overview" replace />} />
+              <Route path="/apps" element={<ComingSoon title="Apps" />} />
+              <Route path="/destinations" element={<ComingSoon title="Destinations" />} />
+              <Route path="/" element={<Navigate to="/status" replace />} />
+              <Route path="*" element={<Navigate to="/status" replace />} />
             </Route>
           </Routes>
         </Suspense>

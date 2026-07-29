@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Link, useLocation } from 'react-router';
-import { LogIn, Sun, Moon, Activity, Home, Globe, ChevronDown } from 'lucide-react';
+import { LogIn, Sun, Moon, Activity, Home, Globe, LayoutGrid, ChevronDown, RefreshCw } from 'lucide-react';
 import { useAuth } from '@/hooks/useAuth';
 import { useTheme } from '@/hooks/useTheme';
 import { useSidebar } from '@/components/AppLayout';
@@ -15,9 +15,10 @@ interface NavItem {
 }
 
 const NAV_ITEMS: NavItem[] = [
-  { label: 'Status Overview', href: '/status/overview', icon: <Activity className="h-4 w-4 shrink-0" /> },
-  { label: 'Homepage', href: '/home', icon: <Home className="h-4 w-4 shrink-0" />, disabled: true },
-  { label: 'Destinations', href: '/destination', icon: <Globe className="h-4 w-4 shrink-0" />, disabled: true },
+  { label: 'Home', href: '/home', icon: <Home className="h-4 w-4 shrink-0" />, disabled: true },
+  { label: 'Status', href: '/status', icon: <Activity className="h-4 w-4 shrink-0" /> },
+  { label: 'Apps', href: '/apps', icon: <LayoutGrid className="h-4 w-4 shrink-0" />, disabled: true },
+  { label: 'Destinations', href: '/destinations', icon: <Globe className="h-4 w-4 shrink-0" />, disabled: true },
 ];
 
 const itemBase = (collapsed: boolean) =>
@@ -32,11 +33,14 @@ export default function AppSidebar() {
   const { collapsed } = useSidebar();
   const [sites, setSites] = useState<SiteConfig[]>([]);
   const [appTitle, setAppTitle] = useState('BTP Admin');
+  const [syncAvailable, setSyncAvailable] = useState(false);
+  const [syncing, setSyncing] = useState(false);
 
   useEffect(() => {
     fetch('/api/status/info')
-      .then(r => r.json() as Promise<{ city?: string; sites?: SiteConfig[] }>)
+      .then(r => r.json() as Promise<{ city?: string; sites?: SiteConfig[]; syncRemote?: boolean }>)
       .then(d => {
+        if (d.syncRemote) setSyncAvailable(true);
         if (d.sites) {
           setSites(d.sites);
           const current = d.sites.find(s => {
@@ -140,8 +144,22 @@ export default function AppSidebar() {
           })}
         </div>
 
-        {/* Theme toggle — floats to bottom of nav */}
+        {/* Sync + Theme toggle — float to bottom of nav */}
         <div className="mt-auto pt-1">
+          {syncAvailable && (!auth.enabled || auth.loggedIn) && (
+            <button
+              onClick={() => {
+                setSyncing(true);
+                fetch('/api/sync', { method: 'POST' }).finally(() => setSyncing(false));
+              }}
+              disabled={syncing}
+              className={itemBase(collapsed) + 'text-muted-foreground hover:bg-accent/50 hover:text-foreground w-full disabled:opacity-40 disabled:cursor-not-allowed'}
+              title="Sync"
+            >
+              <RefreshCw className={`h-4 w-4 shrink-0 ${syncing ? 'animate-spin text-blue-400' : ''}`} />
+              {!collapsed && <span className="truncate">Sync</span>}
+            </button>
+          )}
           <button
             onClick={toggleTheme}
             className={itemBase(collapsed) + 'text-muted-foreground hover:bg-accent/50 hover:text-foreground w-full'}
