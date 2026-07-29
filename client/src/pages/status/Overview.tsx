@@ -11,7 +11,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
-import { AlertCircle, MoreHorizontal, RefreshCw, ExternalLink, PanelLeft, PlayCircle } from 'lucide-react';
+import { AlertCircle, MoreHorizontal, ExternalLink, PanelLeft, PlayCircle } from 'lucide-react';
 import { useWindowWidth } from '@/hooks/useWindowWidth';
 import { useAuth } from '@/hooks/useAuth';
 import { useTheme } from '@/hooks/useTheme';
@@ -126,9 +126,7 @@ export default function Overview() {
   const lastFetchTsRef = useRef<number>(Date.now());
   const silentRefreshRef = useRef(false);
   const [testingAll, setTestingAll] = useState(false);
-  const [syncAvailable, setSyncAvailable] = useState(false);
-  const [syncing, setSyncing] = useState(false);
-  const [statusFilter, setStatusFilter] = useState<'failed' | 'partial' | null>(() => {
+const [statusFilter, setStatusFilter] = useState<'failed' | 'partial' | null>(() => {
     const s = new URLSearchParams(window.location.search).get('status');
     return s === 'failed' ? 'failed' : s === 'partial' ? 'partial' : null;
   });
@@ -140,9 +138,8 @@ export default function Overview() {
 
   useEffect(() => {
     fetch('/api/status/info')
-      .then(r => r.json() as Promise<{ syncRemote: boolean; maxStorageDays?: number }>)
+      .then(r => r.json() as Promise<{ maxStorageDays?: number }>)
       .then(d => {
-        setSyncAvailable(d.syncRemote);
         if (d.maxStorageDays !== undefined) setMaxStorageDays(d.maxStorageDays);
       })
       .catch(() => null);
@@ -215,17 +212,6 @@ export default function Overview() {
   }, [queryString]);
 
   useLiveEvents(null, handleLiveUpdate);
-
-  async function runSync() {
-    setSyncing(true);
-    try {
-      await fetch('/api/sync', { method: 'POST' });
-    } finally {
-      setSyncing(false);
-      silentRefreshRef.current = true;
-      setRefreshTick(t => t + 1);
-    }
-  }
 
   function applyStatusFilter(next: 'failed' | 'partial' | null) {
     setStatusFilter(next);
@@ -336,8 +322,8 @@ export default function Overview() {
     const params = new URLSearchParams();
     if (endpoint) params.set('endpoint', endpoint);
     if (statusFilter) params.set('status', statusFilter);
-    params.set('from', statusFilter ? `/status/overview?status=${statusFilter}` : '/status/overview');
-    return `/status/service/${encodeURIComponent(svcName)}?${params.toString()}`;
+    params.set('from', statusFilter ? `/status?status=${statusFilter}` : '/status');
+    return `/status/${encodeURIComponent(svcName)}?${params.toString()}`;
   }
 
   return (
@@ -401,16 +387,6 @@ export default function Overview() {
               {testingAll ? 'Running…' : 'Test All'}
             </Button>
           )}
-          {syncAvailable && (!auth.enabled || auth.loggedIn) && (
-            <button
-              onClick={() => void runSync()}
-              disabled={syncing}
-              className="text-muted-foreground hover:text-foreground disabled:opacity-40 disabled:cursor-not-allowed"
-              title="Sync response files from remote"
-            >
-              <RefreshCw className={`h-4 w-4 ${syncing ? 'animate-spin text-blue-400' : ''}`} />
-            </button>
-          )}
         </div>
 
         {/* Right: mobile collapsed menu */}
@@ -456,15 +432,6 @@ export default function Overview() {
                     <PlayCircle className="h-3.5 w-3.5 mr-2" />{testingAll ? 'Running…' : 'Test All'}
                   </DropdownMenuItem>
                 </>
-              )}
-              {syncAvailable && (!auth.enabled || auth.loggedIn) && (
-                <DropdownMenuItem
-                  className="text-xs cursor-pointer"
-                  disabled={syncing}
-                  onSelect={() => void runSync()}
-                >
-                  <RefreshCw className={`h-3.5 w-3.5 mr-2 ${syncing ? 'animate-spin text-blue-400' : ''}`} />Sync
-                </DropdownMenuItem>
               )}
             </DropdownMenuContent>
           </DropdownMenu>
@@ -523,16 +490,12 @@ export default function Overview() {
                 <div className="text-xs text-muted-foreground mt-1">Partially Failed</div>
               </CardContent>
             </Card>
-            <Card
-              className={`transition-colors${(!auth.enabled || auth.loggedIn) ? ' cursor-pointer hover:bg-muted/50' : ''}`}
-              onClick={(!auth.enabled || auth.loggedIn) ? () => void runSync() : undefined}
-              title={(!auth.enabled || auth.loggedIn) ? 'Click to sync' : undefined}
-            >
+            <Card>
               <CardContent className="pt-4 text-center">
-                <div className={`text-base sm:text-2xl font-bold tabular-nums${syncing ? ' opacity-50' : ''}`}>
+                <div className="text-base sm:text-2xl font-bold tabular-nums">
                   {lastRefresh.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false })}
                 </div>
-                <div className="text-xs text-muted-foreground mt-1">{syncing ? 'Syncing…' : 'Last Checked'}</div>
+                <div className="text-xs text-muted-foreground mt-1">Last Checked</div>
               </CardContent>
             </Card>
           </div>
@@ -584,7 +547,7 @@ export default function Overview() {
                           serviceStatuses={lsStatuses}
                           serviceNames={lsNames}
                           isDark={theme === 'dark'}
-                          returnUrl={`/status/overview#landscape-${encodeURIComponent(ls.name)}`}
+                          returnUrl={`/status#landscape-${encodeURIComponent(ls.name)}`}
                         />
                       </Suspense>
                     </TabsContent>
