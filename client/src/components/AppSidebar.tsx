@@ -99,7 +99,7 @@ export default function AppSidebar() {
   }, [location.pathname, appTitle]);
 
   useEffect(() => {
-    fetch('/api/status/info')
+    fetch('/api/info')
       .then(r => r.json() as Promise<{ city?: string; sites?: SiteConfig[]; syncRemote?: boolean }>)
       .then(d => {
         if (d.syncRemote) setSyncAvailable(true);
@@ -176,9 +176,10 @@ export default function AppSidebar() {
         )}
       </div>
 
-      {/* Navigation — flex column so theme toggle floats to bottom */}
+      {/* Navigation */}
       <nav className="flex-1 flex flex-col py-2 overflow-y-auto overflow-x-hidden">
-        {/* Main nav items */}
+        {/* Main nav items and menu groups — hidden when auth gating is active */}
+        {(!auth.enabled || auth.loggedIn) && <>
         <div>
           {NAV_ITEMS.filter(item => !item.restricted || !auth.enabled || auth.loggedIn).map(item => {
             const active = !item.disabled && !item.soon && location.pathname.startsWith(item.href);
@@ -352,8 +353,9 @@ export default function AppSidebar() {
             </div>
           );
         })}
+        </>}
 
-        {/* Sync + Theme toggle — float to bottom of nav */}
+        {/* Sync + Theme toggle — float to bottom; theme toggle visible even before login */}
         <div className="mt-auto pt-1 flex flex-col">
           {syncAvailable && (!auth.enabled || auth.loggedIn) && (
             <button
@@ -397,7 +399,7 @@ export default function AppSidebar() {
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
                   <button
-                    className={itemBase(collapsed) + 'w-full text-sidebar-foreground/70 hover:text-sidebar-accent-foreground hover:bg-sidebar-accent'}
+                    className={itemBase(collapsed) + 'text-sidebar-foreground/70 hover:text-sidebar-accent-foreground hover:bg-sidebar-accent'}
                     title={collapsed ? auth.firstName : undefined}
                   >
                     <div className="h-4 w-4 rounded-full bg-primary text-primary-foreground flex items-center justify-center text-[9px] font-bold leading-none select-none shrink-0">

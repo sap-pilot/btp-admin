@@ -1,14 +1,12 @@
 import { Router } from 'express';
-import { getAllServices, getLandscapes, getSites, getService } from '../services/status/configService.js';
+import { getAllServices, getLandscapes, getService } from '../services/status/configService.js';
 import { listResponseFiles, readResponseFile, starResponseFile } from '../services/status/responseStore.js';
 import { getEvaluationMode, setEvaluationMode, getIntervalOverride, setIntervalOverride } from '../services/status/overrideService.js';
 import { rescheduleService } from '../services/status/schedulerService.js';
 import { checkService } from '../services/status/healthCheckService.js';
 import { notifyCallbacks } from '../services/syncService.js';
 import { emit } from '../services/liveEvents.js';
-import { config } from '../config.js';
 import { logger } from '../logger.js';
-import { getCity } from '../services/geoService.js';
 import { userLabel } from '../services/authService.js';
 import { requireAuth, requireAdmin } from '../middleware/requireAuth.js';
 import type { AuthRequest } from '../middleware/requireAuth.js';
@@ -135,9 +133,6 @@ router.get('/landscapes', (_req, res) => {
   res.json(getLandscapes());
 });
 
-router.get('/info', (_req, res) => {
-  res.json({ syncRemote: !!config.SYNC_REMOTE, city: getCity(), sites: getSites(), maxStorageDays: config.MAX_RESPONSE_STORAGE_DAYS });
-});
 
 router.get('/eval-mode/:name', (req, res) => {
   res.json({ mode: getEvaluationMode(req.params.name) });

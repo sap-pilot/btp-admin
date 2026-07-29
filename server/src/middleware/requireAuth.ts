@@ -75,6 +75,25 @@ export function requireSyncAuthOrOpen(req: Request, res: Response, next: NextFun
   requireSyncAuth(req, res, next);
 }
 
+/**
+ * Global session-auth guard for all /api/* routes when XSUAA is configured.
+ * Passes through when:
+ *   - XSUAA is not configured (open deployment)
+ *   - path is /me (auth-state probe — always public so the client can detect auth)
+ *   - request carries x-sync-sig HMAC headers (peer sync — per-route requireSyncAuth handles it)
+ *   - SYNC_PROTECTION_OFF is active and the path is /browse or /batch-download
+ */
+export function requireSessionGlobal(req: Request, res: Response, next: NextFunction): void {
+  if (req.path === '/me' || req.path === '/info') { next(); return; }
+  if (req.headers['x-sync-sig']) { next(); return; }
+  if (config.SYNC_PROTECTION_OFF && (req.path === '/browse' || req.path === '/batch-download')) { next(); return; }
+  const x = getXsuaaConfig();
+  if (!x) { next(); return; }
+  const session = readSessionFromRequest(req.headers.cookie ?? '', x.clientsecret);
+  if (!session) { res.status(401).json({ error: 'Authentication required' }); return; }
+  next();
+}
+
 /** Requires admin scope. Pass-through when XSUAA is not configured. */
 export function requireAdmin(req: Request, res: Response, next: NextFunction): void {
   if (!getXsuaaConfig()) { next(); return; }

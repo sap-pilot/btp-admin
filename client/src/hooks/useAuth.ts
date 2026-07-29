@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 
 export interface AuthState {
+  loading: boolean;
   enabled: boolean;
   loggedIn: boolean;
   firstName: string;
@@ -23,7 +24,7 @@ interface AuthMessage {
   user?: { firstName: string; initials: string; isAdmin: boolean };
 }
 
-const INITIAL: AuthState = { enabled: false, loggedIn: false, firstName: '', email: '', initials: '', isAdmin: false };
+const INITIAL: AuthState = { loading: true, enabled: false, loggedIn: false, firstName: '', email: '', initials: '', isAdmin: false };
 
 function fetchMe(): Promise<MeResponse> {
   return fetch('/api/me').then(r => r.json() as Promise<MeResponse>);
@@ -31,6 +32,7 @@ function fetchMe(): Promise<MeResponse> {
 
 function applyMe(d: MeResponse): AuthState {
   return {
+    loading: false,
     enabled: d.enabled ?? false,
     loggedIn: d.loggedIn ?? false,
     firstName: d.firstName ?? '',
@@ -61,7 +63,7 @@ function _update(updates: Partial<AuthState>) {
 function _initOnce() {
   if (_initialized) return;
   _initialized = true;
-  fetchMe().then(d => { _state = applyMe(d); _notify(); }).catch(() => null);
+  fetchMe().then(d => { _state = applyMe(d); _notify(); }).catch(() => { _update({ loading: false }); });
 
   function onMessage(e: MessageEvent) {
     if (e.origin && e.origin !== window.location.origin) return;

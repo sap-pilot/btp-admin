@@ -12,6 +12,7 @@ import apiRouter from './routes/api.js';
 import statusApiRouter from './routes/status.js';
 import homepageRouter from './routes/homepage.js';
 import authRouter from './routes/auth.js';
+import { requireSessionGlobal } from './middleware/requireAuth.js';
 import { errorHandler } from './middleware/errorHandler.js';
 import { compress } from './middleware/compress.js';
 import { serveStatic } from './static.js';
@@ -27,6 +28,8 @@ app.use('/health', healthRouter);
 app.use(authRouter);
 // API responses must never be cached — prevents 304s on repeated /api/download requests
 app.use('/api', (_req, res, next) => { res.setHeader('Cache-Control', 'no-store'); next(); });
+// Global session auth: all /api/* require login when XSUAA is bound (exceptions in requireSessionGlobal)
+app.use('/api', requireSessionGlobal);
 app.use('/api/status', statusApiRouter);
 app.use('/api/homepage', homepageRouter);
 app.use('/api', apiRouter);
