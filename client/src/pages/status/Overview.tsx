@@ -677,7 +677,7 @@ const [statusFilter, setStatusFilter] = useState<'failed' | 'partial' | null>(()
 
         {!loading && data.length === 0 && !error && (
           <div className="text-center text-muted-foreground py-16">
-            <img src="/images/favicon-32x32.png" alt="" className="h-10 w-10 mx-auto mb-3 opacity-30" />
+            <img src="/images/favicon-32x32.png?lastModified=20260729" alt="" className="h-10 w-10 mx-auto mb-3 opacity-30" />
             <p className="text-sm">No services configured.</p>
             <p className="text-xs mt-1">Create a config.json and restart the server.</p>
           </div>
