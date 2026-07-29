@@ -114,7 +114,7 @@ export default function AppSidebar() {
     <aside className={`${w} ${border} shrink-0 flex flex-col border-sidebar-border bg-sidebar transition-[width] duration-200 overflow-hidden`}>
       {/* Header: logo + title + site switcher + version */}
       <div className={`flex items-center border-b border-sidebar-border min-h-[52px] ${collapsed ? 'justify-center' : 'pl-2 pr-3 gap-2'}`}>
-        <img src="/images/favicon-32x32.png" alt="" className="h-8 w-8 shrink-0" />
+        <img src="/images/favicon-32x32.png?lastModified=20260729" alt="" className="h-8 w-8 shrink-0" />
         {!collapsed && (
           <div className="flex flex-col min-w-0 flex-1">
             <div className="flex items-center gap-1">
