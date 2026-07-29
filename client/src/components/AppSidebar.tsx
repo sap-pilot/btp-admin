@@ -133,12 +133,15 @@ export default function AppSidebar() {
                 </DropdownMenu>
               )}
             </div>
-            <span
-              className="text-[10px] text-sidebar-foreground/50 leading-tight truncate"
+            <a
+              href="https://github.com/sap-pilot/btp-admin/blob/main/CHANGELOG.md"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-[10px] text-sidebar-foreground/50 leading-tight truncate hover:text-sidebar-foreground transition-colors"
               title={`v${__APP_VERSION__}-${__COMMIT_HASH__} — built ${new Date(__BUILD_DATE__).toLocaleString()}`}
             >
               v{__APP_VERSION__}-{__COMMIT_HASH__}
-            </span>
+            </a>
           </div>
         )}
       </div>
