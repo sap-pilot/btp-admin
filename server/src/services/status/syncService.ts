@@ -267,15 +267,28 @@ async function downloadOne(
   const url = `${remoteBase}/api/download?path=${encodeURIComponent(filePath)}`;
   const { buf, transferred, decompressed } = await fetchRaw(url, syncKeyHeader());
 
-  const [folder, filename] = filePath.split('/');
-  const target = resolvePath(config.RESPONSE_DIR, folder!, filename!);
-  if (!target.startsWith(resolvePath(config.RESPONSE_DIR) + '/')) {
-    logger.warn({ path: filePath }, 'Skipping file: path traversal detected');
-    return { transferred: 0, decompressed: 0 };
+  const slash = filePath.indexOf('/');
+  if (slash === -1) {
+    // Root-level file (e.g. homepage.json)
+    const target = resolvePath(config.RESPONSE_DIR, filePath);
+    if (!target.startsWith(resolvePath(config.RESPONSE_DIR) + '/')) {
+      logger.warn({ path: filePath }, 'Skipping root file: path traversal detected');
+      return { transferred: 0, decompressed: 0 };
+    }
+    await mkdir(config.RESPONSE_DIR, { recursive: true });
+    await writeFile(target, buf);
+  } else {
+    const folder = filePath.slice(0, slash);
+    const filename = filePath.slice(slash + 1);
+    const target = resolvePath(config.RESPONSE_DIR, folder, filename);
+    if (!target.startsWith(resolvePath(config.RESPONSE_DIR) + '/')) {
+      logger.warn({ path: filePath }, 'Skipping file: path traversal detected');
+      return { transferred: 0, decompressed: 0 };
+    }
+    const dir = join(config.RESPONSE_DIR, folder);
+    await mkdir(dir, { recursive: true });
+    await writeFile(target, buf);
   }
-  const dir = join(config.RESPONSE_DIR, folder!);
-  await mkdir(dir, { recursive: true });
-  await writeFile(target, buf);
   logger.debug({ path: filePath }, 'Downloaded file');
 
   return { transferred, decompressed };
@@ -292,15 +305,28 @@ async function downloadBatch(
   const safeBase = resolvePath(config.RESPONSE_DIR);
   await Promise.all(
     entries.map(async ({ name, data }) => {
-      const parts = name.split('/');
-      if (parts.length !== 2 || !parts[0] || !parts[1]) return;
-      const target = resolvePath(config.RESPONSE_DIR, parts[0], parts[1]);
-      if (!target.startsWith(safeBase + '/')) {
-        logger.warn({ name }, 'Skipping ZIP entry: path traversal detected');
-        return;
+      const slash = name.indexOf('/');
+      let target: string;
+      if (slash === -1) {
+        // Root-level file (e.g. homepage.json)
+        target = resolvePath(config.RESPONSE_DIR, name);
+        if (!target.startsWith(safeBase + '/')) {
+          logger.warn({ name }, 'Skipping ZIP root entry: path traversal detected');
+          return;
+        }
+        await mkdir(config.RESPONSE_DIR, { recursive: true });
+      } else {
+        const folder = name.slice(0, slash);
+        const filename = name.slice(slash + 1);
+        if (!folder || !filename) return;
+        target = resolvePath(config.RESPONSE_DIR, folder, filename);
+        if (!target.startsWith(safeBase + '/')) {
+          logger.warn({ name }, 'Skipping ZIP entry: path traversal detected');
+          return;
+        }
+        const dir = join(config.RESPONSE_DIR, folder);
+        await mkdir(dir, { recursive: true });
       }
-      const dir = join(config.RESPONSE_DIR, parts[0]);
-      await mkdir(dir, { recursive: true });
       await writeFile(target, data);
     }),
   );
@@ -346,20 +372,26 @@ export async function syncFromRemote(
 
     const localFolders = await browseResponseFiles();
 
+    const fp = (folder: string, name: string) => folder ? `${folder}/${name}` : name;
+
     // Build a map of remote file path → mtime for post-download mtime restoration
     const remoteMtimes = new Map<string, number>();
     for (const [folder, files] of Object.entries(folders)) {
       for (const f of files) {
-        remoteMtimes.set(`${folder}/${f.name}`, f.mtime);
+        remoteMtimes.set(fp(folder, f.name), f.mtime);
       }
     }
 
     const missing: string[] = [];
     for (const [folder, files] of Object.entries(folders)) {
-      const localSet = new Set((localFolders[folder] ?? []).map(f => f.name));
+      // Map local filename → mtime so we can detect updated files, not just new ones.
+      const localMtimes = new Map((localFolders[folder] ?? []).map(f => [f.name, f.mtime]));
       for (const f of files) {
-        if (localSet.has(f.name)) continue;
-        missing.push(`${folder}/${f.name}`);
+        const localMtime = localMtimes.get(f.name);
+        // File is up-to-date if it exists locally and local mtime >= remote mtime.
+        // When remote mtime is 0 (legacy server) and file already exists, skip it.
+        if (localMtime !== undefined && (!f.mtime || localMtime >= f.mtime)) continue;
+        missing.push(fp(folder, f.name));
       }
     }
 
@@ -414,25 +446,25 @@ export async function syncFromRemote(
       logger.debug({ done: Math.min(i + batchSize, missing.length), total: missing.length }, 'Sync batch complete');
     }
 
-    // Restore remote mtimes on all downloaded files so future delta syncs can detect
-    // star/unstar renames by mtime rather than filename timestamp alone
+    // Restore remote mtimes on all downloaded files
     await Promise.all(
       missing.map(async (filePath) => {
         const remoteMtime = remoteMtimes.get(filePath);
         if (!remoteMtime) return;
         const slash = filePath.indexOf('/');
-        const folder = filePath.slice(0, slash);
-        const filename = filePath.slice(slash + 1);
-        const localPath = join(config.RESPONSE_DIR, folder, filename);
+        const localPath = slash === -1
+          ? join(config.RESPONSE_DIR, filePath)
+          : join(config.RESPONSE_DIR, filePath.slice(0, slash), filePath.slice(slash + 1));
         const mt = new Date(remoteMtime);
         try { await utimes(localPath, mt, mt); } catch { /* ignore */ }
       }),
     );
 
-    // Resolve starred/unstarred duplicates that appeared due to remote star operations
+    // Resolve starred/unstarred duplicates (folder files only — root files are just overwritten)
     const downloadedByFolder = new Map<string, string[]>();
     for (const fp of missing) {
       const slash = fp.indexOf('/');
+      if (slash === -1) continue; // skip root files
       const folder = fp.slice(0, slash);
       const filename = fp.slice(slash + 1);
       if (!downloadedByFolder.has(folder)) downloadedByFolder.set(folder, []);
@@ -453,9 +485,15 @@ export async function syncFromRemote(
 
     logger.info(stats, 'Remote sync complete');
 
-    // Notify live-update subscribers which services gained new files
+    // Notify live-update subscribers
     const ts = Date.now();
-    const updatedFolders = new Set(missing.map(p => p.split('/')[0] as string));
+    const updatedFolders = new Set<string>();
+    const updatedRootFiles: string[] = [];
+    for (const p of missing) {
+      const slash = p.indexOf('/');
+      if (slash === -1) updatedRootFiles.push(p);
+      else updatedFolders.add(p.slice(0, slash));
+    }
     const folderToService = Object.fromEntries(
       getAllServices().map(s => [sanitizeName(s.name), s.name]),
     );
@@ -463,6 +501,9 @@ export async function syncFromRemote(
     for (const folder of updatedFolders) {
       const svcName = folderToService[folder];
       if (svcName) emit(`service:${svcName}`, { service: svcName, ts });
+    }
+    if (updatedRootFiles.length > 0) {
+      emit('root-files', { files: updatedRootFiles, ts });
     }
 
     return stats;

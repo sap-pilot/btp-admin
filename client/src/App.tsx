@@ -58,6 +58,7 @@ export default function App() {
               <Route path="/status" element={<StatusOverview />} />
               <Route path="/status/:name" element={<StatusHistory />} />
               <Route path="/home" element={<HomePage />} />
+              <Route path="/home/:tab" element={<HomePage />} />
               <Route path="/apps" element={<ComingSoon title="Apps" />} />
               <Route path="/destinations" element={<ComingSoon title="Destinations" />} />
               <Route path="/" element={<Navigate to="/status" replace />} />
