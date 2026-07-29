@@ -1,8 +1,7 @@
 import { Router } from 'express';
-import { readEffectiveHomepageRaw, saveHomepage, readHomepageChangelog } from '../services/homepageEditService.js';
 import { readRawResponseFile, readRootFile, readResponseFile, readScreenshotFile, readConsoleLogFile, readContentFile, browseResponseFiles } from '../services/status/responseStore.js';
 import { buildZip } from '../services/zipBuilder.js';
-import { syncFromRemote, handleDownloadTrigger, registerCallback } from '../services/status/syncService.js';
+import { syncFromRemote, handleDownloadTrigger, registerCallback } from '../services/syncService.js';
 import { config } from '../config.js';
 import { logger } from '../logger.js';
 import { getXsuaaConfig, readSessionFromRequest } from '../services/authService.js';
@@ -15,10 +14,10 @@ const router = Router();
 
 router.get('/events', (req, res) => {
   const svc = typeof req.query['service'] === 'string' ? req.query['service'] : null;
-  // ?rootFiles=1 — subscribe only to root-file change events (e.g. homepage.json updated via sync)
-  const rootFilesOnly = req.query['rootFiles'] === '1';
-  const topics: string[] = rootFilesOnly ? ['root-files'] : ['global'];
-  if (svc && !rootFilesOnly) topics.push(`service:${svc}`);
+  // ?homepage=1 — subscribe only to homepage change events (homepage.json updated via sync or edit)
+  const homepageOnly = req.query['homepage'] === '1';
+  const topics: string[] = homepageOnly ? ['homepage'] : ['global'];
+  if (svc && !homepageOnly) topics.push(`service:${svc}`);
 
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache');
@@ -30,51 +29,6 @@ router.get('/events', (req, res) => {
 
   const unsubscribe = subscribe(res, topics);
   req.on('close', unsubscribe);
-});
-
-router.get('/homepage/raw', requireAdmin, (_req, res) => {
-  res.json({ json: readEffectiveHomepageRaw() });
-});
-
-router.get('/homepage/changelog', requireAdmin, (_req, res) => {
-  res.json({ text: readHomepageChangelog() });
-});
-
-router.post('/homepage/save', requireAdmin, (req, res, next) => {
-  try {
-    const { json } = req.body as { json?: unknown };
-    if (typeof json !== 'string') { res.status(400).json({ error: 'json string required' }); return; }
-    JSON.parse(json);
-    const session = (req as AuthRequest).authSession;
-    saveHomepage(json, { name: session?.firstName ?? 'Anonymous', email: session?.email });
-    res.json({ ok: true });
-  } catch (err) { next(err); }
-});
-
-router.get('/homepage', (req, res) => {
-  const raw = readEffectiveHomepageRaw();
-  if (!raw) { res.json(null); return; }
-  try {
-    const data = JSON.parse(raw) as {
-      resources?: { restricted?: boolean }[];
-      menus?: { restricted?: boolean; children?: { restricted?: boolean }[] }[];
-      [k: string]: unknown;
-    };
-    const x = getXsuaaConfig();
-    const session = x ? readSessionFromRequest(req.headers.cookie ?? '', x.clientsecret) : null;
-    if (Array.isArray(data.resources)) {
-      data.resources = data.resources.filter(r => !r.restricted || !!session);
-    }
-    if (Array.isArray(data.menus)) {
-      data.menus = data.menus
-        .filter(m => !m.restricted || !!session)
-        .map(m => ({
-          ...m,
-          children: Array.isArray(m.children) ? m.children.filter(c => !c.restricted || !!session) : []
-        }));
-    }
-    res.json(data);
-  } catch { res.status(500).json({ error: 'Failed to parse homepage.json' }); }
 });
 
 router.get('/me', (req, res) => {

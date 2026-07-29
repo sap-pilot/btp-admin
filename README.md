@@ -306,6 +306,10 @@ The Overview and Service detail pages show separate **Completely Failed** (500/5
 | `POST /api/sync` | Trigger an on-demand remote sync; returns `{ ok, files, transferredMB, decompressedMB, elapsedSec }` or `{ ok: false, busy: true }` if a sync is already running |
 | `GET /api/browse` | List all response files grouped by service folder: `{ folders: { name: [filename, ...] } }` |
 | `GET /api/download?path=folder/file.json` | Download a single response file (path restricted to `response/` directory) |
+| `GET /api/homepage` | Current homepage data (JSON); `restricted` items filtered by auth state |
+| `GET /api/homepage/raw` | Raw homepage JSON (admin only) |
+| `GET /api/homepage/changelog` | Homepage change history markdown (admin only) |
+| `POST /api/homepage/save` | Save edited homepage JSON (admin only); appends diff to changelog and notifies consumer instances |
 
 ### Evaluation Mode & Schedule
 
