@@ -233,14 +233,16 @@ export function filenameTimestamp(filename: string): number {
 }
 
 /**
- * Lists all response files in all service folders, with their last-modified timestamps.
- * When `since` is provided, only files whose mtime >= since are returned (mtime-based,
- * so starred/unstarred renames appear in the next delta browse).
+ * Lists all response files in all service folders plus root-level files, with their
+ * last-modified timestamps. Root-level files (e.g. homepage.json) are returned under
+ * the key `""`. When `since` is provided, only files whose mtime >= since are returned.
  */
 export async function browseResponseFiles(since?: number): Promise<Record<string, BrowseFile[]>> {
   const result: Record<string, BrowseFile[]> = {};
   try {
     const entries = await readdir(config.RESPONSE_DIR, { withFileTypes: true });
+
+    // Subdirectory files (existing behaviour)
     await Promise.all(
       entries
         .filter(e => e.isDirectory())
@@ -270,10 +272,35 @@ export async function browseResponseFiles(since?: number): Promise<Record<string
           }
         }),
     );
+
+    // Root-level files (e.g. homepage.json, homepage-changelog.md)
+    const rootFiles: BrowseFile[] = [];
+    for (const e of entries) {
+      if (!e.isFile() || (!e.name.endsWith('.json') && !e.name.endsWith('.md'))) continue;
+      try {
+        const info = await stat(join(config.RESPONSE_DIR, e.name));
+        const mtime = info.mtimeMs;
+        if (!since || since <= 0 || mtime >= since) {
+          rootFiles.push({ name: e.name, mtime });
+        }
+      } catch { /* skip */ }
+    }
+    if (rootFiles.length > 0) {
+      rootFiles.sort((a, b) => a.name.localeCompare(b.name));
+      result[''] = rootFiles;
+    }
   } catch {
     // response dir doesn't exist yet
   }
   return result;
+}
+
+/** Read a root-level file directly from RESPONSE_DIR (e.g. homepage.json). */
+export async function readRootFile(filename: string): Promise<Buffer> {
+  if (!/^[a-zA-Z0-9][a-zA-Z0-9_.-]*\.(json|md)$/.test(filename)) {
+    throw new Error('Invalid root filename');
+  }
+  return readFile(join(config.RESPONSE_DIR, filename));
 }
 
 /**

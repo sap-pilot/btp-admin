@@ -1,12 +1,12 @@
-import { readFileSync } from 'node:fs';
 import { Router } from 'express';
-import { readRawResponseFile, readResponseFile, readScreenshotFile, readConsoleLogFile, readContentFile, browseResponseFiles } from '../services/status/responseStore.js';
+import { readEffectiveHomepageRaw, saveHomepage, readHomepageChangelog } from '../services/homepageEditService.js';
+import { readRawResponseFile, readRootFile, readResponseFile, readScreenshotFile, readConsoleLogFile, readContentFile, browseResponseFiles } from '../services/status/responseStore.js';
 import { buildZip } from '../services/zipBuilder.js';
 import { syncFromRemote, handleDownloadTrigger, registerCallback } from '../services/status/syncService.js';
 import { config } from '../config.js';
 import { logger } from '../logger.js';
 import { getXsuaaConfig, readSessionFromRequest } from '../services/authService.js';
-import { requireAuth, requireSyncAuth, requireSyncAuthOrOpen } from '../middleware/requireAuth.js';
+import { requireAuth, requireAdmin, requireSyncAuth, requireSyncAuthOrOpen } from '../middleware/requireAuth.js';
 import type { AuthRequest } from '../middleware/requireAuth.js';
 import { userLabel } from '../services/authService.js';
 import { subscribe } from '../services/liveEvents.js';
@@ -15,8 +15,10 @@ const router = Router();
 
 router.get('/events', (req, res) => {
   const svc = typeof req.query['service'] === 'string' ? req.query['service'] : null;
-  const topics: string[] = ['global'];
-  if (svc) topics.push(`service:${svc}`);
+  // ?rootFiles=1 — subscribe only to root-file change events (e.g. homepage.json updated via sync)
+  const rootFilesOnly = req.query['rootFiles'] === '1';
+  const topics: string[] = rootFilesOnly ? ['root-files'] : ['global'];
+  if (svc && !rootFilesOnly) topics.push(`service:${svc}`);
 
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache');
@@ -30,13 +32,27 @@ router.get('/events', (req, res) => {
   req.on('close', unsubscribe);
 });
 
+router.get('/homepage/raw', requireAdmin, (_req, res) => {
+  res.json({ json: readEffectiveHomepageRaw() });
+});
+
+router.get('/homepage/changelog', requireAdmin, (_req, res) => {
+  res.json({ text: readHomepageChangelog() });
+});
+
+router.post('/homepage/save', requireAdmin, (req, res, next) => {
+  try {
+    const { json } = req.body as { json?: unknown };
+    if (typeof json !== 'string') { res.status(400).json({ error: 'json string required' }); return; }
+    JSON.parse(json);
+    const session = (req as AuthRequest).authSession;
+    saveHomepage(json, { name: session?.firstName ?? 'Anonymous', email: session?.email });
+    res.json({ ok: true });
+  } catch (err) { next(err); }
+});
+
 router.get('/homepage', (req, res) => {
-  let raw: string | undefined;
-  if (process.env.HOMEPAGE_JSON) {
-    raw = process.env.HOMEPAGE_JSON;
-  } else {
-    try { raw = readFileSync('./homepage.json', 'utf-8'); } catch { /* not found */ }
-  }
+  const raw = readEffectiveHomepageRaw();
   if (!raw) { res.json(null); return; }
   try {
     const data = JSON.parse(raw) as {
@@ -101,17 +117,24 @@ router.post('/batch-download', requireSyncAuthOrOpen, async (req, res, next) => 
         return;
       }
       const parts = p.split('/');
-      if (parts.length !== 2 || !parts[0] || !parts[1]) {
-        res.status(400).json({ error: `path must be folder/filename: ${p}` });
+      if (parts.length === 1) {
+        if (!/^[a-zA-Z0-9][a-zA-Z0-9_.-]*\.(json|md)$/.test(parts[0]!)) {
+          res.status(400).json({ error: `invalid root filename: ${p}` });
+          return;
+        }
+      } else if (parts.length !== 2 || !parts[0] || !parts[1]) {
+        res.status(400).json({ error: `path must be filename or folder/filename: ${p}` });
         return;
       }
     }
 
     const entries: { name: string; data: Buffer }[] = [];
     for (const p of paths as string[]) {
-      const [folder, filename] = p.split('/') as [string, string];
       try {
-        const data = await readRawResponseFile(folder, filename);
+        const slash = p.indexOf('/');
+        const data = slash === -1
+          ? await readRootFile(p)
+          : await readRawResponseFile(p.slice(0, slash), p.slice(slash + 1));
         entries.push({ name: p, data });
       } catch {
         // skip files pruned since browse was called
@@ -162,9 +185,16 @@ router.get('/download', requireSyncAuth, async (req, res, next) => {
       res.status(400).json({ error: 'Invalid path' });
       return;
     }
+    const slash = rawPath.indexOf('/');
+    if (slash === -1) {
+      // Root file (e.g. homepage.json) — readRootFile validates the name
+      const buf = await readRootFile(rawPath);
+      res.type(rawPath.endsWith('.json') ? 'application/json' : 'text/plain').send(buf);
+      return;
+    }
     const parts = rawPath.split('/');
     if (parts.length !== 2 || !parts[0] || !parts[1]) {
-      res.status(400).json({ error: 'Path must be folder/filename' });
+      res.status(400).json({ error: 'Path must be filename or folder/filename' });
       return;
     }
     const [folder, filename] = parts;

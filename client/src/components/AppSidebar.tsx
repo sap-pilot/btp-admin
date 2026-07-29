@@ -1,9 +1,9 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Link, useLocation } from 'react-router';
 import { LogIn, Sun, Moon, Activity, Home, Globe, LayoutGrid, ChevronDown, RefreshCw, BookMarked, ShieldCheck } from 'lucide-react';
 import { useAuth } from '@/hooks/useAuth';
 import { useTheme } from '@/hooks/useTheme';
-import { useSidebar } from '@/components/AppLayout';
+import { useSidebar, useHomepage } from '@/components/AppLayout';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import type { SiteConfig } from '@shared/types';
 
@@ -50,19 +50,23 @@ export default function AppSidebar() {
   const auth = useAuth();
   const { theme, toggleTheme } = useTheme();
   const { collapsed } = useSidebar();
+  const { homepage, refreshHomepage } = useHomepage();
   const [sites, setSites] = useState<SiteConfig[]>([]);
   const [appTitle, setAppTitle] = useState('BTP Admin');
   const [syncAvailable, setSyncAvailable] = useState(false);
   const [syncing, setSyncing] = useState(false);
-  const [menus, setMenus] = useState<MenuGroup[]>([]);
   const [openMenus, setOpenMenus] = useState<Record<string, boolean>>({});
 
+  const menus = (homepage?.menus as MenuGroup[] | undefined) ?? [];
+
+  // On auth change: reset open menus; refresh homepage so restricted items show/hide.
+  // Skip on the very first render — AppLayout's initial fetch already covers it.
+  const firstAuthRender = useRef(true);
   useEffect(() => {
-    fetch('/api/homepage')
-      .then(r => r.json() as Promise<{ menus?: MenuGroup[] } | null>)
-      .then(d => { setMenus(d?.menus ?? []); setOpenMenus({}); })
-      .catch(() => null);
-  }, [auth.loggedIn]);
+    setOpenMenus({});
+    if (firstAuthRender.current) { firstAuthRender.current = false; return; }
+    refreshHomepage();
+  }, [auth.loggedIn, refreshHomepage]);
 
   useEffect(() => {
     const p = location.pathname;
@@ -94,7 +98,13 @@ export default function AppSidebar() {
   })?.url ?? '';
 
   function handleSiteSwitch(url: string) {
-    if (url && url !== currentSiteUrl) window.location.replace(url);
+    if (!url || url === currentSiteUrl) return;
+    try {
+      const { pathname, search, hash } = window.location;
+      window.location.replace(new URL(pathname + search + hash, url).href);
+    } catch {
+      window.location.replace(url);
+    }
   }
 
   const w = collapsed ? 'w-0 md:w-14' : 'w-56';
