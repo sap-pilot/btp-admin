@@ -1,17 +1,27 @@
 import { useEffect, useRef, useState } from 'react';
 import { Link, useLocation } from 'react-router';
-import { LogIn, Sun, Moon, Activity, Home, Globe, LayoutGrid, ChevronDown, RefreshCw, BookMarked, ShieldCheck } from 'lucide-react';
+import { LogIn, Sun, Moon, Activity, Home, Globe, LayoutGrid, Network, ChevronDown, RefreshCw, BookMarked, ShieldCheck } from 'lucide-react';
 import { useAuth } from '@/hooks/useAuth';
 import { useTheme } from '@/hooks/useTheme';
 import { useSidebar, useHomepage } from '@/components/AppLayout';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import type { SiteConfig } from '@shared/types';
 
+interface NavChild {
+  label: string;
+  href: string;
+  disabled?: boolean;
+  soon?: boolean;
+}
+
 interface NavItem {
   label: string;
   href: string;
   icon: React.ReactNode;
   disabled?: boolean;
+  soon?: boolean;
+  restricted?: boolean;
+  children?: NavChild[];
 }
 
 interface MenuItem {
@@ -28,8 +38,14 @@ interface MenuGroup {
 const NAV_ITEMS: NavItem[] = [
   { label: 'Home', href: '/home', icon: <Home className="h-4 w-4 shrink-0" /> },
   { label: 'Status', href: '/status', icon: <Activity className="h-4 w-4 shrink-0" /> },
-  { label: 'Apps', href: '/apps', icon: <LayoutGrid className="h-4 w-4 shrink-0" />, disabled: true },
-  { label: 'Destinations', href: '/destinations', icon: <Globe className="h-4 w-4 shrink-0" />, disabled: true },
+  { label: 'Apps', href: '/apps', icon: <LayoutGrid className="h-4 w-4 shrink-0" />, soon: true, restricted: true },
+  { label: 'Destinations', href: '/destinations', icon: <Globe className="h-4 w-4 shrink-0" />, soon: true, restricted: true },
+  {
+    label: 'Integration', href: '/int', icon: <Network className="h-4 w-4 shrink-0" />, soon: true, restricted: true,
+    children: [
+      { label: 'Dynamic Routing', href: '/int/dynamic-routing', soon: true },
+    ],
+  },
 ];
 
 const itemBase = (collapsed: boolean) =>
@@ -164,13 +180,103 @@ export default function AppSidebar() {
       <nav className="flex-1 flex flex-col py-2 overflow-y-auto overflow-x-hidden">
         {/* Main nav items */}
         <div>
-          {NAV_ITEMS.map(item => {
-            const active = !item.disabled && location.pathname.startsWith(item.href);
+          {NAV_ITEMS.filter(item => !item.restricted || !auth.enabled || auth.loggedIn).map(item => {
+            const active = !item.disabled && !item.soon && location.pathname.startsWith(item.href);
+            const disabledCls = itemBase(collapsed) + 'text-sidebar-foreground/40 cursor-not-allowed select-none';
             const cls = item.disabled
-              ? itemBase(collapsed) + 'text-sidebar-foreground/40 cursor-not-allowed select-none'
+              ? disabledCls
               : active
                 ? itemBase(collapsed) + 'bg-sidebar-accent text-sidebar-accent-foreground font-medium'
                 : itemBase(collapsed) + 'text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground';
+
+            // Item with children — collapsible submenu (expanded) or icon-only (collapsed)
+            if (item.children) {
+              const isOpen = !!openMenus[item.href];
+              const childrenPanel = isOpen && (
+                <div className="ml-6 mr-1 border-l border-sidebar-border py-0.5 flex flex-col gap-0.5">
+                  {item.children.map(c => {
+                    const childCls = 'flex h-7 min-w-0 items-center rounded-md pl-5 pr-3 text-sm';
+                    if (c.disabled) {
+                      return (
+                        <div key={c.href} className={childCls + ' text-sidebar-foreground/40 cursor-not-allowed select-none'}>
+                          <span className="truncate">{c.label}<span className="ml-1 text-[10px] opacity-60">(soon)</span></span>
+                        </div>
+                      );
+                    }
+                    return (
+                      <Link
+                        key={c.href}
+                        to={c.href}
+                        className={childCls + ' text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground transition-colors'}
+                      >
+                        <span className="truncate">
+                          {c.label}
+                          {c.soon && <span className="ml-1 text-[10px] opacity-60">(soon)</span>}
+                        </span>
+                      </Link>
+                    );
+                  })}
+                </div>
+              );
+              if (collapsed) {
+                if (item.disabled) {
+                  return (
+                    <div key={item.href} className={disabledCls} title={item.label}>
+                      {item.icon}
+                    </div>
+                  );
+                }
+                return (
+                  <Link key={item.href} to={item.href} className={cls} title={item.label}>
+                    {item.icon}
+                  </Link>
+                );
+              }
+              if (item.disabled) {
+                return (
+                  <div key={item.href} className="flex flex-col">
+                    <button
+                      className={cls}
+                      onClick={() => setOpenMenus(o => ({ ...o, [item.href]: !o[item.href] }))}
+                    >
+                      {item.icon}
+                      <span className="truncate flex-1 text-left">
+                        {item.label}
+                        <span className="ml-1 text-[10px] opacity-60">(soon)</span>
+                      </span>
+                      <ChevronDown className={`h-3.5 w-3.5 shrink-0 transition-transform${isOpen ? ' rotate-180' : ''}`} />
+                    </button>
+                    {childrenPanel}
+                  </div>
+                );
+              }
+              // soon or active — split row: Link navigates, chevron toggles submenu
+              const rowCls = `flex items-center rounded-md text-sm transition-colors mx-1 ${
+                active
+                  ? 'bg-sidebar-accent text-sidebar-accent-foreground font-medium'
+                  : 'text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground'
+              }`;
+              return (
+                <div key={item.href} className="flex flex-col">
+                  <div className={rowCls}>
+                    <Link to={item.href} className="flex items-center gap-3 flex-1 min-w-0 pl-3 py-2">
+                      {item.icon}
+                      <span className="truncate flex-1 text-left">
+                        {item.label}
+                        {item.soon && <span className="ml-1 text-[10px] opacity-60">(soon)</span>}
+                      </span>
+                    </Link>
+                    <button
+                      className="pr-3 py-2 shrink-0"
+                      onClick={() => setOpenMenus(o => ({ ...o, [item.href]: !o[item.href] }))}
+                    >
+                      <ChevronDown className={`h-3.5 w-3.5 shrink-0 transition-transform${isOpen ? ' rotate-180' : ''}`} />
+                    </button>
+                  </div>
+                  {childrenPanel}
+                </div>
+              );
+            }
 
             const inner = (
               <>
@@ -178,7 +284,7 @@ export default function AppSidebar() {
                 {!collapsed && (
                   <span className="truncate">
                     {item.label}
-                    {item.disabled && <span className="ml-1 text-[10px] opacity-60">(soon)</span>}
+                    {(item.disabled || item.soon) && <span className="ml-1 text-[10px] opacity-60">(soon)</span>}
                   </span>
                 )}
               </>

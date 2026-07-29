@@ -61,6 +61,8 @@ export default function App() {
               <Route path="/home/:tab" element={<HomePage />} />
               <Route path="/apps" element={<ComingSoon title="Apps" />} />
               <Route path="/destinations" element={<ComingSoon title="Destinations" />} />
+              <Route path="/int" element={<ComingSoon title="Integration" />} />
+              <Route path="/int/dynamic-routing" element={<ComingSoon title="Dynamic Routing" />} />
               <Route path="/" element={<Navigate to="/status" replace />} />
               <Route path="*" element={<Navigate to="/status" replace />} />
             </Route>

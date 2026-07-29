@@ -20,11 +20,10 @@ modules:
         env: true
         routes: true
     build-parameters:
-      # no-source: true
       builder: custom
       commands:
-      #  - npm ci --prefix ..
-        - npm run build --prefix ..
+        - npm run build:client --prefix ..
+        - npm run build:server --prefix ..
       ignore:
         - response/
         - pw-browsers/
