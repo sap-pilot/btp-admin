@@ -244,7 +244,7 @@ export default function AppSidebar() {
         })}
 
         {/* Sync + Theme toggle — float to bottom of nav */}
-        <div className="mt-auto pt-1">
+        <div className="mt-auto pt-1 flex flex-col">
           {syncAvailable && (!auth.enabled || auth.loggedIn) && (
             <button
               onClick={() => {
@@ -273,7 +273,7 @@ export default function AppSidebar() {
       {/* Bottom: auth */}
       <div className="border-t border-sidebar-border">
         {auth.enabled ? (
-          <div className="py-2">
+          <div className="py-2 flex flex-col">
             {!auth.loggedIn ? (
               <button
                 onClick={auth.login}
@@ -287,7 +287,7 @@ export default function AppSidebar() {
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
                   <button
-                    className={itemBase(collapsed) + 'text-sidebar-foreground/70 hover:text-sidebar-accent-foreground hover:bg-sidebar-accent'}
+                    className={itemBase(collapsed) + 'w-full text-sidebar-foreground/70 hover:text-sidebar-accent-foreground hover:bg-sidebar-accent'}
                     title={collapsed ? auth.firstName : undefined}
                   >
                     <div className="h-4 w-4 rounded-full bg-primary text-primary-foreground flex items-center justify-center text-[9px] font-bold leading-none select-none shrink-0">
