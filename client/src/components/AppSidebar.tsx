@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Link, useLocation } from 'react-router';
-import { LogIn, Sun, Moon, Activity, Home, Globe, LayoutGrid, ChevronDown, RefreshCw } from 'lucide-react';
+import { LogIn, Sun, Moon, Activity, Home, Globe, LayoutGrid, ChevronDown, RefreshCw, BookMarked } from 'lucide-react';
 import { useAuth } from '@/hooks/useAuth';
 import { useTheme } from '@/hooks/useTheme';
 import { useSidebar } from '@/components/AppLayout';
@@ -15,7 +15,7 @@ interface NavItem {
 }
 
 const NAV_ITEMS: NavItem[] = [
-  { label: 'Home', href: '/home', icon: <Home className="h-4 w-4 shrink-0" />, disabled: true },
+  { label: 'Home', href: '/home', icon: <Home className="h-4 w-4 shrink-0" /> },
   { label: 'Status', href: '/status', icon: <Activity className="h-4 w-4 shrink-0" /> },
   { label: 'Apps', href: '/apps', icon: <LayoutGrid className="h-4 w-4 shrink-0" />, disabled: true },
   { label: 'Destinations', href: '/destinations', icon: <Globe className="h-4 w-4 shrink-0" />, disabled: true },
@@ -35,6 +35,21 @@ export default function AppSidebar() {
   const [appTitle, setAppTitle] = useState('BTP Admin');
   const [syncAvailable, setSyncAvailable] = useState(false);
   const [syncing, setSyncing] = useState(false);
+  const [resources, setResources] = useState<{ title: string; url: string; target?: string }[]>([]);
+  const [resourcesOpen, setResourcesOpen] = useState(false);
+
+  useEffect(() => {
+    fetch('/api/homepage')
+      .then(r => r.json() as Promise<{ resources?: { title: string; url: string; target?: string }[] } | null>)
+      .then(d => { if (d?.resources) setResources(d.resources); })
+      .catch(() => null);
+  }, []);
+
+  useEffect(() => {
+    const p = location.pathname;
+    const label = p === '/status' ? 'Status' : p === '/home' ? 'Home' : null;
+    document.title = label ? `${label} - ${appTitle}` : appTitle;
+  }, [location.pathname, appTitle]);
 
   useEffect(() => {
     fetch('/api/status/info')
@@ -143,6 +158,52 @@ export default function AppSidebar() {
             );
           })}
         </div>
+
+        {/* Resources section */}
+        {resources.length > 0 && (
+          collapsed ? (
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <button className={itemBase(true) + 'text-muted-foreground hover:bg-accent/50 hover:text-foreground w-full'} title="Resources">
+                  <BookMarked className="h-4 w-4 shrink-0" />
+                </button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent side="right" align="end">
+                {resources.map(r => (
+                  <DropdownMenuItem key={r.url} className="text-sm cursor-pointer" asChild>
+                    <a href={r.url} target={r.target ?? '_blank'} rel="noopener noreferrer">{r.title}</a>
+                  </DropdownMenuItem>
+                ))}
+              </DropdownMenuContent>
+            </DropdownMenu>
+          ) : (
+            <div>
+              <button
+                onClick={() => setResourcesOpen(o => !o)}
+                className={itemBase(false) + 'text-muted-foreground hover:bg-accent/50 hover:text-foreground w-full'}
+              >
+                <BookMarked className="h-4 w-4 shrink-0" />
+                <span className="truncate flex-1 text-left">Resources</span>
+                <ChevronDown className={`h-3.5 w-3.5 shrink-0 transition-transform${resourcesOpen ? ' rotate-180' : ''}`} />
+              </button>
+              {resourcesOpen && (
+                <div className="ml-6 mr-1 border-l border-border py-0.5 flex flex-col gap-0.5">
+                  {resources.map(r => (
+                    <a
+                      key={r.url}
+                      href={r.url}
+                      target={r.target ?? '_blank'}
+                      rel="noopener noreferrer"
+                      className="flex h-7 min-w-0 items-center rounded-md pl-5 pr-3 text-sm text-muted-foreground hover:bg-accent/50 hover:text-foreground transition-colors"
+                    >
+                      <span className="truncate">{r.title}</span>
+                    </a>
+                  ))}
+                </div>
+              )}
+            </div>
+          )
+        )}
 
         {/* Sync + Theme toggle — float to bottom of nav */}
         <div className="mt-auto pt-1">

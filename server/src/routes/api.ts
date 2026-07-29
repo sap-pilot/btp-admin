@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { Router } from 'express';
 import { readRawResponseFile, readResponseFile, readScreenshotFile, readConsoleLogFile, readContentFile, browseResponseFiles } from '../services/status/responseStore.js';
 import { buildZip } from '../services/zipBuilder.js';
@@ -27,6 +28,25 @@ router.get('/events', (req, res) => {
 
   const unsubscribe = subscribe(res, topics);
   req.on('close', unsubscribe);
+});
+
+router.get('/homepage', (req, res) => {
+  let raw: string | undefined;
+  if (process.env.HOMEPAGE_JSON) {
+    raw = process.env.HOMEPAGE_JSON;
+  } else {
+    try { raw = readFileSync('./homepage.json', 'utf-8'); } catch { /* not found */ }
+  }
+  if (!raw) { res.json(null); return; }
+  try {
+    const data = JSON.parse(raw) as { resources?: { restricted?: boolean }[]; [k: string]: unknown };
+    const x = getXsuaaConfig();
+    const session = x ? readSessionFromRequest(req.headers.cookie ?? '', x.clientsecret) : null;
+    if (Array.isArray(data.resources)) {
+      data.resources = data.resources.filter(r => !r.restricted || !!session);
+    }
+    res.json(data);
+  } catch { res.status(500).json({ error: 'Failed to parse homepage.json' }); }
 });
 
 router.get('/me', (req, res) => {
