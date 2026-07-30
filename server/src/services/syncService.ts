@@ -407,7 +407,7 @@ export async function syncFromRemote(
       }
     }
 
-    const missing: string[] = [];
+    let missing: string[] = [];
     for (const [folder, files] of Object.entries(folders)) {
       // Map local filename → mtime so we can detect updated files, not just new ones.
       const localMtimes = new Map((localFolders[folder] ?? []).map(f => [f.name, f.mtime]));
@@ -418,6 +418,21 @@ export async function syncFromRemote(
         if (localMtime !== undefined && (!f.mtime || localMtime >= f.mtime)) continue;
         missing.push(fp(folder, f.name));
       }
+    }
+
+    // On a full (initial) sync, skip files that are outside the retention window and not starred.
+    // This avoids pulling old data that housekeeping would delete anyway.
+    if (!since && config.MAX_RESPONSE_STORAGE_DAYS > 0) {
+      const cutoff = Date.now() - config.MAX_RESPONSE_STORAGE_DAYS * 24 * 60 * 60 * 1000;
+      const before = missing.length;
+      missing = missing.filter(p => {
+        const name = p.includes('/') ? p.slice(p.indexOf('/') + 1) : p;
+        if (name.includes('.starred.')) return true;   // starred — always include
+        const mtime = remoteMtimes.get(p);
+        return !mtime || mtime >= cutoff;              // include if mtime unknown or within window
+      });
+      const skipped = before - missing.length;
+      if (skipped > 0) logger.info({ skipped, maxDays: config.MAX_RESPONSE_STORAGE_DAYS }, 'Initial sync: skipped files older than retention window (starred always included)');
     }
 
     logger.info({ total: missing.length }, 'Files to sync from remote');

@@ -4,7 +4,8 @@ import { config } from '../../config.js';
 import { logger } from '../../logger.js';
 import { parseFilename } from './responseStore.js';
 
-let timer: ReturnType<typeof setInterval> | null = null;
+let timer: ReturnType<typeof setTimeout> | null = null;
+let stopped = false;
 
 export async function runHousekeeping(): Promise<void> {
   const maxDays = config.MAX_RESPONSE_STORAGE_DAYS;
@@ -13,6 +14,8 @@ export async function runHousekeeping(): Promise<void> {
   const cutoff = Date.now() - maxDays * 24 * 60 * 60 * 1000;
   let deleted = 0;
   let errors = 0;
+  let oldest = Infinity;
+  let newest = 0;
 
   try {
     const entries = await readdir(config.RESPONSE_DIR, { withFileTypes: true });
@@ -41,9 +44,13 @@ export async function runHousekeeping(): Promise<void> {
         else if (file.endsWith('_console.retry.log')) jsonName = file.slice(0, file.length - '_console.retry.log'.length) + '.retry.json';
         else if (file.endsWith('_content.retry.html')) jsonName = file.slice(0, file.length - '_content.retry.html'.length) + '.retry.json';
         else continue;
-        // Use the shared parser which correctly handles UTC (new format) and local (old format)
+
         const meta = parseFilename(jsonName);
         if (meta === null || meta.timestamp >= cutoff) continue;
+
+        if (meta.timestamp < oldest) oldest = meta.timestamp;
+        if (meta.timestamp > newest) newest = meta.timestamp;
+
         try {
           await unlink(join(serviceDir, file));
           deleted++;
@@ -53,10 +60,22 @@ export async function runHousekeeping(): Promise<void> {
       }
     }
 
-    logger.info({ deleted, errors, maxDays }, 'Housekeeping completed');
+    const dateRange = deleted > 0
+      ? { from: new Date(oldest).toISOString().slice(0, 10), to: new Date(newest).toISOString().slice(0, 10) }
+      : {};
+    logger.info({ deleted, errors, maxDays, ...dateRange }, 'Housekeeping completed');
   } catch (err) {
-    logger.warn({ err }, 'Housekeeping error');
+    logger.warn({ err }, 'Housekeeping error (will retry in 24 h)');
   }
+}
+
+// Schedules the next run 24 h from now; always reschedules even after errors.
+function scheduleNext(): void {
+  if (stopped) return;
+  timer = setTimeout(() => {
+    void runHousekeeping().finally(scheduleNext);
+  }, 24 * 60 * 60 * 1000);
+  timer.unref();
 }
 
 export function startHousekeepingScheduler(): void {
@@ -64,13 +83,12 @@ export function startHousekeepingScheduler(): void {
     logger.info('Housekeeping disabled (MAX_RESPONSE_STORAGE_DAYS=0)');
     return;
   }
-  logger.info({ maxDays: config.MAX_RESPONSE_STORAGE_DAYS }, 'Housekeeping scheduler started');
-  void runHousekeeping();
-  // Run once a day
-  timer = setInterval(() => void runHousekeeping(), 24 * 60 * 60 * 1000);
-  timer.unref();
+  stopped = false;
+  logger.info({ maxDays: config.MAX_RESPONSE_STORAGE_DAYS }, 'Housekeeping scheduler started — first run in 24 h');
+  scheduleNext();
 }
 
 export function stopHousekeepingScheduler(): void {
-  if (timer) { clearInterval(timer); timer = null; }
+  stopped = true;
+  if (timer) { clearTimeout(timer); timer = null; }
 }
