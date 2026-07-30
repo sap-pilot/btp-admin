@@ -17,6 +17,8 @@
 - **"Test All" button on Status Overview** — restyled from plain icon+text to a shadcn `Button` (outline, sm) with a `PlayCircle` icon, matching the "Run Test" button on the service detail page
 
 ### Fixed
+- **Housekeeping scheduler** — no longer runs immediately on startup (when `RESPONSE_DIR` may not yet exist); first run is deferred to startup + 24 h; uses a self-rescheduling `setTimeout` so the next run is always scheduled in a `finally` block, meaning an error during one run never cancels future runs; log output now includes `from` / `to` date fields showing the date range of deleted files (omitted when `deleted = 0`)
+- **Initial sync age filter** — full syncs (no `since` parameter, i.e. startup) now skip remote files whose mtime falls outside the local `MAX_RESPONSE_STORAGE_DAYS` retention window; starred files (`.starred.` in name) are always included regardless of age; files with unknown mtime (legacy producers) are also included; this prevents the consumer from pulling old data that housekeeping would delete moments later
 - **Sync callback auto-deregistration** — when `notifyCallbacks()` fires a registered `/api/download-trigger` webhook and receives any non-2xx HTTP response (e.g. 404 when the consumer has restarted or moved), the callback URL is immediately removed from the registry; network errors (connection refused, timeout) are treated as transient and keep the URL registered; the consumer re-registers automatically on its next interval-fallback or startup sync via `?callback=` on `/api/browse`
 
 ### Changed
