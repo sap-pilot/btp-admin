@@ -74,10 +74,10 @@ export default function LandscapeDiagram({
             const svc = name.slice(0, dotIdx);
             const ep = name.slice(dotIdx + 1);
             const fromPart = returnUrl ? `&from=${encodeURIComponent(returnUrl)}` : '';
-            href = `/service/${encodeURIComponent(svc)}?endpoint=${encodeURIComponent(ep)}${fromPart}`;
+            href = `/status/${encodeURIComponent(svc)}?endpoint=${encodeURIComponent(ep)}${fromPart}`;
           } else {
             const fromPart = returnUrl ? `?from=${encodeURIComponent(returnUrl)}` : '';
-            href = `/service/${encodeURIComponent(name)}${fromPart}`;
+            href = `/status/${encodeURIComponent(name)}${fromPart}`;
           }
           lines.push(`click ${name} "${href}" "Drill down into ${name} status"`);
         }
