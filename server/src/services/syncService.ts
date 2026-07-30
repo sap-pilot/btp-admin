@@ -24,6 +24,16 @@ class SyncAuthError extends Error {
   }
 }
 
+/** Thrown for any non-2xx, non-401 HTTP response. */
+class HttpError extends Error {
+  readonly statusCode: number;
+  constructor(statusCode: number, url: string) {
+    super(`HTTP ${statusCode} for ${url}`);
+    this.name = 'HttpError';
+    this.statusCode = statusCode;
+  }
+}
+
 // ── Callback registry (producer side) ────────────────────────────────────────
 // Stores callback URLs registered by consumers via ?callback= on /api/browse.
 // When new check results are available, notifyCallbacks() fires all registered URLs.
@@ -44,7 +54,14 @@ export function notifyCallbacks(): void {
   for (const url of registeredCallbacks) {
     fetchRaw(url, headers)
       .then(() => logger.debug({ url }, 'Sync callback notified'))
-      .catch(err => logger.warn({ url, err }, 'Failed to notify sync callback'));
+      .catch(err => {
+        if (err instanceof HttpError) {
+          registeredCallbacks.delete(url);
+          logger.warn({ url, status: err.statusCode }, 'Sync callback HTTP error — deregistered; remote will re-register on next sync');
+        } else {
+          logger.warn({ url, err }, 'Failed to notify sync callback (network error — keeping registered)');
+        }
+      });
   }
 }
 
@@ -185,7 +202,7 @@ function fetchRaw(url: string, extraHeaders: Record<string, string> = {}): Promi
       }
       if (res.statusCode && res.statusCode >= 400) {
         res.resume();
-        reject(new Error(`HTTP ${res.statusCode} for ${url}`));
+        reject(new HttpError(res.statusCode, url));
         return;
       }
       const chunks: Buffer[] = [];
@@ -229,7 +246,7 @@ function fetchPost(url: string, body: string, extraHeaders: Record<string, strin
         }
         if (res.statusCode && res.statusCode >= 400) {
           res.resume();
-          reject(new Error(`HTTP ${res.statusCode} for ${url}`));
+          reject(new HttpError(res.statusCode, url));
           return;
         }
         const chunks: Buffer[] = [];
