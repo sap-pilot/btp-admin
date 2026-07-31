@@ -7,7 +7,7 @@ import { join, resolve as resolvePath } from 'node:path';
 import { createHmac } from 'node:crypto';
 import { config } from '../config.js';
 import { logger } from '../logger.js';
-import { browseResponseFiles, resolveSyncDuplicates, sanitizeName } from './localStoreService.js';
+import { browseResponseFiles, resolveSyncDuplicates, sanitizeName, formatBrowseT, parseBrowseT } from './localStoreService.js';
 import type { BrowseFile } from './localStoreService.js';
 import { extractZip } from './zipBuilder.js';
 import { getSyncKey, getAllServices } from './configService.js';
@@ -68,7 +68,7 @@ export function notifyCallbacks(): void {
 // Manual/force sync from the UI bypasses this queue.
 let syncRunning = false;
 let syncQueued = false;
-let lastBrowseTs = 0;       // browseTs from the last successful remote browse response
+let lastBrowseT = '';        // browseT (yyyyMMdd-HHmmss UTC) from the last successful remote browse; empty = no prior browse
 let lastSyncCompletedTs = 0; // wall-clock time when the last normal sync completed
 
 // ── Normal sync queue ─────────────────────────────────────────────────────────
@@ -88,7 +88,7 @@ function scheduleNormalSync(remoteBase: string, selfBaseUrl?: string): void {
 
 async function runNormalSync(remoteBase: string, selfBaseUrl?: string): Promise<void> {
   syncRunning = true;
-  const since = lastBrowseTs > 0 ? lastBrowseTs : undefined;
+  const since = lastBrowseT || undefined;
   try {
     await executeSync(remoteBase, selfBaseUrl, since);
   } catch (err) {
@@ -351,16 +351,19 @@ async function downloadBatch(
 async function executeSync(
   remoteBase: string,
   selfBaseUrl: string | undefined,
-  since: number | undefined,
+  since: string | undefined,  // yyyyMMdd-HHmmss UTC, or undefined for a full sync
 ): Promise<SyncStats> {
   const callbackUrl = selfBaseUrl ? `${selfBaseUrl}/api/download-trigger` : undefined;
-  logger.info({ remote: remoteBase, since, hasCallback: !!callbackUrl }, 'Sync starting');
+  logger.info({ remote: remoteBase, since: since ?? 'full', hasCallback: !!callbackUrl }, 'Sync starting');
   const start = Date.now();
+
+  // Parse since string to ms once for local FS comparison (avoids repeated parsing)
+  const sinceMs = since ? parseBrowseT(since) : undefined;
 
   try {
     // Build browse URL
     const browseParams = new URLSearchParams();
-    if (since) browseParams.set('since', String(since));
+    if (since) browseParams.set('since', since);
     if (callbackUrl) browseParams.set('callback', callbackUrl);
     const browseQs = browseParams.toString();
     const browseUrl = browseQs ? `${remoteBase}/api/browse?${browseQs}` : `${remoteBase}/api/browse`;
@@ -368,9 +371,12 @@ async function executeSync(
     const { buf: browseBuf } = await fetchRaw(browseUrl, syncKeyHeader());
     const rawBrowse = JSON.parse(browseBuf.toString('utf-8')) as {
       folders: Record<string, (string | BrowseFile)[]>;
-      browseTs?: number;
+      browseT?: string;    // new: yyyyMMdd-HHmmss UTC string
+      browseTs?: number;   // legacy: Unix-ms number from older producers
     };
-    const remoteBrowseTs = rawBrowse.browseTs;
+    // Prefer new browseT string; convert legacy browseTs number if present
+    const remoteBrowseT = rawBrowse.browseT
+      ?? (rawBrowse.browseTs ? formatBrowseT(rawBrowse.browseTs) : undefined);
 
     // Normalise folders (legacy servers may return string[] instead of BrowseFile[])
     const folders: Record<string, BrowseFile[]> = {};
@@ -378,8 +384,10 @@ async function executeSync(
       folders[folder] = items.map(item => (typeof item === 'string' ? { name: item, mtime: 0 } : item));
     }
 
-    // Compare with local store
-    const localFolders = await browseResponseFiles();
+    // Compare with LOCAL files modified since the same cutoff.
+    // For delta syncs this skips stat-ing files that predate `since`, cutting
+    // comparison time from O(all local files) to O(recently changed local files).
+    const localFolders = await browseResponseFiles(sinceMs);
 
     const fp = (folder: string, name: string) => folder ? `${folder}/${name}` : name;
 
@@ -393,6 +401,7 @@ async function executeSync(
       const localMtimes = new Map((localFolders[folder] ?? []).map(f => [f.name, f.mtime]));
       for (const f of files) {
         const localMtime = localMtimes.get(f.name);
+        // localMtime undefined means either missing or older than sinceMs — both need download
         if (localMtime !== undefined && (!f.mtime || localMtime >= f.mtime)) continue;
         missing.push(fp(folder, f.name));
       }
@@ -403,7 +412,7 @@ async function executeSync(
     const elapsedSec = () => ((Date.now() - start) / 1000).toFixed(1);
 
     if (missing.length === 0) {
-      if (remoteBrowseTs) lastBrowseTs = remoteBrowseTs;
+      if (remoteBrowseT) lastBrowseT = remoteBrowseT;
       logger.info({ elapsedMs: Date.now() - start }, 'Remote sync complete — already up to date');
       return { files: 0, transferredMB: '0.00', decompressedMB: '0.00', elapsedSec: elapsedSec() };
     }
@@ -474,7 +483,7 @@ async function executeSync(
     logger.info(stats, 'Remote sync complete');
 
     // Update lastBrowseTs on success so the next normal sync uses it as `since`
-    if (remoteBrowseTs) lastBrowseTs = remoteBrowseTs;
+    if (remoteBrowseT) lastBrowseT = remoteBrowseT;
 
     // Notify live-update subscribers
     const ts = Date.now();
