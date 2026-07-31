@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { requireAdmin } from '../middleware/requireAuth.js';
-import { readOrgs, refreshOrgs, saveOrgs } from '../services/orgsService.js';
+import { readOrgs, refreshOrgs, saveOrgs, exportConfig, importConfig } from '../services/orgsService.js';
 import type { OrgRegion } from '../services/orgsService.js';
 import { readDirs, saveDirs } from '../services/dirsService.js';
 import type { DirTab } from '../services/dirsService.js';
@@ -48,6 +48,27 @@ router.post('/dirs/save', requireAdmin, async (req, res, next) => {
       return;
     }
     await saveDirs(data as DirTab[]);
+    res.json({ ok: true });
+  } catch (err) { next(err); }
+});
+
+router.get('/export', requireAdmin, async (_req, res, next) => {
+  try {
+    const data = await exportConfig();
+    res.setHeader('Content-Disposition', 'attachment; filename="combined-config.json"');
+    res.setHeader('Content-Type', 'application/json');
+    res.send(JSON.stringify(data, null, 2));
+  } catch (err) { next(err); }
+});
+
+router.post('/import', requireAdmin, async (req, res, next) => {
+  try {
+    const body = req.body as unknown;
+    if (!body || typeof body !== 'object' || Array.isArray(body)) {
+      res.status(400).json({ ok: false, error: 'Expected a JSON object' });
+      return;
+    }
+    await importConfig(body as Record<string, unknown>);
     res.json({ ok: true });
   } catch (err) { next(err); }
 });

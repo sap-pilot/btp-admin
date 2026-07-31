@@ -1,6 +1,11 @@
 import { useState } from 'react';
 import { ChevronDown, ChevronRight, RefreshCw, RotateCcw, Save, GripVertical } from 'lucide-react';
 
+export interface SpaceEntry {
+  space_id:   string;
+  space_name: string;
+}
+
 export interface OrgEntry {
   org_id:          string;
   org_name:        string;
@@ -13,6 +18,7 @@ export interface OrgEntry {
   includeInHomepage: boolean;
   manageDestination: boolean;
   manageApps:        boolean;
+  spaces:          SpaceEntry[];
 }
 
 export interface OrgRegion {
@@ -122,6 +128,22 @@ export default function OrgsTable({ data, onChange, isDirty, onRefresh, isRefres
             Clear
           </button>
         )}
+        <button
+          onClick={() => setExpanded(new Set(data.map(r => r.region)))}
+          disabled={isFiltering}
+          className={btnOutline}
+          title="Expand all regions"
+        >
+          Expand
+        </button>
+        <button
+          onClick={() => setExpanded(new Set())}
+          disabled={isFiltering}
+          className={btnOutline}
+          title="Collapse all regions"
+        >
+          Collapse
+        </button>
         <button onClick={onRefresh} disabled={isRefreshing} className={btnOutline} title="Re-fetch orgs from CF API">
           <RefreshCw className={`h-3.5 w-3.5 ${isRefreshing ? 'animate-spin' : ''}`} />
           {isRefreshing ? 'Refreshing…' : 'Refresh'}
@@ -210,8 +232,14 @@ export default function OrgsTable({ data, onChange, isDirty, onRefresh, isRefres
                       </td>
                       <td className={`${tdCls} font-medium overflow-hidden whitespace-nowrap text-ellipsis`} title={org.org_name}>{org.org_name}</td>
                       <td className={roTdCls} title={org.org_id}>{org.org_id || '—'}</td>
-                      <td className={roTdCls} title={org.subdomain}>{org.subdomain || '—'}</td>
-                      <td className={roTdCls} title={org.subaccount_id}>{org.subaccount_id || '—'}</td>
+                      <td className={tdCls}>
+                        <input className={inpCls} value={org.subdomain} placeholder="subdomain"
+                          onChange={e => updateOrg(ri, realOi, { subdomain: e.target.value })} />
+                      </td>
+                      <td className={tdCls}>
+                        <input className={inpCls} value={org.subaccount_id} placeholder="subaccount ID"
+                          onChange={e => updateOrg(ri, realOi, { subaccount_id: e.target.value })} />
+                      </td>
                       <td className={tdCls}>
                         <input className={inpCls} value={org.directories} placeholder="dir1, dir2"
                           onChange={e => updateOrg(ri, realOi, { directories: e.target.value })} />
