@@ -168,6 +168,22 @@ export default function DirsTable({ data, onChange, isDirty, isSaving, onReset, 
             Clear
           </button>
         )}
+        <button
+          onClick={() => setExpanded(new Set(data.map((_, i) => i)))}
+          disabled={isFiltering}
+          className={btnOutline}
+          title="Expand all tabs"
+        >
+          Expand
+        </button>
+        <button
+          onClick={() => setExpanded(new Set())}
+          disabled={isFiltering}
+          className={btnOutline}
+          title="Collapse all tabs"
+        >
+          Collapse
+        </button>
         <button onClick={onReset} disabled={!isDirty || isSaving} className={btnOutline} title="Restore to last saved state">
           <RotateCcw className="h-3.5 w-3.5" />
           Reset

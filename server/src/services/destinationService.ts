@@ -6,6 +6,7 @@ import { config } from '../config.js';
 import { logger } from '../logger.js';
 import { getOrRefreshToken, fetchWithRateLimit } from './cfLoginService.js';
 import { readOrgs, type OrgEntry } from './orgsService.js';
+import { notifyCallbacks } from './syncService.js';
 
 const BA_DIR         = join(homedir(), '.ba');
 const KEYS_PATH      = join(BA_DIR, 'destination-keys.json');
@@ -270,6 +271,8 @@ export async function refreshDestinations(): Promise<{ refreshed: number; errors
   }
   await saveTokenStore(tokenStore);
 
+  if (refreshed > 0) notifyCallbacks();
+
   return { refreshed, errors };
 }
 
@@ -414,6 +417,7 @@ export async function saveDestinationEntry(
 
   await mkdir(join(LOCAL_DEST_DIR, region, subdomain), { recursive: true });
   await writeFile(jsonPath, JSON.stringify(merged, null, 2), 'utf-8');
+  notifyCallbacks();
 }
 
 export async function getDestinationChangelog(region: string, subdomain: string, name: string): Promise<string> {

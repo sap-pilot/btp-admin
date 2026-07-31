@@ -283,12 +283,32 @@ async function downloadOne(
   } else {
     const folder = filePath.slice(0, slash);
     const filename = filePath.slice(slash + 1);
-    target = resolvePath(config.LOCAL_STORE_DIR, 'resp', folder, filename);
-    if (!target.startsWith(safeBase + '/')) {
-      logger.warn({ path: filePath }, 'Skipping file: path traversal detected');
-      return { transferred: 0, decompressed: 0 };
+    if (folder === 'config') {
+      target = resolvePath(config.LOCAL_STORE_DIR, 'config', filename);
+      if (!target.startsWith(safeBase + '/')) {
+        logger.warn({ path: filePath }, 'Skipping config file: path traversal detected');
+        return { transferred: 0, decompressed: 0 };
+      }
+      await mkdir(join(config.LOCAL_STORE_DIR, 'config'), { recursive: true });
+    } else if (folder === 'dest') {
+      target = resolvePath(config.LOCAL_STORE_DIR, 'dest', filename);
+      if (!target.startsWith(safeBase + '/')) {
+        logger.warn({ path: filePath }, 'Skipping dest file: path traversal detected');
+        return { transferred: 0, decompressed: 0 };
+      }
+      const lastSlash = filename.lastIndexOf('/');
+      const parentDir = lastSlash !== -1
+        ? join(config.LOCAL_STORE_DIR, 'dest', filename.slice(0, lastSlash))
+        : join(config.LOCAL_STORE_DIR, 'dest');
+      await mkdir(parentDir, { recursive: true });
+    } else {
+      target = resolvePath(config.LOCAL_STORE_DIR, 'resp', folder, filename);
+      if (!target.startsWith(safeBase + '/')) {
+        logger.warn({ path: filePath }, 'Skipping file: path traversal detected');
+        return { transferred: 0, decompressed: 0 };
+      }
+      await mkdir(join(config.LOCAL_STORE_DIR, 'resp', folder), { recursive: true });
     }
-    await mkdir(join(config.LOCAL_STORE_DIR, 'resp', folder), { recursive: true });
   }
   await writeFile(target, buf);
   if (remoteMtime) {
@@ -325,12 +345,32 @@ async function downloadBatch(
         const folder = name.slice(0, slash);
         const filename = name.slice(slash + 1);
         if (!folder || !filename) return;
-        target = resolvePath(config.LOCAL_STORE_DIR, 'resp', folder, filename);
-        if (!target.startsWith(safeBase + '/')) {
-          logger.warn({ name }, 'Skipping ZIP entry: path traversal detected');
-          return;
+        if (folder === 'config') {
+          target = resolvePath(config.LOCAL_STORE_DIR, 'config', filename);
+          if (!target.startsWith(safeBase + '/')) {
+            logger.warn({ name }, 'Skipping ZIP config entry: path traversal detected');
+            return;
+          }
+          await mkdir(join(config.LOCAL_STORE_DIR, 'config'), { recursive: true });
+        } else if (folder === 'dest') {
+          target = resolvePath(config.LOCAL_STORE_DIR, 'dest', filename);
+          if (!target.startsWith(safeBase + '/')) {
+            logger.warn({ name }, 'Skipping ZIP dest entry: path traversal detected');
+            return;
+          }
+          const lastSlash = filename.lastIndexOf('/');
+          const parentDir = lastSlash !== -1
+            ? join(config.LOCAL_STORE_DIR, 'dest', filename.slice(0, lastSlash))
+            : join(config.LOCAL_STORE_DIR, 'dest');
+          await mkdir(parentDir, { recursive: true });
+        } else {
+          target = resolvePath(config.LOCAL_STORE_DIR, 'resp', folder, filename);
+          if (!target.startsWith(safeBase + '/')) {
+            logger.warn({ name }, 'Skipping ZIP entry: path traversal detected');
+            return;
+          }
+          await mkdir(join(config.LOCAL_STORE_DIR, 'resp', folder), { recursive: true });
         }
-        await mkdir(join(config.LOCAL_STORE_DIR, 'resp', folder), { recursive: true });
       }
       await writeFile(target, data);
       const mtime = remoteMtimes.get(name);

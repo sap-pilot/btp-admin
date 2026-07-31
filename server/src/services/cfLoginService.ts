@@ -44,13 +44,23 @@ function cfApiUrl(region: string): string {
   return `https://api.cf.${region}.hana.ondemand.com`;
 }
 
-function getCfCredentials(): { username: string; password: string; origin: string } {
+export function getCfCredentials(): { username: string; password: string; origin: string } {
   const vars = getConfig().variables ?? {};
   return {
     username: process.env.CF_USERNAME ?? vars['CF_USERNAME'] ?? '',
     password: process.env.CF_PASSWORD ?? vars['CF_PASSWORD'] ?? '',
     origin:   process.env.CF_ORIGIN   ?? vars['CF_ORIGIN']   ?? '',
   };
+}
+
+/** Returns configured CF regions; env takes precedence over config.json->variables. */
+export function getCfRegions(): string[] {
+  if (process.env.CF_REGIONS) {
+    return process.env.CF_REGIONS.split(',').map(s => s.trim()).filter(Boolean);
+  }
+  const vars = getConfig().variables ?? {};
+  const fromVars = typeof vars['CF_REGIONS'] === 'string' ? vars['CF_REGIONS'] : '';
+  return fromVars.split(',').map(s => s.trim()).filter(Boolean);
 }
 
 const RATE_LIMIT_MAX_RETRIES = 3;
@@ -196,5 +206,35 @@ export async function fetchOrgsForRegion(region: string): Promise<Array<{ guid: 
     resources?: Array<{ guid: string; name: string }>;
   };
   return (data.resources ?? []).map(r => ({ guid: r.guid, name: r.name }));
+}
+
+/**
+ * Fetches spaces for multiple orgs in one CF API call.
+ * Returns a map of org_guid → [{ space_id, space_name }].
+ */
+export async function fetchSpacesByOrgs(
+  region: string,
+  orgGuids: string[],
+): Promise<Map<string, Array<{ space_id: string; space_name: string }>>> {
+  const result = new Map<string, Array<{ space_id: string; space_name: string }>>();
+  if (orgGuids.length === 0) return result;
+  const token = await getOrRefreshToken(region);
+  const guids = orgGuids.join(',');
+  const url   = `${token.api_url}/v3/spaces?organization_guids=${guids}&per_page=500`;
+  const data  = await httpGet(url, { Authorization: `${token.token_type} ${token.access_token}` }) as {
+    resources?: Array<{
+      guid: string;
+      name: string;
+      relationships?: { organization?: { data?: { guid?: string } } };
+    }>;
+  };
+  for (const space of (data.resources ?? [])) {
+    const orgGuid = space.relationships?.organization?.data?.guid;
+    if (!orgGuid) continue;
+    const list = result.get(orgGuid) ?? [];
+    list.push({ space_id: space.guid, space_name: space.name });
+    result.set(orgGuid, list);
+  }
+  return result;
 }
 

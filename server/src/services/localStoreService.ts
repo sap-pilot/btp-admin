@@ -304,6 +304,43 @@ export async function browseResponseFiles(since?: number): Promise<Record<string
   }
 
   try {
+    // dest/{region}/{subdomain}/ — returned as folder keys "dest/{region}/{subdomain}"
+    const destBase = join(storeDir, 'dest');
+    const destRegions = await readdir(destBase, { withFileTypes: true });
+    await Promise.all(
+      destRegions.filter(e => e.isDirectory()).map(async (regionEntry) => {
+        try {
+          const regionPath = join(destBase, regionEntry.name);
+          const subEntries = await readdir(regionPath, { withFileTypes: true });
+          await Promise.all(
+            subEntries.filter(e => e.isDirectory()).map(async (subEntry) => {
+              const folderKey = `dest/${regionEntry.name}/${subEntry.name}`;
+              try {
+                const subPath = join(regionPath, subEntry.name);
+                const files = await readdir(subPath);
+                const withMtime = await Promise.all(
+                  files.map(async (name) => {
+                    try {
+                      const info = await stat(join(subPath, name));
+                      return { name, rawMtime: info.mtimeMs };
+                    } catch { return { name, rawMtime: 0 }; }
+                  }),
+                );
+                result[folderKey] = withMtime
+                  .filter(f => !since || since <= 0 || f.rawMtime === 0 || f.rawMtime >= since)
+                  .map(({ name, rawMtime }) => ({ name, mtime: rawMtime === 0 ? 0 : rawMtime }));
+                result[folderKey].sort((a, b) => a.name.localeCompare(b.name));
+              } catch { result[folderKey] = []; }
+            }),
+          );
+        } catch { /* region dir unreadable */ }
+      }),
+    );
+  } catch {
+    // dest/ doesn't exist yet
+  }
+
+  try {
     // Service response files under resp/{service}/
     const respBase = join(storeDir, 'resp');
     const entries = await readdir(respBase, { withFileTypes: true });

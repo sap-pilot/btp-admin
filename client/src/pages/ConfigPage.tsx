@@ -1,6 +1,6 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router';
-import { PanelLeft } from 'lucide-react';
+import { Download, PanelLeft, Upload } from 'lucide-react';
 import { useSidebar } from '@/components/AppLayout';
 import OrgsTable, { type OrgRegion } from '@/components/config/OrgsTable';
 import DirsTable, { type DirTab } from '@/components/config/DirsTable';
@@ -27,7 +27,9 @@ export default function ConfigPage() {
   const [isDirsDirty, setIsDirsDirty]   = useState(false);
   const [isSavingDirs, setIsSavingDirs] = useState(false);
 
-  const [error, setError] = useState('');
+  const [error, setError]       = useState('');
+  const [isImporting, setIsImporting] = useState(false);
+  const importRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     void fetch('/api/config/orgs')
@@ -119,6 +121,39 @@ export default function ConfigPage() {
     }
   }
 
+  async function handleImport(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (!window.confirm('Import will overwrite all local config files. Continue?')) {
+      e.target.value = '';
+      return;
+    }
+    setIsImporting(true);
+    setError('');
+    try {
+      const text = await file.text();
+      const data = JSON.parse(text) as Record<string, unknown>;
+      const res  = await fetch('/api/config/import', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data),
+      });
+      const json = await res.json() as { ok: boolean; error?: string };
+      if (!json.ok) throw new Error(json.error ?? 'Import failed');
+      const [orgsRes, dirsRes] = await Promise.all([
+        fetch('/api/config/orgs').then(r => r.json() as Promise<{ ok: boolean; data: OrgRegion[] }>),
+        fetch('/api/config/dirs').then(r => r.json() as Promise<{ ok: boolean; data: DirTab[] }>),
+      ]);
+      setOrgsData(orgsRes.data); setOriginalOrgs(orgsRes.data); setIsOrgsDirty(false);
+      setDirsData(dirsRes.data); setOriginalDirs(dirsRes.data); setIsDirsDirty(false);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Import failed');
+    } finally {
+      setIsImporting(false);
+      e.target.value = '';
+    }
+  }
+
   const tabCls = (t: Tab) =>
     `px-4 py-2 text-sm transition-colors border-b-2 ${
       activeTab === t
@@ -137,6 +172,32 @@ export default function ConfigPage() {
           <PanelLeft className="h-4 w-4" />
         </button>
         <span className="text-sm font-semibold">Configuration</span>
+        <div className="ml-auto flex items-center gap-1.5">
+          {(() => {
+            const btn = 'inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded text-xs font-medium border border-border hover:bg-accent hover:text-accent-foreground transition-colors disabled:opacity-50 disabled:cursor-not-allowed';
+            return (<>
+              <input ref={importRef} type="file" accept=".json" className="hidden" onChange={handleImport} />
+              <button
+                onClick={() => importRef.current?.click()}
+                disabled={isImporting}
+                className={btn}
+                title="Import combined-config.json — overwrites all local config files"
+              >
+                <Upload className="h-3.5 w-3.5" />
+                {isImporting ? 'Importing…' : 'Import'}
+              </button>
+              <a
+                href="/api/config/export"
+                download="combined-config.json"
+                className={btn}
+                title="Export all config files as combined-config.json"
+              >
+                <Download className="h-3.5 w-3.5" />
+                Export
+              </a>
+            </>);
+          })()}
+        </div>
       </div>
 
       {/* Tab bar */}
