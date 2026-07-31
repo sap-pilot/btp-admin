@@ -5,8 +5,8 @@ import { useSidebar } from '@/components/AppLayout';
 import OrgsTable, { type OrgRegion } from '@/components/config/OrgsTable';
 import DirsTable, { type DirTab } from '@/components/config/DirsTable';
 
-type Tab = 'orgs' | 'dirs' | 'systems' | 'menus' | 'links' | 'changelog';
-const VALID_TABS = new Set<Tab>(['orgs', 'dirs', 'systems', 'menus', 'links', 'changelog']);
+type Tab = 'orgs' | 'dirs' | 'services' | 'systems' | 'menus' | 'links' | 'changelog';
+const VALID_TABS = new Set<Tab>(['orgs', 'dirs', 'services', 'systems', 'menus', 'links', 'changelog']);
 
 export default function ConfigPage() {
   const { tab: tabParam } = useParams<{ tab: string }>();
@@ -258,8 +258,11 @@ export default function ConfigPage() {
           Tabs / Dirs
           {totalDirs > 0 && <span className="ml-1.5 text-[10px] text-muted-foreground">({totalDirs})</span>}
         </button>
+        <button className={tabCls('services')} onClick={() => goTab('services')}>
+          Services
+        </button>
         <button className={tabCls('systems')} onClick={() => goTab('systems')}>
-          Other Systems
+          Other Services
         </button>
         <button className={tabCls('menus')} onClick={() => goTab('menus')}>
           Menus
@@ -303,7 +306,7 @@ export default function ConfigPage() {
             onSave={handleDirsSave}
           />
         )}
-        {(activeTab === 'systems' || activeTab === 'menus' || activeTab === 'links') && (
+        {(activeTab === 'services' || activeTab === 'systems' || activeTab === 'menus' || activeTab === 'links') && (
           <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
             Under construction
           </div>
