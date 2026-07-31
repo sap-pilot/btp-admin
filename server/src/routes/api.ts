@@ -21,10 +21,21 @@ router.get('/info', (_req, res) => {
 
 router.get('/events', (req, res) => {
   const svc = typeof req.query['service'] === 'string' ? req.query['service'] : null;
-  // ?homepage=1 — subscribe only to homepage change events (homepage.json updated via sync or edit)
   const homepageOnly = req.query['homepage'] === '1';
-  const topics: string[] = homepageOnly ? ['homepage'] : ['global'];
-  if (svc && !homepageOnly) topics.push(`service:${svc}`);
+  const configOnly   = req.query['config']   === '1';
+  const destOnly     = req.query['dest']     === '1';
+
+  let topics: string[];
+  if (homepageOnly) {
+    topics = ['homepage'];
+  } else if (configOnly) {
+    topics = ['config'];
+  } else if (destOnly) {
+    topics = ['dest'];
+  } else {
+    topics = ['global'];
+    if (svc) topics.push(`service:${svc}`);
+  }
 
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache');

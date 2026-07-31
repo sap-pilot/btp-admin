@@ -43,6 +43,35 @@ export default function ConfigPage() {
       .catch(() => setError('Failed to load dirs'));
   }, []);
 
+  // Track latest dirty/busy state in a ref so the SSE handler can read it without re-subscribing
+  const configStateRef = useRef({ orgsDirty: false, dirsDirty: false, busy: false });
+  configStateRef.current = {
+    orgsDirty: isOrgsDirty,
+    dirsDirty: isDirsDirty,
+    busy: isRefreshing || isSavingOrgs || isSavingDirs || isImporting,
+  };
+
+  useEffect(() => {
+    const es = new EventSource('/api/events?config=1');
+    es.addEventListener('update', () => {
+      const { orgsDirty, dirsDirty, busy } = configStateRef.current;
+      if (busy) return;
+      if (!orgsDirty) {
+        void fetch('/api/config/orgs')
+          .then(r => r.json() as Promise<{ ok: boolean; data: OrgRegion[] }>)
+          .then(({ ok, data }) => { if (ok) { setOrgsData(data); setOriginalOrgs(data); } })
+          .catch(() => {});
+      }
+      if (!dirsDirty) {
+        void fetch('/api/config/dirs')
+          .then(r => r.json() as Promise<{ ok: boolean; data: DirTab[] }>)
+          .then(({ ok, data }) => { if (ok) { setDirsData(data); setOriginalDirs(data); } })
+          .catch(() => {});
+      }
+    });
+    return () => es.close();
+  }, []);
+
   function goTab(t: Tab) { navigate(`/config/${t}`, { replace: true }); }
 
   function handleOrgsChange(data: OrgRegion[]) { setOrgsData(data); setIsOrgsDirty(true); }

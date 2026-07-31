@@ -553,6 +553,8 @@ async function executeSync(
     if (otherRootFiles.length > 0) {
       emit('root', { files: otherRootFiles, ts });
     }
+    if (updatedFolders.has('config')) emit('config', { ts });
+    if (updatedFolders.has('dest'))   emit('dest',   { ts });
 
     return stats;
   } catch (err) {
