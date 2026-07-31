@@ -11,6 +11,7 @@ import healthRouter from './routes/health.js';
 import apiRouter from './routes/api.js';
 import statusApiRouter from './routes/status.js';
 import homepageRouter from './routes/homepage.js';
+import configRouter from './routes/config.js';
 import authRouter from './routes/auth.js';
 import { requireSessionGlobal } from './middleware/requireAuth.js';
 import { errorHandler } from './middleware/errorHandler.js';
@@ -32,6 +33,7 @@ app.use('/api', (_req, res, next) => { res.setHeader('Cache-Control', 'no-store'
 app.use('/api', requireSessionGlobal);
 app.use('/api/status', statusApiRouter);
 app.use('/api/homepage', homepageRouter);
+app.use('/api/config', configRouter);
 app.use('/api', apiRouter);
 
 try {

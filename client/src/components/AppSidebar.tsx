@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { Link, useLocation } from 'react-router';
-import { LogIn, Sun, Moon, Activity, Home, Globe, LayoutGrid, Network, ChevronDown, RefreshCw, BookMarked, ShieldCheck } from 'lucide-react';
+import { LogIn, Sun, Moon, Activity, Home, Globe, LayoutGrid, Network, ChevronDown, RefreshCw, BookMarked, ShieldCheck, Settings } from 'lucide-react';
 import { useAuth } from '@/hooks/useAuth';
 import { useTheme } from '@/hooks/useTheme';
 import { useSidebar, useHomepage } from '@/components/AppLayout';
@@ -356,8 +356,20 @@ export default function AppSidebar() {
         })}
         </>}
 
-        {/* Sync + Theme toggle — float to bottom; theme toggle visible even before login */}
+        {/* Sync + Configuration + Theme toggle — float to bottom; theme toggle visible even before login */}
         <div className="mt-auto pt-1 flex flex-col">
+          {(!auth.enabled || auth.isAdmin) && (
+            <Link
+              to="/config/orgs"
+              className={itemBase(collapsed) + (location.pathname.startsWith('/config')
+                ? 'bg-sidebar-accent text-sidebar-accent-foreground font-medium'
+                : 'text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground')}
+              title="Configuration"
+            >
+              <Settings className="h-4 w-4 shrink-0" />
+              {!collapsed && <span className="truncate">Configuration</span>}
+            </Link>
+          )}
           {syncAvailable && (!auth.enabled || auth.loggedIn) && (
             <>
               <button

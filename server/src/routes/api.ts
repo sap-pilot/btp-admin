@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { readRawResponseFile, readRootFile, readResponseFile, readScreenshotFile, readConsoleLogFile, readContentFile, browseResponseFiles, formatBrowseT, parseBrowseT } from '../services/localStoreService.js';
+import { readRawResponseFile, readRootFile, readConfigFile, readResponseFile, readScreenshotFile, readConsoleLogFile, readContentFile, browseResponseFiles, formatBrowseT, parseBrowseT } from '../services/localStoreService.js';
 import { buildZip } from '../services/zipBuilder.js';
 import { syncFromRemote, handleDownloadTrigger, registerCallback, type SyncStats } from '../services/syncService.js';
 import { config } from '../config.js';
@@ -94,9 +94,14 @@ router.post('/batch-download', requireSyncAuthOrOpen, async (req, res, next) => 
     for (const p of paths as string[]) {
       try {
         const slash = p.indexOf('/');
-        const data = slash === -1
-          ? await readRootFile(p)
-          : await readRawResponseFile(p.slice(0, slash), p.slice(slash + 1));
+        let data: Buffer;
+        if (slash === -1) {
+          data = await readRootFile(p);
+        } else {
+          const folder = p.slice(0, slash);
+          const filename = p.slice(slash + 1);
+          data = folder === 'config' ? await readConfigFile(filename) : await readRawResponseFile(folder, filename);
+        }
         entries.push({ name: p, data });
       } catch {
         // skip files pruned since browse was called
@@ -174,7 +179,10 @@ router.get('/download', requireSyncAuth, async (req, res, next) => {
       return;
     }
     const [folder, filename] = parts;
-    if (filename.endsWith('.png')) {
+    if (folder === 'config') {
+      const buf = await readConfigFile(filename);
+      res.type('application/json').send(buf);
+    } else if (filename.endsWith('.png')) {
       const buf = await readScreenshotFile(folder, filename);
       res.type('image/png').send(buf);
     } else if (filename.endsWith('.log')) {

@@ -281,6 +281,29 @@ export async function browseResponseFiles(since?: number): Promise<Record<string
   }
 
   try {
+    // config/ directory — flat; files synced to consumers alongside root and resp/ files
+    const configDir = join(storeDir, 'config');
+    const configEntries = await readdir(configDir, { withFileTypes: true });
+    const configFiles: BrowseFile[] = [];
+    for (const e of configEntries) {
+      if (!e.isFile()) continue;
+      try {
+        const info = await stat(join(configDir, e.name));
+        const rawMtime = info.mtimeMs;
+        if (!since || since <= 0 || rawMtime >= since) {
+          configFiles.push({ name: e.name, mtime: rawMtime });
+        }
+      } catch { /* skip */ }
+    }
+    if (configFiles.length > 0) {
+      configFiles.sort((a, b) => a.name.localeCompare(b.name));
+      result['config'] = configFiles;
+    }
+  } catch {
+    // config/ doesn't exist yet
+  }
+
+  try {
     // Service response files under resp/{service}/
     const respBase = join(storeDir, 'resp');
     const entries = await readdir(respBase, { withFileTypes: true });
@@ -325,6 +348,14 @@ export async function readRootFile(filename: string): Promise<Buffer> {
     throw new Error('Invalid root filename');
   }
   return readFile(join(config.LOCAL_STORE_DIR, filename));
+}
+
+/** Read a file from LOCAL_STORE_DIR/config/ (e.g. orgs.json). */
+export async function readConfigFile(filename: string): Promise<Buffer> {
+  if (!/^[a-zA-Z0-9][a-zA-Z0-9_.-]*\.json$/.test(filename)) {
+    throw new Error('Invalid config filename');
+  }
+  return readFile(join(config.LOCAL_STORE_DIR, 'config', filename));
 }
 
 /**

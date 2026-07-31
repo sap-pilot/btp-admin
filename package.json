@@ -8,7 +8,7 @@
   ],
   "scripts": {
     "dev": "npm run build:client && npm run dev:server",
-    "dev:server": "npm run dev --workspace=server",
+    "dev:server": "npm run dev --workspace=server | node scripts/format-logs.mjs",
     "watch:client": "npm run watch --workspace=client",
     "build": "mbt build -p=cf --mtar=btp-admin.mtar",
     "build:client": "npm run build --workspace=client",

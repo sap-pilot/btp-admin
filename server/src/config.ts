@@ -19,4 +19,8 @@ const SELF_URL = (() => {
   } catch { return ''; }
 })();
 
-export const config = { CONFIG_FILE, PORT, LOCAL_STORE_DIR, SYNC_REMOTE, SELF_URL, SYNC_REMOTE_BATCH_SIZE, SYNC_INTERVAL, MAX_RESPONSE_STORAGE_DAYS, REQUEST_TIMEOUT_MS, SYNC_PROTECTION_OFF };
+// CF_REGIONS: comma-separated region codes, e.g. "us10,eu10,us10-001"
+// CF_USERNAME, CF_PASSWORD, CF_ORIGIN can also be set in config.json->variables (env takes precedence).
+const CF_REGIONS = (process.env.CF_REGIONS ?? '').split(',').map(s => s.trim()).filter(Boolean);
+
+export const config = { CONFIG_FILE, PORT, LOCAL_STORE_DIR, SYNC_REMOTE, SELF_URL, SYNC_REMOTE_BATCH_SIZE, SYNC_INTERVAL, MAX_RESPONSE_STORAGE_DAYS, REQUEST_TIMEOUT_MS, SYNC_PROTECTION_OFF, CF_REGIONS };
