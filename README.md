@@ -82,7 +82,7 @@ Azure Traffic Manager polls these health endpoints from multiple PoPs. When all 
 ### Development
 
 ```bash
-# 1. Install dependencies
+# 1. Install dependencies (also installs Chromium for browser checks via postinstall)
 npm install
 
 # 2. Copy sample config and fill in real values
@@ -98,6 +98,8 @@ npm run dev
 ```
 
 Open http://localhost:3000/status
+
+> **`PLAYWRIGHT_BROWSERS_PATH`**: `npm install` installs Chromium into `server/pw-browsers/` via the `postinstall` hook (using `PLAYWRIGHT_BROWSERS_PATH=./pw-browsers`). The `npm run dev` and `npm start` scripts set the same variable automatically so the server finds Chromium at that path. If you start the server directly — outside of an npm script — set `PLAYWRIGHT_BROWSERS_PATH=<repo-root>/server/pw-browsers` in your shell first, otherwise browser-based health checks will fail to launch Chromium.
 
 When iterating on the frontend, rebuild the client in a second terminal while the server keeps running:
 
@@ -414,7 +416,7 @@ The **Response Detail** modal shows four tabs for browser checks (tabs appear on
 
 All three sidecar files are included in remote sync and pruned by the housekeeping scheduler alongside their JSON counterpart.
 
-> **Chromium setup (local dev)**: run `npx playwright install chromium` once after `npm install`.  
+> **Chromium setup (local dev)**: Chromium is installed automatically into `server/pw-browsers/` during `npm install` via the `postinstall` hook — no manual step needed; `PLAYWRIGHT_BROWSERS_PATH=./pw-browsers` is set in `npm run dev` and `npm start` so the server finds it at that path (see [Quick Start](#development) for details).  
 > On SAP BTP Cloud Foundry, Google Chrome is installed automatically via the apt-buildpack — no manual step required (see [BTP deployment notes](#deployment-sap-btp-mta)).
 
 #### Automatic Checks

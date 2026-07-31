@@ -84,17 +84,21 @@ export async function fetchWithRateLimit(request: () => Promise<Response>, label
 }
 
 async function httpGet(url: string, headers: Record<string, string> = {}): Promise<unknown> {
+  const t0  = Date.now();
   const res = await fetchWithRateLimit(() => fetch(url, { headers }), url);
+  logger.debug({ method: 'GET', url, status: res.status, cl: res.headers.get('content-length'), ms: Date.now() - t0 }, 'CF API call');
   if (!res.ok) throw new Error(`GET ${url} → HTTP ${res.status}`);
   return res.json();
 }
 
 async function httpPostForm(url: string, params: Record<string, string>): Promise<Record<string, unknown>> {
-  const body = new URLSearchParams(params).toString();
+  const t0   = Date.now();
+  const form = new URLSearchParams(params).toString();
   const res  = await fetchWithRateLimit(
-    () => fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body }),
+    () => fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: form }),
     url,
   );
+  logger.debug({ method: 'POST', url, grant_type: params['grant_type'], status: res.status, cl: res.headers.get('content-length'), ms: Date.now() - t0 }, 'CF OAuth token call');
   if (!res.ok) {
     const text = await res.text().catch(() => '');
     throw new Error(`POST ${url} → HTTP ${res.status}: ${text.slice(0, 200)}`);

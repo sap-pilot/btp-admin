@@ -72,10 +72,12 @@ async function saveTokenStore(store: TokenStore): Promise<void> {
 async function cfGet(region: string, path: string): Promise<unknown> {
   const token = await getOrRefreshToken(region);
   const url   = `${token.api_url}${path}`;
+  const t0    = Date.now();
   const res   = await fetchWithRateLimit(
     () => fetch(url, { headers: { Authorization: `${token.token_type} ${token.access_token}` } }),
     url,
   );
+  logger.debug({ method: 'GET', url, status: res.status, cl: res.headers.get('content-length'), ms: Date.now() - t0 }, 'CF v3 API call');
   if (!res.ok) throw new Error(`CF GET ${path} → HTTP ${res.status}`);
   return res.json();
 }
@@ -112,8 +114,9 @@ async function getDestToken(entry: DestKeyEntry, store: TokenStore): Promise<str
   if (cached && cached.expires_at - Date.now() > 60_000) return cached.access_token;
 
   const { url, clientid, clientsecret } = entry.credentials;
-  const basic = Buffer.from(`${clientid}:${clientsecret}`).toString('base64');
+  const basic    = Buffer.from(`${clientid}:${clientsecret}`).toString('base64');
   const tokenUrl = `${url}/oauth/token`;
+  const t0       = Date.now();
 
   const res = await fetchWithRateLimit(
     () => fetch(tokenUrl, {
@@ -123,6 +126,7 @@ async function getDestToken(entry: DestKeyEntry, store: TokenStore): Promise<str
     }),
     tokenUrl,
   );
+  logger.debug({ method: 'POST', url: tokenUrl, grant_type: 'client_credentials', org: entry.org_id, status: res.status, cl: res.headers.get('content-length'), ms: Date.now() - t0 }, 'Destination OAuth token call');
   if (!res.ok) {
     const text = await res.text().catch(() => '');
     throw new Error(`Destination OAuth for ${entry.org_id} → HTTP ${res.status}: ${text.slice(0, 200)}`);
@@ -137,10 +141,12 @@ async function getDestToken(entry: DestKeyEntry, store: TokenStore): Promise<str
 
 async function fetchSubaccountDestinations(entry: DestKeyEntry, token: string): Promise<unknown[]> {
   const url = `${entry.credentials.uri}/destination-configuration/v1/subaccountDestinations`;
+  const t0  = Date.now();
   const res = await fetchWithRateLimit(
     () => fetch(url, { headers: { Authorization: `Bearer ${token}` } }),
     url,
   );
+  logger.debug({ method: 'GET', url, org: entry.org_id, status: res.status, cl: res.headers.get('content-length'), ms: Date.now() - t0 }, 'Destination API call');
   if (!res.ok) {
     const text = await res.text().catch(() => '');
     throw new Error(`Destination API for ${entry.org_id} → HTTP ${res.status}: ${text.slice(0, 200)}`);
