@@ -1,6 +1,6 @@
 _schema-version: "3.3"
 ID: btp-admin
-version: 1.1.0
+version: 1.2.0
 
 modules:
   - name: btp-admin
@@ -27,8 +27,6 @@ modules:
       ignore:
         - localStore/
         - pw-browsers/
-    properties:
-      CONFIG_FILE: ./config.json
     requires:
       - name: btp-admin-xsuaa
 
