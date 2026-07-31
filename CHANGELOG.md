@@ -1,5 +1,15 @@
 # Changelog
 
+## [v1.2.0] - 2026-07-31
+
+### Added
+- **Configuration modal** — new **Configuration** sidebar button (visible to admin users only, placed above the Sync button); clicking it opens a near-full-screen modal with two tabs: **Subaccounts / Orgs** and **Menu / Links** (stub placeholder for a future release)
+- **CF login service** — at server startup the server reads `CF_USERNAME`, `CF_PASSWORD`, `CF_ORIGIN` (optional SAP IAS origin), and `CF_REGIONS` (comma-separated region codes, e.g. `us10,eu10,us10-001`) from environment variables or `config.json → variables` (env vars take precedence); for each region the server logs in to the CF UAA token endpoint (`/v2/info` → `token_endpoint`) with a password grant and stores the resulting access/refresh tokens in `~/.ba/cf_login_tokens.json`; tokens are refreshed automatically on expiry (refresh_token grant, falling back to password re-login); CF_REGIONS not configured → CF login is silently skipped; login failures per region are non-fatal (logged as WARN, server continues)
+- **`orgs.json`** — new file at `{LOCAL_STORE_DIR}/config/orgs.json`; schema: `[{ region, orgs: [{ org_id, org_name, subdomain, subaccount_id, subaccount_name, alias, tab, directory, group, manageDestination, manageApps }] }]`; `subaccount_id`, `subaccount_name`, and `subdomain` are filled by cross-referencing `homepage.json → btp.globalAccounts[*].directories[*].subaccounts[]` where `subaccounts[].orgId === org_guid`; editable fields (`alias`, `tab`, `directory`, `group`, `manageDestination`, `manageApps`) are preserved on refresh (merge by `region + org_id`); orgs no longer returned by CF are retained in the file (access may be temporarily unavailable)
+- **Subaccounts / Orgs table** — collapsible tree table grouped by region; filter input on the top left matches any field across all orgs; editable columns: alias, tab, directory, group (text inputs), manageDestination, manageApps (checkboxes); read-only columns: org name, org ID (truncated), subdomain, subaccount ID (truncated), subaccount name; **Refresh** button re-fetches orgs from the CF API and merges; **Reset** discards unsaved edits; **Save Orgs** (primary) persists and triggers `notifyCallbacks()` so consumer instances download the updated file immediately
+- **`config/` sync directory** — `GET /api/browse` now includes files under `{LOCAL_STORE_DIR}/config/` as folder key `"config"`; `GET /api/download` and `POST /api/batch-download` handle paths of the form `config/filename.json` by reading from `{LOCAL_STORE_DIR}/config/`; this makes `config/orgs.json` part of the standard sync and available to consumer instances
+- **`/api/config` routes** — three new admin-only endpoints: `GET /api/config/orgs` (read current orgs), `POST /api/config/orgs/refresh` (re-fetch from CF API, merge, save), `POST /api/config/orgs/save` (persist edited orgs)
+
 ## [v1.1.0] - 2026-07-28
 
 ### Added
