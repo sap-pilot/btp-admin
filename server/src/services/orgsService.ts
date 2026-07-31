@@ -5,7 +5,7 @@ import { logger } from '../logger.js';
 import { notifyCallbacks } from './syncService.js';
 import { emit } from './liveEvents.js';
 import { fetchOrgsForRegion, fetchSpacesByOrgs, getCfRegions, getCfCredentials } from './cfLoginService.js';
-import { readEffectiveHomepageRaw } from './home/homepageEditService.js';
+import { getCisSubaccountIndex } from './cisService.js';
 import { prefillDirsIfEmpty } from './dirsService.js';
 import { appendConfigChangelog, diffOrgs } from './configChangelogService.js';
 
@@ -34,55 +34,6 @@ export interface OrgEntry {
   spaces:             SpaceEntry[];
 }
 
-interface SaMeta {
-  id:               string;
-  dirShort:         string;
-  name:             string;
-  subdomain:        string;
-  hpPos:            number;
-  global_account_id: string;
-}
-
-/** Build an index of orgId → subaccount metadata from homepage.json. */
-function buildSubaccountIndex(): Map<string, SaMeta> {
-  const index = new Map<string, SaMeta>();
-  try {
-    const raw = readEffectiveHomepageRaw();
-    if (!raw) return index;
-    const hp = JSON.parse(raw) as {
-      btp?: {
-        globalAccounts?: Array<{
-          id?: string;
-          directories?: Array<{
-            short?: string;
-            subaccounts?: Array<{ id?: string; name?: string; subdomain?: string; orgId?: string }>;
-          }>;
-        }>;
-      };
-    };
-    let hpPos = 0;
-    for (const ga of hp.btp?.globalAccounts ?? []) {
-      const global_account_id = ga.id ?? '';
-      for (const dir of ga.directories ?? []) {
-        const dirShort = dir.short ?? '';
-        for (const sa of dir.subaccounts ?? []) {
-          if (sa.orgId && sa.id) {
-            index.set(sa.orgId, {
-              id:               sa.id,
-              dirShort,
-              name:             sa.name      ?? '',
-              subdomain:        sa.subdomain ?? '',
-              hpPos,
-              global_account_id,
-            });
-          }
-          hpPos++;
-        }
-      }
-    }
-  } catch { /* homepage.json missing or invalid — proceed without subaccount cross-ref */ }
-  return index;
-}
 
 export async function readOrgs(): Promise<OrgEntry[]> {
   try {
@@ -149,7 +100,7 @@ function mergeOrgs(existing: OrgEntry[], fresh: OrgEntry[]): OrgEntry[] {
 }
 
 /** Re-fetch orgs from CF API for all configured regions, merge with existing, save, notify. */
-export async function refreshOrgs(user = 'system'): Promise<OrgEntry[]> {
+export async function refreshOrgs(user = 'system'): Promise<{ data: OrgEntry[]; warnings: string[] }> {
   const regions = getCfRegions();
   if (regions.length === 0) {
     throw Object.assign(
@@ -166,9 +117,9 @@ export async function refreshOrgs(user = 'system'): Promise<OrgEntry[]> {
     );
   }
 
-  const saIndex     = buildSubaccountIndex();
-  const existing    = await readOrgs();
-  const existingKeys = new Set(existing.map(o => `${o.region}/${o.org_id}`));
+  const { index: cisIndex, warning } = await getCisSubaccountIndex(regions);
+  const warnings  = warning ? [warning] : [];
+  const existing  = await readOrgs();
 
   const fresh: OrgEntry[] = [];
   for (const region of regions) {
@@ -185,15 +136,15 @@ export async function refreshOrgs(user = 'system'): Promise<OrgEntry[]> {
       }
 
       for (const { guid, name } of cfOrgs) {
-        const sa = saIndex.get(guid);
+        const cis = cisIndex.get(name);
         fresh.push({
           region,
-          global_account_id:   sa?.global_account_id ?? '',
+          global_account_id:   cis?.global_account_id ?? '',
           org_id:              guid,
           org_name:            name,
-          subdomain:           sa?.subdomain ?? '',
-          subaccount_id:       sa?.id        ?? '',
-          subaccount_name:     '',
+          subdomain:           cis?.subdomain         ?? '',
+          subaccount_id:       cis?.subaccount_id     ?? '',
+          subaccount_name:     cis?.subaccount_name   ?? '',
           alias:               '',
           directories:         '',
           pos:                 0,
@@ -215,16 +166,14 @@ export async function refreshOrgs(user = 'system'): Promise<OrgEntry[]> {
 
   const merged = mergeOrgs(existing, fresh);
 
-  // Fill empty editable fields from homepage.json metadata
+  // Apply CIS overlay — overwrite subaccount fields from authoritative BTP hierarchy
   for (const o of merged) {
-    const meta = saIndex.get(o.org_id);
-    if (!meta) continue;
-    if (!o.alias)             o.alias             = meta.name;
-    if (!o.directories)       o.directories       = meta.dirShort;
-    if (!o.subdomain)         o.subdomain         = meta.subdomain;
-    if (!o.subaccount_id)     o.subaccount_id     = meta.id;
-    if (!o.global_account_id) o.global_account_id = meta.global_account_id;
-    if (!existingKeys.has(`${o.region}/${o.org_id}`)) o.pos = meta.hpPos;
+    const cis = cisIndex.get(o.org_name);
+    if (!cis) continue;
+    o.global_account_id = cis.global_account_id;
+    o.subaccount_id     = cis.subaccount_id;
+    o.subaccount_name   = cis.subaccount_name;
+    o.subdomain         = cis.subdomain;
   }
 
   const normalized = normalizeOrgPositions(merged);
@@ -232,7 +181,7 @@ export async function refreshOrgs(user = 'system'): Promise<OrgEntry[]> {
   await writeOrgs(normalized);
   await appendConfigChangelog('Refresh', user, 'orgs.json', diff);
   await prefillDirsIfEmpty();
-  return normalized;
+  return { data: normalized, warnings };
 }
 
 /** Save admin-edited orgs (preserves all fields as-is, just persists and notifies). */
