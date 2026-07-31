@@ -346,21 +346,23 @@ const MOCK_RESP_BODY = JSON.stringify(
 );
 
 function TestTab() {
-  const [method,      setMethod]      = useState<HttpMethod>('GET');
-  const [url,         setUrl]         = useState('');
-  const [reqHeaders,  setReqHeaders]  = useState<TestHeader[]>([{ key: '', value: '' }]);
-  const [body,        setBody]        = useState('');
-  const [reqSection,  setReqSection]  = useState<'headers' | 'body'>('headers');
-  const [respSection, setRespSection] = useState<'body' | 'headers'>('headers');
+  const [method,     setMethod]     = useState<HttpMethod>('GET');
+  const [url,        setUrl]        = useState('');
+  const [reqHeaders, setReqHeaders] = useState<TestHeader[]>([{ key: '', value: '' }]);
+  const [body,       setBody]       = useState('');
+  const [vertSplit,  setVertSplit]  = useState(50);
+  const [reqSplit,   setReqSplit]   = useState(45);
+  const [respSplit,  setRespSplit]  = useState(45);
+
+  const vertContainerRef = useRef<HTMLDivElement>(null);
+  const reqContainerRef  = useRef<HTMLDivElement>(null);
+  const respContainerRef = useRef<HTMLDivElement>(null);
 
   const btnBase    = 'inline-flex items-center gap-1.5 px-3 py-1.5 rounded text-xs font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed';
   const btnPrimary = `${btnBase} bg-primary text-primary-foreground hover:bg-primary/90`;
-  const tabCls     = (active: boolean) =>
-    `px-3 py-1.5 text-xs transition-colors border-b-2 shrink-0 ${
-      active ? 'border-primary text-foreground font-medium' : 'border-transparent text-muted-foreground hover:text-foreground'
-    }`;
-
-  const filledHeaders = reqHeaders.filter(h => h.key).length;
+  const paneHdr    = 'px-3 py-1.5 text-[10px] font-semibold text-muted-foreground uppercase tracking-wide border-b border-border bg-muted/5 shrink-0 flex items-center';
+  const colDrag    = 'w-1.5 bg-border hover:bg-primary/50 active:bg-primary/70 cursor-col-resize shrink-0 transition-colors select-none';
+  const rowDrag    = 'h-1.5 bg-border hover:bg-primary/50 active:bg-primary/70 cursor-row-resize shrink-0 transition-colors select-none';
 
   function addHeader() { setReqHeaders(h => [...h, { key: '', value: '' }]); }
   function updateHeader(i: number, patch: Partial<TestHeader>) {
@@ -368,120 +370,148 @@ function TestTab() {
   }
   function removeHeader(i: number) { setReqHeaders(h => h.filter((_, j) => j !== i)); }
 
+  function startDrag(
+    containerRef: React.RefObject<HTMLDivElement | null>,
+    setSplit: React.Dispatch<React.SetStateAction<number>>,
+    axis: 'x' | 'y',
+  ) {
+    return (e: React.MouseEvent) => {
+      e.preventDefault();
+      const container = containerRef.current;
+      if (!container) return;
+      const onMove = (ev: MouseEvent) => {
+        const rect = container.getBoundingClientRect();
+        const pct = axis === 'x'
+          ? ((ev.clientX - rect.left)  / rect.width)  * 100
+          : ((ev.clientY - rect.top)   / rect.height) * 100;
+        setSplit(Math.min(78, Math.max(22, pct)));
+      };
+      const onUp = () => {
+        document.removeEventListener('mousemove', onMove);
+        document.removeEventListener('mouseup', onUp);
+      };
+      document.addEventListener('mousemove', onMove);
+      document.addEventListener('mouseup', onUp);
+    };
+  }
+
   return (
     <div className="flex flex-col h-full">
 
-      {/* ── Request (top ~50%) ── */}
-      <div className="flex flex-col min-h-0" style={{ flex: '1 1 0' }}>
-        <div className="flex items-center gap-2 px-4 py-3 border-b border-border shrink-0">
-          <select
-            value={method}
-            onChange={e => setMethod(e.target.value as HttpMethod)}
-            className="h-8 px-2 text-xs border border-border rounded bg-background text-foreground outline-none focus:ring-1 focus:ring-ring font-mono"
-          >
-            {(['GET', 'POST', 'PUT', 'DELETE', 'PATCH'] as HttpMethod[]).map(m => (
-              <option key={m} value={m}>{m}</option>
-            ))}
-          </select>
-          <input
-            type="text"
-            value={url}
-            onChange={e => setUrl(e.target.value)}
-            placeholder="https://example.com/api/..."
-            className="flex-1 h-8 px-3 text-xs border border-border rounded bg-background text-foreground outline-none focus:ring-1 focus:ring-ring font-mono placeholder:text-muted-foreground/50"
-          />
-          <button disabled title="Not implemented yet" className={btnPrimary}>
-            <Send className="h-3.5 w-3.5" />
-            Send
-          </button>
-        </div>
-
-        <div className="flex items-center border-b border-border px-2 shrink-0">
-          <span className="text-xs font-semibold text-muted-foreground py-2 mr-2 px-2">Request</span>
-          <button className={tabCls(reqSection === 'headers')} onClick={() => setReqSection('headers')}>
-            Headers{filledHeaders > 0 && <span className="ml-1 text-primary">({filledHeaders})</span>}
-          </button>
-          <button className={tabCls(reqSection === 'body')} onClick={() => setReqSection('body')}>Body</button>
-        </div>
-
-        <div className="flex-1 overflow-auto p-4 min-h-0">
-          {reqSection === 'headers' ? (
-            <div className="space-y-1.5">
-              {reqHeaders.map((h, i) => (
-                <div key={i} className="flex items-center gap-2">
-                  <input
-                    value={h.key}
-                    onChange={e => updateHeader(i, { key: e.target.value })}
-                    placeholder="Header name"
-                    className="w-44 h-7 px-2 text-xs border border-border rounded bg-background font-mono outline-none focus:ring-1 focus:ring-ring placeholder:text-muted-foreground/40"
-                  />
-                  <input
-                    value={h.value}
-                    onChange={e => updateHeader(i, { value: e.target.value })}
-                    placeholder="Value"
-                    className="flex-1 h-7 px-2 text-xs border border-border rounded bg-background font-mono outline-none focus:ring-1 focus:ring-ring placeholder:text-muted-foreground/40"
-                  />
-                  <button onClick={() => removeHeader(i)} className="text-muted-foreground/40 hover:text-destructive transition-colors">
-                    <X className="h-3.5 w-3.5" />
-                  </button>
-                </div>
-              ))}
-              <button onClick={addHeader} className="inline-flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors mt-1">
-                <Plus className="h-3.5 w-3.5" />
-                Add header
-              </button>
-            </div>
-          ) : (
-            <textarea
-              value={body}
-              onChange={e => setBody(e.target.value)}
-              placeholder='{"key": "value"}'
-              className="w-full h-full min-h-[80px] p-3 text-xs border border-border rounded bg-background font-mono outline-none focus:ring-1 focus:ring-ring resize-none placeholder:text-muted-foreground/40"
-            />
-          )}
-        </div>
+      {/* URL bar (always visible) */}
+      <div className="flex items-center gap-2 px-4 py-3 border-b border-border shrink-0">
+        <select
+          value={method}
+          onChange={e => setMethod(e.target.value as HttpMethod)}
+          className="h-8 px-2 text-xs border border-border rounded bg-background text-foreground outline-none focus:ring-1 focus:ring-ring font-mono"
+        >
+          {(['GET', 'POST', 'PUT', 'DELETE', 'PATCH'] as HttpMethod[]).map(m => (
+            <option key={m} value={m}>{m}</option>
+          ))}
+        </select>
+        <input
+          type="text"
+          value={url}
+          onChange={e => setUrl(e.target.value)}
+          placeholder="https://example.com/api/..."
+          className="flex-1 h-8 px-3 text-xs border border-border rounded bg-background text-foreground outline-none focus:ring-1 focus:ring-ring font-mono placeholder:text-muted-foreground/50"
+        />
+        <button disabled title="Not implemented yet" className={btnPrimary}>
+          <Send className="h-3.5 w-3.5" />
+          Send
+        </button>
       </div>
 
-      {/* ── Response (bottom ~50%) ── */}
-      <div className="flex flex-col min-h-0 border-t-2 border-border" style={{ flex: '1 1 0' }}>
-        <div className="flex items-center px-4 border-b border-border bg-muted/10 shrink-0 gap-1">
-          <span className="text-xs font-semibold text-muted-foreground py-2 mr-2 px-2">Response</span>
-          <button className={tabCls(respSection === 'headers')} onClick={() => setRespSection('headers')}>
-            Headers ({MOCK_RESP_HEADERS.length})
-          </button>
-          <button className={tabCls(respSection === 'body')}    onClick={() => setRespSection('body')}>Body</button>
-          <div className="ml-auto flex items-center gap-3 py-2">
-            <span className="text-xs font-mono text-muted-foreground">2910 ms</span>
-            <span className="text-xs font-mono font-semibold text-green-600 dark:text-green-400">[200] OK</span>
+      {/* Vertically adjustable Request / Response split */}
+      <div ref={vertContainerRef} className="flex flex-col flex-1 min-h-0">
+
+        {/* ── Request (top, vertSplit %) ── */}
+        <div style={{ height: `${vertSplit}%` }} className="flex flex-col min-h-0 overflow-hidden">
+          <div ref={reqContainerRef} className="flex flex-1 min-h-0">
+            <div style={{ width: `${reqSplit}%` }} className="flex flex-col min-w-0">
+              <div className={paneHdr}>Request Headers</div>
+              <div className="flex-1 overflow-auto p-3 space-y-1.5">
+                {reqHeaders.map((h, i) => (
+                  <div key={i} className="flex items-center gap-2">
+                    <input
+                      value={h.key}
+                      onChange={e => updateHeader(i, { key: e.target.value })}
+                      placeholder="Name"
+                      className="w-36 h-7 px-2 text-xs border border-border rounded bg-background font-mono outline-none focus:ring-1 focus:ring-ring placeholder:text-muted-foreground/40"
+                    />
+                    <input
+                      value={h.value}
+                      onChange={e => updateHeader(i, { value: e.target.value })}
+                      placeholder="Value"
+                      className="flex-1 h-7 px-2 text-xs border border-border rounded bg-background font-mono outline-none focus:ring-1 focus:ring-ring placeholder:text-muted-foreground/40"
+                    />
+                    <button onClick={() => removeHeader(i)} className="text-muted-foreground/40 hover:text-destructive transition-colors shrink-0">
+                      <X className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
+                ))}
+                <button onClick={addHeader} className="inline-flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors mt-1">
+                  <Plus className="h-3.5 w-3.5" />
+                  Add header
+                </button>
+              </div>
+            </div>
+
+            <div onMouseDown={startDrag(reqContainerRef, setReqSplit, 'x')} className={colDrag} />
+
+            <div className="flex flex-col flex-1 min-w-0">
+              <div className={paneHdr}>Request Body</div>
+              <textarea
+                value={body}
+                onChange={e => setBody(e.target.value)}
+                placeholder='{"key": "value"}'
+                className="flex-1 p-3 text-xs font-mono bg-transparent outline-none resize-none placeholder:text-muted-foreground/40 text-foreground"
+              />
+            </div>
           </div>
         </div>
 
-        <div className="flex-1 overflow-auto min-h-0">
-          {respSection === 'body' ? (
-            <textarea
-              readOnly
-              value={MOCK_RESP_BODY}
-              className="w-full h-full p-4 text-xs font-mono bg-muted/5 outline-none resize-none text-foreground leading-relaxed"
-            />
-          ) : (
-            <table className="w-full text-xs border-collapse">
-              <thead>
-                <tr className="bg-muted/40">
-                  <th className="px-4 py-2 text-left font-medium text-muted-foreground border-b border-border w-48">Header</th>
-                  <th className="px-4 py-2 text-left font-medium text-muted-foreground border-b border-border">Value</th>
-                </tr>
-              </thead>
-              <tbody>
-                {MOCK_RESP_HEADERS.map(h => (
-                  <tr key={h.key} className="hover:bg-muted/20">
-                    <td className="px-4 py-1.5 border-b border-border font-mono text-muted-foreground">{h.key}</td>
-                    <td className="px-4 py-1.5 border-b border-border font-mono">{h.value}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
+        {/* Vertical (row) drag handle between Request and Response */}
+        <div onMouseDown={startDrag(vertContainerRef, setVertSplit, 'y')} className={rowDrag} />
+
+        {/* ── Response (bottom, remaining space) ── */}
+        <div className="flex flex-col flex-1 min-h-0 overflow-hidden">
+          <div ref={respContainerRef} className="flex flex-1 min-h-0">
+            <div style={{ width: `${respSplit}%` }} className="flex flex-col min-w-0">
+              <div className={paneHdr}>
+                Response Headers
+                <div className="ml-auto flex items-center gap-2 normal-case tracking-normal font-normal">
+                  <span className="text-[10px] font-mono text-muted-foreground">2910 ms</span>
+                  <span className="text-[10px] font-mono font-semibold text-green-600 dark:text-green-400">[200] OK</span>
+                </div>
+              </div>
+              <div className="flex-1 overflow-auto">
+                <table className="w-full text-xs border-collapse">
+                  <tbody>
+                    {MOCK_RESP_HEADERS.map(h => (
+                      <tr key={h.key} className="hover:bg-muted/20">
+                        <td className="px-3 py-1.5 border-b border-border font-mono text-muted-foreground whitespace-nowrap">{h.key}</td>
+                        <td className="px-3 py-1.5 border-b border-border font-mono break-all">{h.value}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            <div onMouseDown={startDrag(respContainerRef, setRespSplit, 'x')} className={colDrag} />
+
+            <div className="flex flex-col flex-1 min-w-0">
+              <div className={paneHdr}>Response Body</div>
+              <textarea
+                readOnly
+                value={MOCK_RESP_BODY}
+                className="flex-1 p-3 text-xs font-mono bg-muted/5 outline-none resize-none text-foreground leading-relaxed"
+              />
+            </div>
+          </div>
         </div>
+
       </div>
     </div>
   );
