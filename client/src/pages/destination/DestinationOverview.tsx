@@ -97,6 +97,17 @@ export default function DestinationOverview() {
 
   useEffect(() => { void loadData().catch(() => setError('Failed to load data')); }, []);
 
+  useEffect(() => {
+    const es = new EventSource('/api/events?dest=1');
+    es.addEventListener('update', () => {
+      void fetch('/api/destinations')
+        .then(r => r.json() as Promise<{ ok: boolean; data: DestData }>)
+        .then(({ ok, data }) => { if (ok) setDestData(data); })
+        .catch(() => {});
+    });
+    return () => es.close();
+  }, []);
+
   // Open modal from deep-link URL: /destinations/:region/:subdomain/:name
   useEffect(() => {
     if (deepLinkOpened.current || !regionParam || !subdomainParam || orgData.length === 0) return;

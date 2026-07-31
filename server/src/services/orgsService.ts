@@ -87,7 +87,9 @@ async function writeOrgs(data: OrgRegion[]): Promise<void> {
   await mkdir(CONFIG_DIR, { recursive: true });
   await writeFile(ORGS_PATH, JSON.stringify(data, null, 2), 'utf-8');
   notifyCallbacks();
-  emit('root', { files: ['config/orgs.json'], ts: Date.now() });
+  const ts = Date.now();
+  emit('root', { files: ['config/orgs.json'], ts });
+  emit('config', { files: ['orgs.json'], ts });
   logger.info({ regions: data.length, total: data.reduce((n, r) => n + r.orgs.length, 0) }, 'orgs.json saved');
 }
 
@@ -241,6 +243,8 @@ export async function importConfig(data: Record<string, unknown>): Promise<void>
     await fsWriteFile(join(CONFIG_DIR, `${key}.json`), JSON.stringify(value, null, 2), 'utf-8');
   }
   notifyCallbacks();
-  emit('root', { files: Object.keys(data).map(k => `config/${k}.json`), ts: Date.now() });
+  const ts = Date.now();
+  emit('root',   { files: Object.keys(data).map(k => `config/${k}.json`), ts });
+  emit('config', { ts });
   logger.info({ keys: Object.keys(data).length }, 'Config imported');
 }

@@ -31,7 +31,9 @@ async function writeDirs(data: DirTab[]): Promise<void> {
   await mkdir(CONFIG_DIR, { recursive: true });
   await writeFile(DIRS_PATH, JSON.stringify(data, null, 2), 'utf-8');
   notifyCallbacks();
-  emit('root', { files: ['config/dirs.json'], ts: Date.now() });
+  const ts = Date.now();
+  emit('root', { files: ['config/dirs.json'], ts });
+  emit('config', { files: ['dirs.json'], ts });
   logger.info({ tabs: data.length, total: data.reduce((n, t) => n + t.dirs.length, 0) }, 'dirs.json saved');
 }
 
