@@ -401,8 +401,12 @@ async function executeSync(
       const localMtimes = new Map((localFolders[folder] ?? []).map(f => [f.name, f.mtime]));
       for (const f of files) {
         const localMtime = localMtimes.get(f.name);
-        // localMtime undefined means either missing or older than sinceMs — both need download
-        if (localMtime !== undefined && (!f.mtime || localMtime >= f.mtime)) continue;
+        // localMtime undefined means either missing or older than sinceMs — both need download.
+        // Round both sides to second precision: remote returns precise ms but local filesystems
+        // on some VMs store mtime at 1-second granularity, so utimes(remote_ms) reads back as
+        // floor(remote_ms/1000)*1000 locally. Comparing at second precision avoids re-downloading
+        // unchanged files while still catching genuine updates (different second).
+        if (localMtime !== undefined && (!f.mtime || Math.round(localMtime / 1000) >= Math.round(f.mtime / 1000))) continue;
         missing.push(fp(folder, f.name));
       }
     }
