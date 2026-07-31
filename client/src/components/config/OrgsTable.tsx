@@ -139,8 +139,8 @@ export default function OrgsTable({ data, onChange, isDirty, onRefresh, isRefres
       {/* Table */}
       <div className="flex-1 overflow-auto">
         <table className="w-full border-collapse text-sm" style={{ tableLayout: 'fixed', minWidth: 900 }}>
-          <thead className="sticky top-0 bg-background z-10">
-            <tr>
+          <thead className="sticky top-0 z-10">
+            <tr className="bg-muted/40">
               <th className={`${thCls} w-6`} style={{ width: 28 }} />
               <th className={rszThCls} style={{ resize: 'horizontal', width: 140, minWidth: 100 }}>Region / Org Name</th>
               <th className={rszThCls} style={{ resize: 'horizontal', width: 120, minWidth: 80 }}>Org ID</th>
@@ -170,7 +170,7 @@ export default function OrgsTable({ data, onChange, isDirty, onRefresh, isRefres
               return [
                 <tr
                   key={`region-${region.region}`}
-                  className="bg-muted/40 cursor-pointer select-none hover:bg-muted/60"
+                  className="bg-muted/20 cursor-pointer select-none hover:bg-muted/30"
                   onClick={() => !isFiltering && toggleRegion(region.region)}
                 >
                   <td colSpan={10} className="px-2 py-1.5 border-b border-border">
