@@ -25,7 +25,7 @@ modules:
         - npm run build:client --prefix ..
         - npm run build:server --prefix ..
       ignore:
-        - response/
+        - localStore/
         - pw-browsers/
     properties:
       CONFIG_FILE: ./config.json

@@ -1,4 +1,4 @@
-FROM node:22-slim
+FROM node:24-slim
 
 # openssh-server — required for `cf ssh` on Cloud Foundry Docker deployments
 # ca-certificates — needed for outbound HTTPS calls at runtime
