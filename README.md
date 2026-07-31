@@ -851,4 +851,4 @@ npm run logs-idle     # tail live logs from btp-admin-idle (the idle instance du
 npm run logs-recent   # print recent logs from btp-admin
 ```
 
-Use `npm run logs-idle` when a blue-green deploy is in progress to monitor the new "green" instance before traffic is switched to it.
+> Use `npm run logs-idle` when a blue-green deploy is in progress to monitor the new "green" instance before traffic is switched to it.

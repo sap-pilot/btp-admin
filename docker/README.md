@@ -1,6 +1,6 @@
-# BTP Status — Docker Image
+# BTP Admin — Docker Image
 
-A Docker image for **BTP Status** based on Node.js 22 (slim).  
+A Docker image for **BTP Admin** based on Node.js 24 (slim).  
 The image is built from **locally compiled artifacts** — run `npm run build` first,
 then `docker/build.sh` packages the output and pushes it to a registry.
 
@@ -8,7 +8,7 @@ then `docker/build.sh` packages the output and pushes it to a registry.
 
 | Component | Source |
 |-----------|--------|
-| Node.js 22 | `node:22-slim` (Debian Bookworm) |
+| Node.js 24 | `node:24-slim` (Debian Bookworm) |
 | Server code | `server/dist/` — TypeScript compiled locally before `docker build` |
 | React client | `server/public/` — Vite-built assets, compiled locally before `docker build` |
 | Server deps | Installed by `npm ci --workspace=server --omit=dev` inside the image |
@@ -67,11 +67,11 @@ npm run build
 # 2. Build and push the Docker image
 SHA=$(git rev-parse --short HEAD)
 docker build -f docker/Dockerfile \
-  -t sapux/btp-status:${SHA} \
-  -t sapux/btp-status:latest \
+  -t sapux/btp-admin:${SHA} \
+  -t sapux/btp-admin:latest \
   .
-docker push sapux/btp-status:${SHA}
-docker push sapux/btp-status:latest
+docker push sapux/btp-admin:${SHA}
+docker push sapux/btp-admin:latest
 ```
 
 ---
@@ -84,7 +84,7 @@ docker run --rm \
   -e PORT=3000 \
   -e CONFIG_JSON='{"services":[...]}' \
   -v "$(pwd)/response:/app/server/response" \
-  sapux/btp-status:latest
+  sapux/btp-admin:latest
 ```
 
 Open http://localhost:3000/overview
@@ -108,7 +108,7 @@ Open http://localhost:3000/overview
 After `./docker/build.sh` prints the SHA tag, push it directly to the running CF app:
 
 ```bash
-cf push btp-status --docker-image sapux/btp-status:<sha>
+cf push btp-admin --docker-image sapux/btp-admin:<sha>
 ```
 
 CF pulls the image by its exact SHA tag so it cannot reuse a cached layer.  
@@ -123,12 +123,12 @@ Update the `docker.image` value in `mta.yaml` to the SHA tag, then deploy:
 
 ```yaml
 modules:
-  - name: btp-status
+  - name: btp-admin
     type: nodejs
     path: server
     parameters:
       docker:
-        image: sapux/btp-status:<sha>   # ← SHA tag from build.sh
+        image: sapux/btp-admin:<sha>   # ← SHA tag from build.sh
       memory: 1G
       disk-quota: 4G
       enable-ssh: true
@@ -140,7 +140,7 @@ modules:
 
 ```bash
 mbt build
-cf deploy mta_archives/btp-status_0.3.0.mtar -f --retries 1 \
+cf deploy mta_archives/btp-admin_1.1.0.mtar -f --retries 1 \
   --strategy blue-green --skip-testing-phase
 ```
 
@@ -149,7 +149,7 @@ cf deploy mta_archives/btp-status_0.3.0.mtar -f --retries 1 \
 
 ### CF SSH
 
-`enable-ssh: true` in `mta.yaml` enables `cf ssh btp-status`.
+`enable-ssh: true` in `mta.yaml` enables `cf ssh btp-admin`.
 The image includes `openssh-server` as required by the CF Docker SSH specification.
 
 ### PORT binding
