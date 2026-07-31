@@ -41,6 +41,16 @@ export async function saveDirs(data: DirTab[]): Promise<void> {
   await writeDirs(data);
 }
 
+/** Sort each tab's dirs by pos ascending, reassign pos = index+1 (1-based unique). */
+function normalizeDirPositions(data: DirTab[]): DirTab[] {
+  return data.map(tab => ({
+    ...tab,
+    dirs: [...tab.dirs]
+      .sort((a, b) => a.pos - b.pos)
+      .map((d, idx) => ({ ...d, pos: idx + 1 })),
+  }));
+}
+
 /** Prefill dirs.json from homepage.json tabs/directories — only runs when dirs.json is empty. */
 export async function prefillDirsIfEmpty(): Promise<void> {
   const current = await readDirs();
@@ -79,8 +89,9 @@ export async function prefillDirsIfEmpty(): Promise<void> {
     }
 
     if (prefilled.length > 0) {
-      await writeDirs(prefilled);
-      logger.info({ tabs: prefilled.length }, 'dirs.json prefilled from homepage.json');
+      const normalized = normalizeDirPositions(prefilled);
+      await writeDirs(normalized);
+      logger.info({ tabs: normalized.length }, 'dirs.json prefilled from homepage.json');
     }
   } catch { /* homepage.json missing or invalid — skip prefill */ }
 }

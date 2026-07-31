@@ -93,6 +93,26 @@ async function writeOrgs(data: OrgRegion[]): Promise<void> {
   logger.info({ regions: data.length, total: data.reduce((n, r) => n + r.orgs.length, 0) }, 'orgs.json saved');
 }
 
+/**
+ * Sort all orgs globally (pos>0 first ascending, then unset pos by directories→subdomain),
+ * reassign pos = index+1 (1-based unique), reconstruct OrgRegion[] preserving region membership.
+ */
+function normalizeOrgPositions(data: OrgRegion[]): OrgRegion[] {
+  const flat = data.flatMap(r => r.orgs.map(o => ({ org: { ...o }, region: r.region })));
+  flat.sort((a, b) => {
+    const aPosSet = a.org.pos > 0;
+    const bPosSet = b.org.pos > 0;
+    if (aPosSet !== bPosSet) return aPosSet ? -1 : 1;
+    if (aPosSet) return a.org.pos - b.org.pos;
+    return a.org.directories.localeCompare(b.org.directories) || a.org.subdomain.localeCompare(b.org.subdomain);
+  });
+  flat.forEach((f, idx) => { f.org.pos = idx + 1; });
+  return data.map(r => ({
+    ...r,
+    orgs: flat.filter(f => f.region === r.region).map(f => f.org),
+  }));
+}
+
 function mergeOrgs(existing: OrgRegion[], fresh: OrgRegion[]): OrgRegion[] {
   const editableByKey = new Map<string, Pick<OrgEntry, 'alias' | 'directories' | 'pos' | 'subdomain' | 'subaccount_id' | 'includeInHomepage' | 'manageDestination' | 'manageApps'>>();
   for (const r of existing) {
@@ -208,9 +228,10 @@ export async function refreshOrgs(): Promise<OrgRegion[]> {
     }
   }
 
-  await writeOrgs(merged);
+  const normalized = normalizeOrgPositions(merged);
+  await writeOrgs(normalized);
   await prefillDirsIfEmpty();
-  return merged;
+  return normalized;
 }
 
 /** Save admin-edited orgs (preserves all fields as-is, just persists and notifies). */
