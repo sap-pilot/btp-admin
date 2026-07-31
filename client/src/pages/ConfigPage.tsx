@@ -5,8 +5,8 @@ import { useSidebar } from '@/components/AppLayout';
 import OrgsTable, { type OrgRegion } from '@/components/config/OrgsTable';
 import DirsTable, { type DirTab } from '@/components/config/DirsTable';
 
-type Tab = 'orgs' | 'dirs' | 'menus';
-const VALID_TABS = new Set<Tab>(['orgs', 'dirs', 'menus']);
+type Tab = 'orgs' | 'dirs' | 'systems' | 'menus' | 'links';
+const VALID_TABS = new Set<Tab>(['orgs', 'dirs', 'systems', 'menus', 'links']);
 
 export default function ConfigPage() {
   const { tab: tabParam } = useParams<{ tab: string }>();
@@ -203,15 +203,21 @@ export default function ConfigPage() {
       {/* Tab bar */}
       <div className="flex items-center border-b border-border shrink-0 px-2">
         <button className={tabCls('orgs')} onClick={() => goTab('orgs')}>
-          Subaccounts / Orgs
+          Orgs
           {totalOrgs > 0 && <span className="ml-1.5 text-[10px] text-muted-foreground">({totalOrgs})</span>}
         </button>
         <button className={tabCls('dirs')} onClick={() => goTab('dirs')}>
-          Tabs / Directories
+          Tabs / Dirs
           {totalDirs > 0 && <span className="ml-1.5 text-[10px] text-muted-foreground">({totalDirs})</span>}
         </button>
+        <button className={tabCls('systems')} onClick={() => goTab('systems')}>
+          Other Systems
+        </button>
         <button className={tabCls('menus')} onClick={() => goTab('menus')}>
-          Menu / Links
+          Menus
+        </button>
+        <button className={tabCls('links')} onClick={() => goTab('links')}>
+          Link Templates
         </button>
       </div>
 
@@ -246,9 +252,9 @@ export default function ConfigPage() {
             onSave={handleDirsSave}
           />
         )}
-        {activeTab === 'menus' && (
+        {(activeTab === 'systems' || activeTab === 'menus' || activeTab === 'links') && (
           <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
-            Menu / Links configuration — coming soon
+            Under construction
           </div>
         )}
       </div>
