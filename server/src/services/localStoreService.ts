@@ -20,6 +20,24 @@ function formatTimestamp(d: Date): string {
   );
 }
 
+/**
+ * Formats a Unix-ms timestamp as a yyyyMMdd-HHmmss UTC string.
+ * Used for the browseT response field and ?since= URL parameter.
+ */
+export function formatBrowseT(ms: number): string {
+  return formatTimestamp(new Date(ms));
+}
+
+/**
+ * Parses a yyyyMMdd-HHmmss UTC string (browseT format) to Unix milliseconds.
+ * Returns 0 if the string is not in the expected format.
+ */
+export function parseBrowseT(s: string): number {
+  const m = s.match(/^(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2})(\d{2})$/);
+  if (!m) return 0;
+  return Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +m[6]);
+}
+
 /** Replace non-alphanumeric runs with a single dash; trim leading/trailing dashes. */
 function sanitizeEndpointName(name: string): string {
   return name.replace(/[^a-zA-Z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'endpoint';

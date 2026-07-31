@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { readRawResponseFile, readRootFile, readResponseFile, readScreenshotFile, readConsoleLogFile, readContentFile, browseResponseFiles } from '../services/localStoreService.js';
+import { readRawResponseFile, readRootFile, readResponseFile, readScreenshotFile, readConsoleLogFile, readContentFile, browseResponseFiles, formatBrowseT, parseBrowseT } from '../services/localStoreService.js';
 import { buildZip } from '../services/zipBuilder.js';
 import { syncFromRemote, handleDownloadTrigger, registerCallback, type SyncStats } from '../services/syncService.js';
 import { config } from '../config.js';
@@ -121,7 +121,18 @@ router.get('/download-trigger', requireSyncAuth, (req, res) => {
 router.get('/browse', requireSyncAuthOrOpen, async (req, res, next) => {
   try {
     const rawSince = req.query['since'];
-    const since = typeof rawSince === 'string' ? parseInt(rawSince, 10) : undefined;
+    let sinceMs: number | undefined;
+    if (typeof rawSince === 'string' && rawSince) {
+      if (/^\d{8}-\d{6}$/.test(rawSince)) {
+        // New format: yyyyMMdd-HHmmss UTC
+        const parsed = parseBrowseT(rawSince);
+        if (parsed > 0) sinceMs = parsed;
+      } else {
+        // Legacy: bare Unix-ms timestamp from older consumers
+        const n = parseInt(rawSince, 10);
+        if (n > 0) sinceMs = n;
+      }
+    }
 
     const rawCallback = req.query['callback'];
     if (typeof rawCallback === 'string') {
@@ -133,9 +144,11 @@ router.get('/browse', requireSyncAuthOrOpen, async (req, res, next) => {
       } catch { /* invalid URL — ignore */ }
     }
 
-    const browseTs = Date.now();
-    const folders = await browseResponseFiles(since && since > 0 ? since : undefined);
-    res.json({ folders, browseTs });
+    // Floor to second precision before the FS scan so browseT aligns with
+    // second-precision file mtimes and can be used directly as the next ?since=.
+    const browseT = formatBrowseT(Math.floor(Date.now() / 1000) * 1000);
+    const folders = await browseResponseFiles(sinceMs);
+    res.json({ folders, browseT });
   } catch (err) {
     next(err);
   }
