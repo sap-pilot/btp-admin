@@ -187,16 +187,11 @@ async function persistDestination(
 // ─── Public API ──────────────────────────────────────────────────────────────
 
 export async function refreshDestinations(): Promise<{ refreshed: number; errors: string[] }> {
-  const allOrgs = await readOrgs();
-  const targetOrgs: Array<OrgEntry & { region: string }> = [];
-  for (const { region, orgs } of allOrgs) {
-    for (const org of orgs) {
-      if (org.manageDestination) targetOrgs.push({ ...org, region });
-    }
-  }
+  const allOrgs    = await readOrgs();
+  const targetOrgs = allOrgs.filter(o => o.manage_destinations);
 
   if (targetOrgs.length === 0) {
-    logger.info('No orgs with manageDestination=true — nothing to refresh');
+    logger.info('No orgs with manage_destinations=true — nothing to refresh');
     return { refreshed: 0, errors: [] };
   }
 
@@ -302,10 +297,8 @@ export async function searchDestinations(
 
   const allOrgs = await readOrgs();
   const orgIndex = new Map<string, string>(); // "region/subdomain" → org_id
-  for (const { region, orgs } of allOrgs) {
-    for (const org of orgs) {
-      if (org.manageDestination) orgIndex.set(`${region}/${org.subdomain}`, org.org_id);
-    }
+  for (const org of allOrgs) {
+    if (org.manage_destinations) orgIndex.set(`${org.region}/${org.subdomain}`, org.org_id);
   }
 
   const regions = await readdir(LOCAL_DEST_DIR).catch(() => [] as string[]);
@@ -437,10 +430,8 @@ export async function listDestinations(): Promise<Record<string, Array<{ name: s
   // Build a lookup: region/subdomain → org_id from orgs.json
   const allOrgs = await readOrgs();
   const orgIndex = new Map<string, string>(); // "region/subdomain" → org_id
-  for (const { region, orgs } of allOrgs) {
-    for (const org of orgs) {
-      if (org.manageDestination) orgIndex.set(`${region}/${org.subdomain}`, org.org_id);
-    }
+  for (const org of allOrgs) {
+    if (org.manage_destinations) orgIndex.set(`${org.region}/${org.subdomain}`, org.org_id);
   }
 
   if (!existsSync(LOCAL_DEST_DIR)) return result;

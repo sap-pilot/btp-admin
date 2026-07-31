@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import * as DialogPrimitive from '@radix-ui/react-dialog';
 import { X } from 'lucide-react';
-import OrgsTable, { type OrgRegion } from './OrgsTable';
+import OrgsTable, { type OrgEntry } from './OrgsTable';
 import DirsTable, { type DirTab } from './DirsTable';
 
 interface Props {
@@ -15,8 +15,8 @@ export default function ConfigModal({ open, onClose }: Props) {
   const [activeTab, setActiveTab]         = useState<Tab>('orgs');
 
   // Orgs state
-  const [orgsData, setOrgsData]           = useState<OrgRegion[]>([]);
-  const [originalOrgs, setOriginalOrgs]   = useState<OrgRegion[]>([]);
+  const [orgsData, setOrgsData]           = useState<OrgEntry[]>([]);
+  const [originalOrgs, setOriginalOrgs]   = useState<OrgEntry[]>([]);
   const [isOrgsDirty, setIsOrgsDirty]     = useState(false);
   const [isRefreshing, setIsRefreshing]   = useState(false);
   const [isSavingOrgs, setIsSavingOrgs]   = useState(false);
@@ -37,7 +37,7 @@ export default function ConfigModal({ open, onClose }: Props) {
     setError('');
 
     void fetch('/api/config/orgs')
-      .then(r => r.json() as Promise<{ ok: boolean; data: OrgRegion[] }>)
+      .then(r => r.json() as Promise<{ ok: boolean; data: OrgEntry[] }>)
       .then(({ data }) => { setOrgsData(data); setOriginalOrgs(data); })
       .catch(() => setError('Failed to load orgs'));
 
@@ -47,7 +47,7 @@ export default function ConfigModal({ open, onClose }: Props) {
       .catch(() => setError('Failed to load dirs'));
   }, [open]);
 
-  function handleOrgsChange(data: OrgRegion[]) { setOrgsData(data); setIsOrgsDirty(true); }
+  function handleOrgsChange(data: OrgEntry[]) { setOrgsData(data); setIsOrgsDirty(true); }
 
   async function handleRefresh() {
     if (!window.confirm('Refresh will re-fetch orgs from CF API and merge with local edits. Continue?')) return;
@@ -55,7 +55,7 @@ export default function ConfigModal({ open, onClose }: Props) {
     setError('');
     try {
       const res  = await fetch('/api/config/orgs/refresh', { method: 'POST' });
-      const json = await res.json() as { ok: boolean; data?: OrgRegion[]; error?: string };
+      const json = await res.json() as { ok: boolean; data?: OrgEntry[]; error?: string };
       if (!json.ok) throw new Error(json.error ?? 'Refresh failed');
       setOrgsData(json.data ?? []);
       setOriginalOrgs(json.data ?? []);
@@ -135,7 +135,7 @@ export default function ConfigModal({ open, onClose }: Props) {
         : 'border-transparent text-muted-foreground hover:text-foreground'
     }`;
 
-  const totalOrgs = orgsData.reduce((n, r) => n + r.orgs.length, 0);
+  const totalOrgs = orgsData.length;
   const totalDirs = dirsData.reduce((n, t) => n + t.dirs.length, 0);
 
   return (

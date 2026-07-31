@@ -19,7 +19,7 @@ type Tab        = 'properties' | 'changelog' | 'test';
 type HttpMethod = 'GET' | 'POST' | 'PUT' | 'DELETE' | 'PATCH';
 
 export interface SubaccountDestModalProps {
-  org:          OrgEntry & { region: string };
+  org:          OrgEntry;
   allNames:     string[];
   initialName?: string;
   onClose:      () => void;

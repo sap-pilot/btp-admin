@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { requireAdmin } from '../middleware/requireAuth.js';
 import type { AuthRequest } from '../middleware/requireAuth.js';
 import { readOrgs, refreshOrgs, saveOrgs, exportConfig, importConfig } from '../services/orgsService.js';
-import type { OrgRegion } from '../services/orgsService.js';
+import type { OrgEntry } from '../services/orgsService.js';
 import { readDirs, saveDirs } from '../services/dirsService.js';
 import type { DirTab } from '../services/dirsService.js';
 import { readConfigChangelog } from '../services/configChangelogService.js';
@@ -34,7 +34,7 @@ router.post('/orgs/save', requireAdmin, async (req, res, next) => {
       res.status(400).json({ ok: false, error: 'data must be an array' });
       return;
     }
-    await saveOrgs(data as OrgRegion[], reqUser(req));
+    await saveOrgs(data as OrgEntry[], reqUser(req));
     res.json({ ok: true });
   } catch (err) { next(err); }
 });

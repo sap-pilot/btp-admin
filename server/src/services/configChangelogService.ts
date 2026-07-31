@@ -10,10 +10,9 @@ const CHANGELOG_PATH = join(CONFIG_DIR, 'changelog.md');
 
 // Local type aliases — structurally compatible with orgsService / dirsService types.
 // Kept here to avoid circular imports (orgsService/dirsService import this module).
-interface OrgEntry  { org_id: string; org_name: string; alias: string; directories: string; pos: number; subdomain: string; subaccount_id: string; includeInHomepage: boolean; manageDestination: boolean; manageApps: boolean; }
-interface OrgRegion { region: string; orgs: OrgEntry[]; }
-interface DirEntry  { alias: string; title: string; pos: number; }
-interface DirTab    { tab: string; dirs: DirEntry[]; }
+interface OrgEntry { region: string; global_account_id: string; org_id: string; org_name: string; alias: string; directories: string; pos: number; subdomain: string; subaccount_id: string; include_in_homepage: boolean; manage_destinations: boolean; manage_apps: boolean; }
+interface DirEntry { alias: string; title: string; pos: number; }
+interface DirTab   { tab: string; dirs: DirEntry[]; }
 
 export async function readConfigChangelog(): Promise<string> {
   try { return await readFile(CHANGELOG_PATH, 'utf-8'); }
@@ -51,15 +50,15 @@ export async function appendConfigChangelog(
 
 const ORG_FIELDS = [
   'org_name', 'alias', 'directories', 'pos',
-  'subdomain', 'subaccount_id',
-  'includeInHomepage', 'manageDestination', 'manageApps',
+  'subdomain', 'subaccount_id', 'global_account_id',
+  'include_in_homepage', 'manage_destinations', 'manage_apps',
 ] as const;
 
-export function diffOrgs(before: OrgRegion[], after: OrgRegion[]): string {
+export function diffOrgs(before: OrgEntry[], after: OrgEntry[]): string {
   const beforeMap = new Map<string, OrgEntry>();
   const afterMap  = new Map<string, OrgEntry>();
-  for (const r of before) for (const o of r.orgs) beforeMap.set(`${r.region}/${o.org_id}`, o);
-  for (const r of after)  for (const o of r.orgs) afterMap.set(`${r.region}/${o.org_id}`,  o);
+  for (const o of before) beforeMap.set(`${o.region}/${o.org_id}`, o);
+  for (const o of after)  afterMap.set(`${o.region}/${o.org_id}`,  o);
 
   const lines: string[] = [];
 
