@@ -5,6 +5,7 @@ import { logger } from '../logger.js';
 import { notifyCallbacks } from './syncService.js';
 import { emit } from './liveEvents.js';
 import { readEffectiveHomepageRaw } from './home/homepageEditService.js';
+import { appendConfigChangelog, diffDirs } from './configChangelogService.js';
 
 const CONFIG_DIR = join(config.LOCAL_STORE_DIR, 'config');
 const DIRS_PATH  = join(CONFIG_DIR, 'dirs.json');
@@ -37,8 +38,11 @@ async function writeDirs(data: DirTab[]): Promise<void> {
   logger.info({ tabs: data.length, total: data.reduce((n, t) => n + t.dirs.length, 0) }, 'dirs.json saved');
 }
 
-export async function saveDirs(data: DirTab[]): Promise<void> {
+export async function saveDirs(data: DirTab[], user = 'system'): Promise<void> {
+  const before = await readDirs();
+  const diff   = diffDirs(before, data);
   await writeDirs(data);
+  await appendConfigChangelog('Update', user, 'dirs.json', diff);
 }
 
 /** Sort each tab's dirs by pos ascending, reassign pos = index+1 (1-based unique). */
