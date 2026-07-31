@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useParams, useNavigate } from 'react-router';
 import { PanelLeft, RefreshCw, Search } from 'lucide-react';
 import { useSidebar } from '@/components/AppLayout';
-import type { OrgEntry, OrgRegion } from '@/components/config/OrgsTable';
+import type { OrgEntry } from '@/components/config/OrgsTable';
 import type { DirTab } from '@/components/config/DirsTable';
 import SubaccountDestModal from './SubaccountDestModal';
 
@@ -13,7 +13,7 @@ type DestData = Record<string, DestItem[]>;
 
 interface Buckets { generic: string[]; s4: string[]; cep: string[]; others: string[] }
 
-interface ModalState { org: OrgEntry & { region: string }; allNames: string[]; initialName?: string }
+interface ModalState { org: OrgEntry; allNames: string[]; initialName?: string }
 
 interface DestSearchResult {
   region:     string;
@@ -66,7 +66,7 @@ export default function DestinationOverview() {
   const navigate = useNavigate();
 
   const [dirTabs,  setDirTabs]  = useState<DirTab[]>([]);
-  const [orgData,  setOrgData]  = useState<OrgRegion[]>([]);
+  const [orgData,  setOrgData]  = useState<OrgEntry[]>([]);
   const [destData, setDestData] = useState<DestData>({});
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [error, setError]   = useState('');
@@ -88,7 +88,7 @@ export default function DestinationOverview() {
       fetch('/api/destinations'),
     ]);
     const dirs  = await dirsRes.json()  as { ok: boolean; data: DirTab[] };
-    const orgs  = await orgsRes.json()  as { ok: boolean; data: OrgRegion[] };
+    const orgs  = await orgsRes.json()  as { ok: boolean; data: OrgEntry[] };
     const dests = await destsRes.json() as { ok: boolean; data: DestData };
     if (dirs.ok)  setDirTabs(dirs.data);
     if (orgs.ok)  setOrgData(orgs.data);
@@ -111,9 +111,7 @@ export default function DestinationOverview() {
   // Open modal from deep-link URL: /destinations/:region/:subdomain/:name
   useEffect(() => {
     if (deepLinkOpened.current || !regionParam || !subdomainParam || orgData.length === 0) return;
-    const destOrgs = orgData.flatMap(r =>
-      r.orgs.filter(o => o.manageDestination).map(o => ({ ...o, region: r.region })),
-    );
+    const destOrgs = orgData.filter(o => o.manage_destinations);
     const org = destOrgs.find(o => o.region === regionParam && o.subdomain === subdomainParam);
     if (!org) return;
     deepLinkOpened.current = true;
@@ -165,10 +163,7 @@ export default function DestinationOverview() {
     }
   }
 
-  // Flatten all orgs with their region, filtered to manageDestination=true
-  const allDestOrgs: Array<OrgEntry & { region: string }> = orgData.flatMap(r =>
-    r.orgs.filter(o => o.manageDestination).map(o => ({ ...o, region: r.region })),
-  );
+  const allDestOrgs = orgData.filter(o => o.manage_destinations);
 
   // Build visible tabs: only tabs that have at least one directory with visible orgs
   const visibleTabs = dirTabs.filter(dt =>
@@ -278,7 +273,7 @@ export default function DestinationOverview() {
         {visibleTabs.length === 0 && (
           <div className="flex flex-col items-center justify-center h-full gap-2 text-muted-foreground">
             <p className="text-sm">No destinations configured.</p>
-            <p className="text-xs">Set <code className="bg-muted px-1 rounded">manageDestination=true</code> on orgs in Configuration, then click <strong>Refresh</strong>.</p>
+            <p className="text-xs">Set <code className="bg-muted px-1 rounded">manage_destinations=true</code> on orgs in Configuration, then click <strong>Refresh</strong>.</p>
           </div>
         )}
 

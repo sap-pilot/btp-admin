@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router';
 import { Download, PanelLeft, Upload } from 'lucide-react';
 import { useSidebar } from '@/components/AppLayout';
-import OrgsTable, { type OrgRegion } from '@/components/config/OrgsTable';
+import OrgsTable, { type OrgEntry } from '@/components/config/OrgsTable';
 import DirsTable, { type DirTab } from '@/components/config/DirsTable';
 
 type Tab = 'orgs' | 'dirs' | 'services' | 'systems' | 'menus' | 'links' | 'changelog';
@@ -15,8 +15,8 @@ export default function ConfigPage() {
   const activeTab: Tab    = VALID_TABS.has(tabParam as Tab) ? (tabParam as Tab) : 'orgs';
 
   // Orgs state
-  const [orgsData, setOrgsData]         = useState<OrgRegion[]>([]);
-  const [originalOrgs, setOriginalOrgs] = useState<OrgRegion[]>([]);
+  const [orgsData, setOrgsData]         = useState<OrgEntry[]>([]);
+  const [originalOrgs, setOriginalOrgs] = useState<OrgEntry[]>([]);
   const [isOrgsDirty, setIsOrgsDirty]   = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [isSavingOrgs, setIsSavingOrgs] = useState(false);
@@ -50,7 +50,7 @@ export default function ConfigPage() {
 
   useEffect(() => {
     void fetch('/api/config/orgs')
-      .then(r => r.json() as Promise<{ ok: boolean; data: OrgRegion[] }>)
+      .then(r => r.json() as Promise<{ ok: boolean; data: OrgEntry[] }>)
       .then(({ data }) => { setOrgsData(data); setOriginalOrgs(data); })
       .catch(() => setError('Failed to load orgs'));
 
@@ -76,7 +76,7 @@ export default function ConfigPage() {
       if (busy) return;
       if (!orgsDirty) {
         void fetch('/api/config/orgs')
-          .then(r => r.json() as Promise<{ ok: boolean; data: OrgRegion[] }>)
+          .then(r => r.json() as Promise<{ ok: boolean; data: OrgEntry[] }>)
           .then(({ ok, data }) => { if (ok) { setOrgsData(data); setOriginalOrgs(data); } })
           .catch(() => {});
       }
@@ -93,7 +93,7 @@ export default function ConfigPage() {
 
   function goTab(t: Tab) { navigate(`/config/${t}`, { replace: true }); }
 
-  function handleOrgsChange(data: OrgRegion[]) { setOrgsData(data); setIsOrgsDirty(true); }
+  function handleOrgsChange(data: OrgEntry[]) { setOrgsData(data); setIsOrgsDirty(true); }
 
   async function handleRefresh() {
     if (!window.confirm('Refresh will re-fetch orgs from CF API and merge with local edits. Continue?')) return;
@@ -101,7 +101,7 @@ export default function ConfigPage() {
     setError('');
     try {
       const res  = await fetch('/api/config/orgs/refresh', { method: 'POST' });
-      const json = await res.json() as { ok: boolean; data?: OrgRegion[]; error?: string };
+      const json = await res.json() as { ok: boolean; data?: OrgEntry[]; error?: string };
       if (!json.ok) throw new Error(json.error ?? 'Refresh failed');
       setOrgsData(json.data ?? []);
       setOriginalOrgs(json.data ?? []);
@@ -189,7 +189,7 @@ export default function ConfigPage() {
       const json = await res.json() as { ok: boolean; error?: string };
       if (!json.ok) throw new Error(json.error ?? 'Import failed');
       const [orgsRes, dirsRes] = await Promise.all([
-        fetch('/api/config/orgs').then(r => r.json() as Promise<{ ok: boolean; data: OrgRegion[] }>),
+        fetch('/api/config/orgs').then(r => r.json() as Promise<{ ok: boolean; data: OrgEntry[] }>),
         fetch('/api/config/dirs').then(r => r.json() as Promise<{ ok: boolean; data: DirTab[] }>),
       ]);
       setOrgsData(orgsRes.data); setOriginalOrgs(orgsRes.data); setIsOrgsDirty(false);
@@ -209,7 +209,7 @@ export default function ConfigPage() {
         : 'border-transparent text-muted-foreground hover:text-foreground'
     }`;
 
-  const totalOrgs = orgsData.reduce((n, r) => n + r.orgs.length, 0);
+  const totalOrgs = orgsData.length;
   const totalDirs = dirsData.reduce((n, t) => n + t.dirs.length, 0);
 
   return (

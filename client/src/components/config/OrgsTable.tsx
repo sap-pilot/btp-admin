@@ -7,34 +7,25 @@ export interface SpaceEntry {
 }
 
 export interface OrgEntry {
-  org_id:          string;
-  org_name:        string;
-  subdomain:       string;
-  subaccount_id:   string;
-  subaccount_name: string;
-  alias:           string;
-  directories:     string;
-  pos:             number;
-  includeInHomepage: boolean;
-  manageDestination: boolean;
-  manageApps:        boolean;
-  spaces:          SpaceEntry[];
-}
-
-export interface OrgRegion {
-  region: string;
-  orgs:   OrgEntry[];
-}
-
-interface FlatOrg {
-  org:       OrgEntry;
-  region:    string;
-  sortedIdx: number;
+  region:             string;
+  global_account_id:  string;
+  org_id:             string;
+  org_name:           string;
+  subdomain:          string;
+  subaccount_id:      string;
+  subaccount_name:    string;
+  alias:              string;
+  directories:        string;
+  pos:                number;
+  include_in_homepage: boolean;
+  manage_destinations: boolean;
+  manage_apps:         boolean;
+  spaces:             SpaceEntry[];
 }
 
 interface Props {
-  data:         OrgRegion[];
-  onChange:     (data: OrgRegion[]) => void;
+  data:         OrgEntry[];
+  onChange:     (data: OrgEntry[]) => void;
   isDirty:      boolean;
   onRefresh:    () => void;
   isRefreshing: boolean;
@@ -43,13 +34,14 @@ interface Props {
   onSave:       () => void;
 }
 
-function matchesFilter(org: OrgEntry, region: string, filter: string): boolean {
+function matchesFilter(org: OrgEntry, filter: string): boolean {
   if (!filter) return true;
   const q = filter.toLowerCase();
   return [
+    org.region, org.global_account_id,
     org.org_id, org.org_name, org.subdomain,
     org.subaccount_id, org.subaccount_name,
-    org.alias, org.directories, region,
+    org.alias, org.directories,
   ].some(v => v.toLowerCase().includes(q));
 }
 
@@ -60,25 +52,20 @@ export default function OrgsTable({ data, onChange, isDirty, onRefresh, isRefres
 
   const isFiltering = filter.trim().length > 0;
 
-  const rawFlat = data.flatMap(r => r.orgs.map(o => ({ org: o, region: r.region })));
-  const anyPosSet = rawFlat.some(f => f.org.pos > 0);
-  const sorted = [...rawFlat].sort((a, b) =>
-    anyPosSet
-      ? a.org.pos - b.org.pos
-      : (a.org.directories.localeCompare(b.org.directories) || a.org.subdomain.localeCompare(b.org.subdomain))
-  );
-  const visible: FlatOrg[] = sorted
-    .map((f, sortedIdx) => ({ ...f, sortedIdx }))
-    .filter(f => matchesFilter(f.org, f.region, filter));
+  const anyPosSet = data.some(o => o.pos > 0);
+  const sorted = [...data].sort((a, b) => {
+    const aPosSet = a.pos > 0;
+    const bPosSet = b.pos > 0;
+    if (aPosSet !== bPosSet) return aPosSet ? -1 : 1;
+    if (aPosSet) return a.pos - b.pos;
+    return a.directories.localeCompare(b.directories) || a.subdomain.localeCompare(b.subdomain);
+  });
+  const visible = sorted
+    .map((o, sortedIdx) => ({ o, sortedIdx }))
+    .filter(({ o }) => matchesFilter(o, filter));
 
-  function updateOrg(region: string, orgId: string, patch: Partial<OrgEntry>) {
-    const next = data.map(r =>
-      r.region !== region ? r : {
-        ...r,
-        orgs: r.orgs.map(o => o.org_id !== orgId ? o : { ...o, ...patch }),
-      }
-    );
-    onChange(next);
+  function updateOrg(orgId: string, region: string, patch: Partial<OrgEntry>) {
+    onChange(data.map(o => o.org_id === orgId && o.region === region ? { ...o, ...patch } : o));
   }
 
   function handleDragStart(idx: number) { setDragging(idx); }
@@ -94,14 +81,7 @@ export default function OrgsTable({ data, onChange, isDirty, onRefresh, isRefres
     const reordered = [...sorted];
     const [moved] = reordered.splice(dragging, 1);
     reordered.splice(targetIdx, 0, moved);
-    const next: OrgRegion[] = data.map(r => ({
-      ...r,
-      orgs: reordered
-        .map((f, globalIdx) => ({ f, globalIdx }))
-        .filter(({ f }) => f.region === r.region)
-        .map(({ f, globalIdx }) => ({ ...f.org, pos: globalIdx })),
-    }));
-    onChange(next);
+    onChange(reordered.map((o, idx) => ({ ...o, pos: idx + 1 })));
     setDragging(null);
     setDragOver(null);
   }
@@ -167,19 +147,19 @@ export default function OrgsTable({ data, onChange, isDirty, onRefresh, isRefres
             </tr>
           </thead>
           <tbody>
-            {rawFlat.length === 0 && (
+            {data.length === 0 && (
               <tr>
                 <td colSpan={11} className="px-3 py-8 text-center text-sm text-muted-foreground">
                   No orgs loaded. Click <strong>Refresh</strong> to fetch from CF.
                 </td>
               </tr>
             )}
-            {visible.map(({ org, region, sortedIdx }) => {
+            {visible.map(({ o, sortedIdx }) => {
               const isDraggingRow = dragging === sortedIdx;
               const isDropTarget  = dragOver === sortedIdx;
               return (
                 <tr
-                  key={`${region}-${org.org_id}`}
+                  key={`${o.region}-${o.org_id}`}
                   onDragOver={e => !isFiltering && handleDragOver(e, sortedIdx)}
                   onDrop={e => !isFiltering && handleDrop(e, sortedIdx)}
                   className={`hover:bg-muted/20 ${isDraggingRow ? 'opacity-40' : ''} ${isDropTarget ? 'border-t-2 border-primary' : ''}`}
@@ -192,38 +172,38 @@ export default function OrgsTable({ data, onChange, isDirty, onRefresh, isRefres
                   >
                     <GripVertical className="h-3.5 w-3.5" />
                   </td>
-                  <td className={`${roTdCls} text-[10px] font-semibold`} title={region}>{region}</td>
-                  <td className={`${tdCls} font-medium overflow-hidden whitespace-nowrap text-ellipsis`} title={org.org_name}>{org.org_name}</td>
-                  <td className={roTdCls} title={org.org_id}>{org.org_id || '—'}</td>
+                  <td className={`${roTdCls} text-[10px] font-semibold`} title={o.region}>{o.region}</td>
+                  <td className={`${tdCls} font-medium overflow-hidden whitespace-nowrap text-ellipsis`} title={o.org_name}>{o.org_name}</td>
+                  <td className={roTdCls} title={o.org_id}>{o.org_id || '—'}</td>
                   <td className={tdCls}>
-                    <input className={inpCls} value={org.subdomain} placeholder="subdomain"
-                      onChange={e => updateOrg(region, org.org_id, { subdomain: e.target.value })} />
+                    <input className={inpCls} value={o.subdomain} placeholder="subdomain"
+                      onChange={e => updateOrg(o.org_id, o.region, { subdomain: e.target.value })} />
                   </td>
                   <td className={tdCls}>
-                    <input className={inpCls} value={org.subaccount_id} placeholder="subaccount ID"
-                      onChange={e => updateOrg(region, org.org_id, { subaccount_id: e.target.value })} />
+                    <input className={inpCls} value={o.subaccount_id} placeholder="subaccount ID"
+                      onChange={e => updateOrg(o.org_id, o.region, { subaccount_id: e.target.value })} />
                   </td>
                   <td className={tdCls}>
-                    <input className={inpCls} value={org.directories} placeholder="dir1, dir2"
-                      onChange={e => updateOrg(region, org.org_id, { directories: e.target.value })} />
+                    <input className={inpCls} value={o.directories} placeholder="dir1, dir2"
+                      onChange={e => updateOrg(o.org_id, o.region, { directories: e.target.value })} />
                   </td>
                   <td className={tdCls}>
-                    <input className={inpCls} value={org.alias} placeholder="alias"
-                      onChange={e => updateOrg(region, org.org_id, { alias: e.target.value })} />
+                    <input className={inpCls} value={o.alias} placeholder="alias"
+                      onChange={e => updateOrg(o.org_id, o.region, { alias: e.target.value })} />
                   </td>
                   <td className={`${tdCls} text-center`}>
-                    <input type="checkbox" checked={org.includeInHomepage ?? false}
-                      onChange={e => updateOrg(region, org.org_id, { includeInHomepage: e.target.checked })}
+                    <input type="checkbox" checked={o.include_in_homepage ?? false}
+                      onChange={e => updateOrg(o.org_id, o.region, { include_in_homepage: e.target.checked })}
                       className="cursor-pointer" />
                   </td>
                   <td className={`${tdCls} text-center`}>
-                    <input type="checkbox" checked={org.manageApps}
-                      onChange={e => updateOrg(region, org.org_id, { manageApps: e.target.checked })}
+                    <input type="checkbox" checked={o.manage_apps}
+                      onChange={e => updateOrg(o.org_id, o.region, { manage_apps: e.target.checked })}
                       className="cursor-pointer" />
                   </td>
                   <td className={`${tdCls} text-center`}>
-                    <input type="checkbox" checked={org.manageDestination}
-                      onChange={e => updateOrg(region, org.org_id, { manageDestination: e.target.checked })}
+                    <input type="checkbox" checked={o.manage_destinations}
+                      onChange={e => updateOrg(o.org_id, o.region, { manage_destinations: e.target.checked })}
                       className="cursor-pointer" />
                   </td>
                 </tr>
@@ -232,6 +212,12 @@ export default function OrgsTable({ data, onChange, isDirty, onRefresh, isRefres
           </tbody>
         </table>
       </div>
+
+      {!anyPosSet && data.length > 0 && (
+        <div className="shrink-0 px-3 py-1.5 border-t border-border text-[10px] text-muted-foreground/60">
+          Sorted by Directories then Subdomain (no positions set). Drag to reorder and Save to persist order.
+        </div>
+      )}
     </div>
   );
 }
