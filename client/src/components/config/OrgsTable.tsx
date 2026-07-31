@@ -144,7 +144,7 @@ export default function OrgsTable({ data, onChange, isDirty, onRefresh, isRefres
         </button>
         <button onClick={onSave} disabled={!isDirty || isRefreshing || isSaving} className={btnPrimary}>
           <Save className="h-3.5 w-3.5" />
-          {isSaving ? 'Saving…' : 'Save Orgs'}
+          {isSaving ? 'Saving…' : 'Save'}
         </button>
       </div>
 
