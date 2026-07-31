@@ -4,6 +4,8 @@ import { config } from '../config.js';
 import { logger } from '../logger.js';
 import { parseFilename } from './localStoreService.js';
 
+const INTERVAL_MS = 60 * 60 * 1000; // 1 hour
+
 let timer: ReturnType<typeof setTimeout> | null = null;
 let stopped = false;
 
@@ -12,11 +14,13 @@ export async function runHousekeeping(): Promise<void> {
   if (maxDays <= 0) return;
 
   const cutoff = Date.now() - maxDays * 24 * 60 * 60 * 1000;
+  const cutoffLabel = new Date(cutoff).toISOString().replace('T', ' ').slice(0, 19);
   let deleted = 0;
+  let starred = 0;
   let errors = 0;
-  let oldest = Infinity;
-  let newest = 0;
 
+  // Housekeeping is scoped strictly to {LOCAL_STORE_DIR}/resp/ — root files
+  // (homepage.json, etc.) stored directly in LOCAL_STORE_DIR are never touched.
   const respBase = join(config.LOCAL_STORE_DIR, 'resp');
 
   try {
@@ -34,7 +38,14 @@ export async function runHousekeeping(): Promise<void> {
       }
 
       for (const file of files) {
-        if (file.includes('.starred.')) continue;
+        if (file.includes('.starred.')) {
+          // Count old-enough starred JSON records that are preserved from deletion
+          if (file.endsWith('.json')) {
+            const meta = parseFilename(file.replace('.starred.', '.'));
+            if (meta !== null && meta.timestamp < cutoff) starred++;
+          }
+          continue;
+        }
 
         let jsonName: string;
         if (file.endsWith('.json')) jsonName = file;
@@ -48,9 +59,6 @@ export async function runHousekeeping(): Promise<void> {
         const meta = parseFilename(jsonName);
         if (meta === null || meta.timestamp >= cutoff) continue;
 
-        if (meta.timestamp < oldest) oldest = meta.timestamp;
-        if (meta.timestamp > newest) newest = meta.timestamp;
-
         try {
           await unlink(join(serviceDir, file));
           deleted++;
@@ -60,12 +68,14 @@ export async function runHousekeeping(): Promise<void> {
       }
     }
 
-    const dateRange = deleted > 0
-      ? { from: new Date(oldest).toISOString().slice(0, 10), to: new Date(newest).toISOString().slice(0, 10) }
-      : {};
-    logger.info({ deleted, errors, maxDays, ...dateRange }, 'Housekeeping completed');
+    logger.info(
+      { deleted, starred, errors, maxDays, cutoff: cutoffLabel },
+      `Housekeeping: ${deleted} file(s) deleted (older than ${cutoffLabel} UTC), ${starred} starred file(s) preserved`,
+    );
   } catch (err) {
-    logger.warn({ err }, 'Housekeeping error (will retry in 24 h)');
+    // resp/ doesn't exist yet (no health checks run yet) — nothing to clean up
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return;
+    logger.warn({ err }, 'Housekeeping error (will retry in 1 h)');
   }
 }
 
@@ -73,7 +83,7 @@ function scheduleNext(): void {
   if (stopped) return;
   timer = setTimeout(() => {
     void runHousekeeping().finally(scheduleNext);
-  }, 24 * 60 * 60 * 1000);
+  }, INTERVAL_MS);
   timer.unref();
 }
 
@@ -83,7 +93,7 @@ export function startHousekeepingScheduler(): void {
     return;
   }
   stopped = false;
-  logger.info({ maxDays: config.MAX_RESPONSE_STORAGE_DAYS }, 'Housekeeping scheduler started — first run in 24 h');
+  logger.info({ maxDays: config.MAX_RESPONSE_STORAGE_DAYS }, 'Housekeeping scheduler started — first run in 1 h');
   scheduleNext();
 }
 
