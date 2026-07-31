@@ -1,10 +1,16 @@
 # BTP Admin
 
-A lightweight, file-backed status page and admin dashboard for SAP BTP. Includes a health checker for Azure Traffic Manager integration, a service availability history view, and a configurable BTP Homepage that renders service links across subaccounts via a `homepage.json` descriptor.
+A lightweight, file-backed admin dashboard and status monitor for SAP BTP. Provides a configurable **BTP Homepage** for navigating subaccounts and services across global accounts, plus a **status page** with a health checker for Azure Traffic Manager integration and a service availability history view.
 
-![BTP Status Dashboard](doc/img/btp-status-compare.png)
+## Home Page for BTP Services
 
-## Workflow
+A configurable navigation hub at `/home` driven by a `homepage.json` descriptor. Organise your BTP global accounts into tabs, directories, and subaccounts. Each subaccount column renders service links resolved from named URL templates — Cockpit, Launchpad, BAS, Integration Suite, HANA Cloud, and more. A **Cockpit** row provides deep dropdown navigation with per-space sub-menus. Sidebar `menus` groups expose curated links (documentation, portals, tools) with optional `restricted` filtering for unauthenticated users.
+
+An **Edit** button in the topbar (visible to logged-in users, enabled for admins only) opens an in-app JSON editor with live preview and change history — edits are saved and immediately applied without a restart.
+
+![BTP Admin Homepage](doc/img/btp-status-compare.png)
+
+## Status Page for Users and Azure Traffic Manager
 
 Each BTP Status instance is deployed in a different region. A `browser-ias-login` endpoint performs a full headless login to SAP Workzone every few minutes, with automatic retries on transient failures. The result is exposed via `GET /health/:service` — returning `200 OK`, `200 Partial OK`, or `500 Service down` depending on whether all, some, or none of the recent checks passed.
 
@@ -28,6 +34,16 @@ Azure Traffic Manager polls these health endpoints from multiple PoPs. When all 
 
 ## Features
 
+### BTP Homepage
+
+- **Configurable navigation hub** at `/home` — organise BTP subaccounts into tabs and directories; one column per subaccount, one row per service; the active tab is reflected in the URL as `/home/{tab}` for bookmarking and sharing
+- **Named URL templates** — define service URL patterns once (e.g. `launchpad`, `bas`, `hana`, `int`) with `{placeholder}` substitution; subaccounts reference templates by name and supply their own values (`subdomain`, `orgId`, `spaces`, etc.)
+- **Cockpit dropdown** — the built-in `cockpit` template generates a deep per-space dropdown covering Service Marketplace, Instances & Subscriptions, Spaces, Destinations, and Users; no manual URL construction required
+- **Sidebar menus** — configurable link groups (e.g. Security, Resources) with optional `restricted` flag to hide sensitive links from unauthenticated users
+- **In-app JSON editor** — **Edit** (pencil) button in the topbar (logged-in users; admins only for saving) opens a live-preview editor with change history; edits are saved to `{LOCAL_STORE_DIR}/homepage.json` and immediately applied
+
+### BTP Status Page
+
 1. **Azure Traffic Manager probe endpoint** — `GET /health/{service}` returns a JSON summary of the latest check result per probe location, e.g. `{"status":"OK","locations":{"Ashburn":200,"Frankfurt":200}}`; evaluated from saved response files within `endpoint.interval × 2` seconds — no live network probe; returns `200 {"status":"OK"}` when all locations passed, `200 {"status":"Partial OK"}` when some are degraded, or `500 {"status":"Service down"}` when all failed; designed for Azure Traffic Manager probes running every 3–5 seconds from multiple PoPs; region is extracted from the request hostname (`cfapps.<region>.hana`) and matched against `endpoints[].region` so each deployed instance reports only its local endpoints
 
 2. **Browser-based IAS login check** (`mode: browser-ias-login`) — headless Chromium fills the SAP IAS login form, waits for a CSS selector to confirm the post-login page loaded, and captures a screenshot; validates the full authentication flow end-to-end, not just HTTP reachability; screenshot is stored with the check record and visible in the history drill-down and Test popup
@@ -42,17 +58,15 @@ Azure Traffic Manager polls these health endpoints from multiple PoPs. When all 
 
 7. **File-based storage — no database** — every check result is saved as a plain JSON file under `./localStore/resp/{service}/`; root files such as `homepage.json` are stored directly under `./localStore/`; no database, message broker, or external service required; XSUAA is optional and used only for authentication; the local store directory is the only persistent state
 
-7. **Full authentication enforcement** — when XSUAA is bound, every `/api/*` endpoint requires a valid session; unauthenticated browsers land on a minimal login gate (app title, site switcher, theme toggle, **Welcome, click here to login** button, and a report-an-issue link) rather than seeing any data; the site switcher is fully functional before login — backed by the always-public `GET /api/info` — so users can switch to another region if they lack access to the current one; exceptions: `/health` is always public (Azure Traffic Manager probes), `/api/me` and `/api/info` are always public, and HMAC-signed peer-sync requests bypass session auth so the two-instance sync continues to work regardless of user login state
+8. **Full authentication enforcement** — when XSUAA is bound, every `/api/*` endpoint requires a valid session; unauthenticated browsers land on a minimal login gate (app title, site switcher, theme toggle, **Welcome, click here to login** button, and a report-an-issue link) rather than seeing any data; the site switcher is fully functional before login — backed by the always-public `GET /api/info` — so users can switch to another region if they lack access to the current one; exceptions: `/health` is always public (Azure Traffic Manager probes), `/api/me` and `/api/info` are always public, and HMAC-signed peer-sync requests bypass session auth so the two-instance sync continues to work regardless of user login state
 
-8. **Push-based two-instance sync for CF file persistence** — Cloud Foundry containers are ephemeral and lose local files on restart; the consumer instance sets `SYNC_REMOTE` + `SELF_URL` to point at the producer; on startup it downloads all existing files and registers itself as a webhook consumer; when the producer completes a health check it calls all registered `/api/download-trigger` webhooks; the consumer fetches only the delta (`GET /api/browse?since=<browseTs>`) using the `browseTs` timestamp returned by the previous browse response, and downloads new files via `POST /api/batch-download`; at most one normal sync runs at a time with one queue slot; a manual sync from the UI (Sync button) can force a full re-sync regardless; see [Remote Sync](#remote-sync)
-
-9. **BTP Homepage** — a configurable navigation hub at `/home` driven by `server/homepage.json` (or `HOMEPAGE_JSON` env var); organize your BTP subaccounts into tabs and directories; one column per subaccount, one row per service; a **Cockpit** row provides deep dropdown navigation with per-space sub-menus; other service rows resolve URLs from named templates with `{placeholder}` substitution; sidebar `menus` groups (e.g. Security, Resources) are filtered per `restricted` flag — unauthenticated users see only unrestricted items; copy `sample/homepage.json` as a starting point; the active tab is reflected in the URL as `/home/{tab}` so links can be bookmarked or shared; an **Edit** (pencil) button in the topbar (visible to logged-in users, enabled for `BTP_Admin` role only) opens an in-app JSON editor with live preview and change history — edits are saved to `{LOCAL_STORE_DIR}/homepage.json` and immediately applied
-
-10. **Minimal server dependencies** — production runtime requires only Express (HTTP), Pino (logging), and Playwright (browser checks); all HTTP requests, crypto, gzip compression, and ZIP packaging use native Node.js APIs — no axios, no ORM, no utility libraries
+9. **Push-based two-instance sync for CF file persistence** — Cloud Foundry containers are ephemeral and lose local files on restart; the consumer instance sets `SYNC_REMOTE` + `SELF_URL` to point at the producer; on startup it downloads all existing files and registers itself as a webhook consumer; when the producer completes a health check it calls all registered `/api/download-trigger` webhooks; the consumer fetches only the delta (`GET /api/browse?since=<browseTs>`) using the `browseTs` timestamp returned by the previous browse response, and downloads new files via `POST /api/batch-download`; at most one normal sync runs at a time with one queue slot; a manual sync from the UI (Sync button) can force a full re-sync regardless; see [Remote Sync](#remote-sync)
 
 10. **Live updates via Server-Sent Events** — the Overview and service detail pages update automatically when new check results arrive; the server pushes SSE `update` events through `GET /api/events` after every scheduled check, manual Run Test, or remote sync; the browser fetches only the delta (`?since=<ms>`) and merges new files into the current view without a full reload; live updates are scoped per service on the detail page (`?service=<name>`) and disabled in Date Range mode; the **Last Checked** stat card on both pages shows the time of the most recent data refresh in `HH:mm:ss` (24-hour) format, updates on every full load and live delta merge, and doubles as a sync shortcut — clicking it when authenticated triggers an immediate sync
 
 11. **Modern, fast React UI** — built with shadcn/ui + Tailwind CSS; initial JS bundle ~55 kB gzip (lazy-loaded pages, Mermaid deferred); dark theme; mobile-responsive with hamburger menu; shared date range picker with localStorage persistence across pages
+
+12. **Minimal server dependencies** — production runtime requires only Express (HTTP), Pino (logging), and Playwright (browser checks); all HTTP requests, crypto, gzip compression, and ZIP packaging use native Node.js APIs — no axios, no ORM, no utility libraries
 
 > Also supports: HTTP health checks with [Gatus](https://github.com/TwiN/gatus#conditions)-style conditions (`[STATUS]`, `[BODY]`, `[HEADER.*]`, `[RESPONSE_TIME]`, `len()`, `pat()`); variable substitution in `config.json`; `/dummy` URL to skip checks; auto-run schedule selector; site switcher for multi-region deployments; SAP BTP Cloud Foundry MTA deployment
 
@@ -93,16 +107,151 @@ npm run dev:server
 npm run watch:client
 ```
 
-### Production Build
+### Production Build (local)
 
 ```bash
-npm run build   # builds React → server/public/, then compiles server TypeScript
-npm start       # runs Express on PORT (default 3000)
+npm run build:client && npm run build:server   # build React → server/public/, compile TypeScript
+npm start                                       # runs Express on PORT (default 3000)
 ```
 
 Open http://localhost:3000/overview
 
 ## Configuration
+
+### Home Page Configuration
+
+The homepage is driven by a `homepage.json` file. Copy the provided sample as a starting point:
+
+```bash
+cp sample/homepage.json server/homepage.json
+```
+
+The file is also editable in-app via the **Edit** (pencil) button in the topbar (admin role required to save). At runtime, the server reads `{LOCAL_STORE_DIR}/homepage.json`; if that file does not exist it falls back to the path in the `HOMEPAGE_JSON` env var or `server/homepage.json`.
+
+#### Structure overview
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `tabs` | array | Tab definitions — each `{ title, dirs }` maps a tab label to a list of directory `short` codes shown under that tab |
+| `btp` | object | Main BTP account tree: `{ title, globalAccounts[] }` |
+| `btp.globalAccounts[].cockpitRegion` | string | Cockpit region prefix for URL construction (e.g. `"amer"`, `"emea"`) |
+| `btp.globalAccounts[].id` | string | Global account ID used in Cockpit deep-links |
+| `btp.globalAccounts[].directories[]` | array | Directories (or landscapes) under this global account |
+| `directories[].short` | string | Short code referenced in `tabs[].dirs` |
+| `directories[].region` | string | BTP region (e.g. `"us10"`) injected as `{region}` in template URLs |
+| `directories[].subaccounts[]` | array | Subaccounts rendered as columns |
+| `subaccounts[].subdomain` | string | Injected as `{subdomain}` in template URLs |
+| `subaccounts[].services` | object | Keys match `templates` names; values supply per-instance overrides and extra placeholders |
+| `subaccounts[].spaces[]` | array | CF space list for the Cockpit dropdown: `{ spaceId, spaceName, destInstanceId }` |
+| `subaccounts[].usage` | string | `"prod"` marks production subaccounts with a visual indicator |
+| `menus` | array | Sidebar link groups — each `{ title, restricted?, children[] }` where `children[].{ title, url, target, restricted? }` |
+| `templates` | object | Named URL patterns. Each entry: `{ name, url, fullName?, children? }` with `{placeholder}` substitution. `children` items support `repeatOn: "spaces"` or `repeatOn: "instances"` for dynamic dropdown expansion. |
+
+#### Sample `homepage.json`
+
+```json
+{
+  "tabs": [
+    { "title": "Core (US East)", "dirs": ["USE"] }
+  ],
+  "btp": {
+    "title": "BTP @ Your Company",
+    "globalAccounts": [
+      {
+        "name": "My Company",
+        "cockpitRegion": "amer",
+        "id": "CA000000TID000000000000000001",
+        "directories": [
+          {
+            "name": "Digital Core - US East",
+            "region": "us10",
+            "short": "USE",
+            "subaccounts": [
+              {
+                "id": "aaaaaaaa-0000-0000-0000-000000000001",
+                "name": "Production",
+                "orgId": "aaaaaaaa-0000-0000-0000-aaa000000001",
+                "subdomain": "mycompany-prod",
+                "services": {
+                  "launchpad": {
+                    "instances": [{ "alias": "core-prod", "name": "Core Production" }]
+                  },
+                  "hana": { "id": "aaaaaaaa-0000-0000-0000-hana000001" },
+                  "int": {}
+                },
+                "spaces": [
+                  {
+                    "spaceId": "aaaaaaaa-sp00-0000-0000-000000000001",
+                    "spaceName": "prod",
+                    "destInstanceId": "aaaaaaaa-0000-0000-0000-dest000001"
+                  }
+                ],
+                "usage": "prod"
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "menus": [
+    {
+      "title": "Resources",
+      "children": [
+        {
+          "title": "SAP BTP What's New",
+          "url": "https://help.sap.com/whats-new/cf0cb2cb149647329b5d02aa96303f56?locale=en-US",
+          "target": "_blank"
+        }
+      ]
+    }
+  ],
+  "templates": {
+    "cockpit": {
+      "name": "Cockpit",
+      "url": "https://{cockpitRegion}.cockpit.btp.cloud.sap/cockpit/#/globalaccount/{globalAccountId}/subaccount/{subaccountId}/subaccountoverview",
+      "children": [
+        {
+          "name": "Instances & Subscriptions",
+          "url": "https://{cockpitRegion}.cockpit.btp.cloud.sap/cockpit/#/globalaccount/{globalAccountId}/subaccount/{subaccountId}/service-instances"
+        },
+        {
+          "name": "{spaceName}",
+          "repeatOn": "spaces",
+          "url": "https://{cockpitRegion}.cockpit.btp.cloud.sap/cockpit/#/globalaccount/{globalAccountId}/subaccount/{subaccountId}/org/{orgId}/space/{spaceId}/applications"
+        }
+      ]
+    },
+    "launchpad": {
+      "name": "Launchpad",
+      "url": "https://{subdomain}.dt.launchpad.cfapps.{region}.hana.ondemand.com/sites",
+      "children": [
+        {
+          "name": "{launchpad-name}",
+          "repeatOn": "instances",
+          "url": "https://{subdomain}.launchpad.cfapps.{region}.hana.ondemand.com/site/{launchpad-alias}"
+        }
+      ]
+    },
+    "hana": {
+      "fullName": "HANA Cloud Central",
+      "name": "HANA Cloud",
+      "url": "https://{subdomain}.hana-tooling.ingress.orchestration.prod-{region}.hanacloud.ondemand.com/hcs/sap/hana/cloud/index.html"
+    },
+    "int": {
+      "name": "Integration",
+      "url": "https://{subdomain}.integrationsuite.cfapps.{region}.hana.ondemand.com/shell/home",
+      "children": [
+        { "name": "API Portal", "url": "https://{subdomain}.apiportal.cfapps.{region}.hana.ondemand.com/" }
+      ]
+    }
+  }
+}
+```
+
+See `sample/homepage.json` for a full example covering multiple global accounts, directories, and all supported service templates.
+
+### Status Page Configuration
 
 The server resolves configuration in this priority order:
 
@@ -156,7 +305,7 @@ Create `server/config.json` (copy `sample/config.json` and fill in real values):
 }
 ```
 
-### Config Fields
+#### Config Fields
 
 **Top-level**
 
@@ -205,7 +354,7 @@ Create `server/config.json` (copy `sample/config.json` and fill in real values):
 | `endpoints[].retryDelay` | number | Optional. Seconds to wait between retry attempts (default `0`). |
 | `endpoints[].region` | string | Optional. BTP region code (e.g. `"us10"`, `"us20"`, `"eu10"`). When set, this endpoint is only checked when the request hostname matches `cfapps.<region>.hana` (extracted from `x-forwarded-host` or `Host`). Used for multi-region deployments where each btp-status instance should only probe its local endpoints. Scheduler and manual "Run Test" always run all endpoints regardless of region. |
 
-### Condition Syntax
+#### Condition Syntax
 
 Conditions follow [Gatus](https://github.com/TwiN/gatus#conditions) syntax:
 
@@ -221,7 +370,7 @@ Conditions follow [Gatus](https://github.com/TwiN/gatus#conditions) syntax:
 
 Operators: `==`, `!=`, `<`, `>`, `<=`, `>=`
 
-### Browser-based IAS Login Check
+#### Browser-based IAS Login Check
 
 Set `mode: "browser-ias-login"` on an endpoint to use a headless Chromium session instead of a plain HTTP request:
 
@@ -266,7 +415,7 @@ All three sidecar files are included in remote sync and pruned by the housekeepi
 > **Chromium setup (local dev)**: run `npx playwright install chromium` once after `npm install`.  
 > On SAP BTP Cloud Foundry, Google Chrome is installed automatically via the apt-buildpack — no manual step required (see [BTP deployment notes](#deployment-sap-btp-mta)).
 
-### Automatic Checks
+#### Automatic Checks
 
 When `interval` is set on an endpoint (or at the service level as a fallback), the server runs a health check for that endpoint every `interval` seconds — no external scheduler or cron job required. Each endpoint is scheduled independently, so different endpoints in the same service can run at different frequencies.
 
@@ -275,7 +424,7 @@ When `interval` is set on an endpoint (or at the service level as a fallback), t
 - All timers are released with `unref()` so they do not block graceful process shutdown.
 - On `SIGTERM` / `SIGINT` the scheduler stops cleanly before the HTTP server closes.
 
-### Retry Behavior
+#### Retry Behavior
 
 When `retry` is set on an endpoint, a failed check is automatically re-attempted:
 
@@ -306,8 +455,8 @@ The Overview and Service detail pages show separate **Completely Failed** (500/5
 | `GET /api/schedule/:name` | Current effective interval in seconds: `{ intervalSeconds }` |
 | `POST /api/schedule/:name` | Set schedule override (JSON body `{ "intervalSeconds": N }`); `0` disables autorun; resets on server restart |
 | `POST /api/sync` | Trigger an on-demand remote sync; returns `{ ok, files, transferredMB, decompressedMB, elapsedSec }` or `{ ok: false, busy: true }` if a sync is already running |
-| `GET /api/browse` | List all response files grouped by service folder: `{ folders: { name: [filename, ...] } }` |
-| `GET /api/download?path=folder/file.json` | Download a single response file (path restricted to `response/` directory) |
+| `GET /api/browse` | List all response files grouped by service folder: `{ folders: { name: [filename, ...] }, browseTs }` |
+| `GET /api/download?path=folder/file.json` | Download a single response file (path restricted to `localStore/` directory) |
 | `GET /api/homepage` | Current homepage data (JSON); `restricted` items filtered by auth state |
 | `GET /api/homepage/raw` | Raw homepage JSON (admin only) |
 | `GET /api/homepage/changelog` | Homepage change history markdown (admin only) |
@@ -641,13 +790,17 @@ cf target -o <org> -s <space>
 
 | Script | What it does |
 |--------|-------------|
+| `npm run build` | Build MTA archive (`mbt build -p=cf`) — packages the React build and compiled server into `mta_archives/btp-admin.mtar` |
 | `npm run bd` | Build MTA archive + standard deploy (full pipeline) |
 | `npm run bd-bg` | Build MTA archive + blue-green deploy (full pipeline, zero-downtime) |
 | `npm run deploy` | Standard deploy of an already-built `.mtar` (skips `mbt build`) |
 | `npm run deploy-bg` | Blue-green deploy of an already-built `.mtar` (skips `mbt build`) |
 
 ```bash
-# Full pipeline: build then deploy
+# Build the MTA archive
+npm run build
+
+# Build then deploy in one step
 npm run bd       # standard deploy
 npm run bd-bg    # blue-green deploy (zero-downtime)
 
@@ -658,7 +811,7 @@ npm run deploy-bg   # blue-green
 
 **Blue-green strategy** (`--strategy blue-green --skip-testing-phase`) starts a parallel "green" instance, waits for it to be healthy, routes traffic to it, then removes the old "blue" instance — minimising downtime during deploys.
 
-> **When Azure Traffic Manager is connected, always use `npm run deploy-bg` (blue-green).** A standard deploy takes the app offline for 30–60 seconds during restaging; Traffic Manager will detect the `500` responses, exhaust its retries, and fail over to the other region. Blue-green avoids this by keeping the current instance live until the new one is healthy and traffic has been re-routed.
+> **When Azure Traffic Manager is connected, always use `npm run bd-bg` (blue-green).** A standard deploy takes the app offline for 30–60 seconds during restaging; Traffic Manager will detect the `500` responses, exhaust its retries, and fail over to the other region. Blue-green avoids this by keeping the current instance live until the new one is healthy and traffic has been re-routed.
 
 `keep-existing: env: true` in `mta.yaml` instructs the MTA deployer to **preserve existing environment variables** (e.g. `CONFIG_JSON`, `SYNC_REMOTE`) on the app during deployment, so runtime config set via `cf set-env` is not wiped by a redeploy.
 
@@ -680,13 +833,22 @@ modules:
       CONFIG_JSON: '{"services":[...]}'
 ```
 
-Then deploy with: `cf deploy mta_archives/btp-status_0.1.0.mtar -e config-dev.mtaext`
+Then deploy with: `cf deploy mta_archives/btp-admin.mtar -e config-dev.mtaext`
 
 ### Operations
 
 ```bash
 cf mtas                               # list deployed MTAs
-cf mta btp-status                     # show modules/services
-cf logs btp-status --recent       # recent logs
-cf undeploy btp-status                # tear down
+cf mta btp-admin                      # show modules/services
+cf undeploy btp-admin                 # tear down
 ```
+
+**Pretty-printed live logs** (filters out CF router/cell/staging noise, formats Pino JSON output):
+
+```bash
+npm run logs          # tail live logs from btp-admin
+npm run logs-idle     # tail live logs from btp-admin-idle (the idle instance during blue-green deploy)
+npm run logs-recent   # print recent logs from btp-admin
+```
+
+Use `npm run logs-idle` when a blue-green deploy is in progress to monitor the new "green" instance before traffic is switched to it.
