@@ -263,12 +263,12 @@ export async function browseResponseFiles(since?: number): Promise<Record<string
     const rootEntries = await readdir(storeDir, { withFileTypes: true });
     const rootFiles: BrowseFile[] = [];
     for (const e of rootEntries) {
-      if (!e.isFile() || (!e.name.endsWith('.json') && !e.name.endsWith('.md'))) continue;
+      if (!e.isFile()) continue;
       try {
         const info = await stat(join(storeDir, e.name));
         const rawMtime = info.mtimeMs;
         if (!since || since <= 0 || rawMtime >= since) {
-          rootFiles.push({ name: e.name, mtime: Math.round(rawMtime / 1000) * 1000 });
+          rootFiles.push({ name: e.name, mtime: rawMtime });
         }
       } catch { /* skip */ }
     }
@@ -290,15 +290,8 @@ export async function browseResponseFiles(since?: number): Promise<Record<string
         .map(async (dirEntry) => {
           try {
             const names = await readdir(join(respBase, dirEntry.name));
-            const filtered = names.filter(f =>
-              f.endsWith('.json') || f.endsWith('.png') ||
-              f.endsWith('.log') || f.endsWith('.html'),
-            );
-            // Collect raw mtimes for accurate since-filtering, then round to
-            // nearest second so filesystem precision differences (1s on some
-            // hyperscaler VMs) don't cause false mismatches in the comparison.
             const withRawMtime = await Promise.all(
-              filtered.map(async (name) => {
+              names.map(async (name) => {
                 try {
                   const info = await stat(join(respBase, dirEntry.name, name));
                   return { name, rawMtime: info.mtimeMs };
@@ -311,7 +304,7 @@ export async function browseResponseFiles(since?: number): Promise<Record<string
               .filter(f => !since || since <= 0 || f.rawMtime === 0 || f.rawMtime >= since)
               .map(({ name, rawMtime }) => ({
                 name,
-                mtime: rawMtime === 0 ? 0 : Math.round(rawMtime / 1000) * 1000,
+                mtime: rawMtime === 0 ? 0 : rawMtime,
               }));
             result[dirEntry.name].sort((a, b) => a.name.localeCompare(b.name));
           } catch {
