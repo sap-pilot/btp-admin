@@ -5,8 +5,8 @@ import { useSidebar } from '@/components/AppLayout';
 import OrgsTable, { type OrgRegion } from '@/components/config/OrgsTable';
 import DirsTable, { type DirTab } from '@/components/config/DirsTable';
 
-type Tab = 'orgs' | 'dirs' | 'systems' | 'menus' | 'links';
-const VALID_TABS = new Set<Tab>(['orgs', 'dirs', 'systems', 'menus', 'links']);
+type Tab = 'orgs' | 'dirs' | 'systems' | 'menus' | 'links' | 'changelog';
+const VALID_TABS = new Set<Tab>(['orgs', 'dirs', 'systems', 'menus', 'links', 'changelog']);
 
 export default function ConfigPage() {
   const { tab: tabParam } = useParams<{ tab: string }>();
@@ -27,9 +27,26 @@ export default function ConfigPage() {
   const [isDirsDirty, setIsDirsDirty]   = useState(false);
   const [isSavingDirs, setIsSavingDirs] = useState(false);
 
+  // Changelog state (lazy-loaded on first visit to the tab)
+  const [changelog, setChangelog]           = useState<string | null>(null);
+  const [isLoadingChangelog, setIsLoadingCl] = useState(false);
+
   const [error, setError]       = useState('');
   const [isImporting, setIsImporting] = useState(false);
   const importRef = useRef<HTMLInputElement>(null);
+
+  function fetchChangelog() {
+    setIsLoadingCl(true);
+    void fetch('/api/config/changelog')
+      .then(r => r.text())
+      .then(text => setChangelog(text))
+      .catch(() => setChangelog(''))
+      .finally(() => setIsLoadingCl(false));
+  }
+
+  useEffect(() => {
+    if (activeTab === 'changelog' && changelog === null) fetchChangelog();
+  }, [activeTab]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     void fetch('/api/config/orgs')
@@ -43,18 +60,19 @@ export default function ConfigPage() {
       .catch(() => setError('Failed to load dirs'));
   }, []);
 
-  // Track latest dirty/busy state in a ref so the SSE handler can read it without re-subscribing
-  const configStateRef = useRef({ orgsDirty: false, dirsDirty: false, busy: false });
+  // Track latest dirty/busy/tab state in a ref so the SSE handler can read it without re-subscribing
+  const configStateRef = useRef({ orgsDirty: false, dirsDirty: false, busy: false, tab: 'orgs' as Tab });
   configStateRef.current = {
     orgsDirty: isOrgsDirty,
     dirsDirty: isDirsDirty,
     busy: isRefreshing || isSavingOrgs || isSavingDirs || isImporting,
+    tab: activeTab,
   };
 
   useEffect(() => {
     const es = new EventSource('/api/events?config=1');
     es.addEventListener('update', () => {
-      const { orgsDirty, dirsDirty, busy } = configStateRef.current;
+      const { orgsDirty, dirsDirty, busy, tab } = configStateRef.current;
       if (busy) return;
       if (!orgsDirty) {
         void fetch('/api/config/orgs')
@@ -68,9 +86,10 @@ export default function ConfigPage() {
           .then(({ ok, data }) => { if (ok) { setDirsData(data); setOriginalDirs(data); } })
           .catch(() => {});
       }
+      if (tab === 'changelog') fetchChangelog();
     });
     return () => es.close();
-  }, []);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   function goTab(t: Tab) { navigate(`/config/${t}`, { replace: true }); }
 
@@ -248,6 +267,9 @@ export default function ConfigPage() {
         <button className={tabCls('links')} onClick={() => goTab('links')}>
           Link Templates
         </button>
+        <button className={tabCls('changelog')} onClick={() => { if (changelog === null) fetchChangelog(); goTab('changelog'); }}>
+          Change Log
+        </button>
       </div>
 
       {/* Error banner */}
@@ -284,6 +306,28 @@ export default function ConfigPage() {
         {(activeTab === 'systems' || activeTab === 'menus' || activeTab === 'links') && (
           <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
             Under construction
+          </div>
+        )}
+        {activeTab === 'changelog' && (
+          <div className="flex flex-col h-full">
+            <div className="flex items-center gap-2 px-3 py-2 border-b border-border shrink-0">
+              <span className="text-xs text-muted-foreground flex-1">Config change history — updated on Refresh / Save</span>
+              <button
+                onClick={fetchChangelog}
+                disabled={isLoadingChangelog}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded text-xs font-medium border border-border hover:bg-accent hover:text-accent-foreground transition-colors disabled:opacity-50"
+              >
+                {isLoadingChangelog ? 'Loading…' : 'Reload'}
+              </button>
+            </div>
+            <div className="flex-1 overflow-auto p-4">
+              {isLoadingChangelog && changelog === null
+                ? <p className="text-xs text-muted-foreground">Loading…</p>
+                : changelog
+                  ? <pre className="text-xs font-mono whitespace-pre-wrap break-words text-foreground leading-relaxed">{changelog}</pre>
+                  : <p className="text-xs text-muted-foreground">No changes recorded yet.</p>
+              }
+            </div>
           </div>
         )}
       </div>

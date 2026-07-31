@@ -7,6 +7,7 @@ import { emit } from './liveEvents.js';
 import { fetchOrgsForRegion, fetchSpacesByOrgs, getCfRegions, getCfCredentials } from './cfLoginService.js';
 import { readEffectiveHomepageRaw } from './home/homepageEditService.js';
 import { prefillDirsIfEmpty } from './dirsService.js';
+import { appendConfigChangelog, diffOrgs } from './configChangelogService.js';
 
 const CONFIG_DIR = join(config.LOCAL_STORE_DIR, 'config');
 const ORGS_PATH  = join(CONFIG_DIR, 'orgs.json');
@@ -154,7 +155,7 @@ function mergeOrgs(existing: OrgRegion[], fresh: OrgRegion[]): OrgRegion[] {
 }
 
 /** Re-fetch orgs from CF API for all configured regions, merge with existing, save, notify. */
-export async function refreshOrgs(): Promise<OrgRegion[]> {
+export async function refreshOrgs(user = 'system'): Promise<OrgRegion[]> {
   const regions = getCfRegions();
   if (regions.length === 0) {
     throw Object.assign(
@@ -229,14 +230,19 @@ export async function refreshOrgs(): Promise<OrgRegion[]> {
   }
 
   const normalized = normalizeOrgPositions(merged);
+  const diff = diffOrgs(existing, normalized);
   await writeOrgs(normalized);
+  await appendConfigChangelog('Refresh', user, 'orgs.json', diff);
   await prefillDirsIfEmpty();
   return normalized;
 }
 
 /** Save admin-edited orgs (preserves all fields as-is, just persists and notifies). */
-export async function saveOrgs(data: OrgRegion[]): Promise<void> {
+export async function saveOrgs(data: OrgRegion[], user = 'system'): Promise<void> {
+  const before = await readOrgs();
+  const diff   = diffOrgs(before, data);
   await writeOrgs(data);
+  await appendConfigChangelog('Update', user, 'orgs.json', diff);
 }
 
 /** Export all JSON files from the config dir as a combined object keyed by filename stem. */
