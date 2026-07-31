@@ -22,8 +22,8 @@ router.get('/orgs', requireAdmin, async (_req, res, next) => {
 
 router.post('/orgs/refresh', requireAdmin, async (req, res, next) => {
   try {
-    const data = await refreshOrgs(reqUser(req));
-    res.json({ ok: true, data });
+    const { data, warnings } = await refreshOrgs(reqUser(req));
+    res.json({ ok: true, data, warnings });
   } catch (err) { next(err); }
 });
 

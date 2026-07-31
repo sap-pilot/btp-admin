@@ -28,6 +28,7 @@ export default function ConfigModal({ open, onClose }: Props) {
   const [isSavingDirs, setIsSavingDirs]   = useState(false);
 
   const [error, setError]                 = useState('');
+  const [refreshWarnings, setRefreshWarnings] = useState<string[]>([]);
 
   useEffect(() => {
     if (!open) return;
@@ -55,11 +56,12 @@ export default function ConfigModal({ open, onClose }: Props) {
     setError('');
     try {
       const res  = await fetch('/api/config/orgs/refresh', { method: 'POST' });
-      const json = await res.json() as { ok: boolean; data?: OrgEntry[]; error?: string };
+      const json = await res.json() as { ok: boolean; data?: OrgEntry[]; warnings?: string[]; error?: string };
       if (!json.ok) throw new Error(json.error ?? 'Refresh failed');
       setOrgsData(json.data ?? []);
       setOriginalOrgs(json.data ?? []);
       setIsOrgsDirty(false);
+      setRefreshWarnings(json.warnings ?? []);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Refresh failed');
     } finally {
@@ -72,6 +74,7 @@ export default function ConfigModal({ open, onClose }: Props) {
     setOrgsData(originalOrgs);
     setIsOrgsDirty(false);
     setError('');
+    setRefreshWarnings([]);
   }
 
   async function handleOrgsSave() {
@@ -182,6 +185,12 @@ export default function ConfigModal({ open, onClose }: Props) {
           {error && (
             <div className="shrink-0 px-4 py-2 bg-destructive/10 text-destructive text-xs border-b border-destructive/20">
               {error}
+            </div>
+          )}
+          {/* CIS warning banner */}
+          {refreshWarnings.length > 0 && (
+            <div className="shrink-0 px-4 py-2 bg-yellow-500/10 text-yellow-700 dark:text-yellow-400 text-xs border-b border-yellow-500/20">
+              {refreshWarnings.map((w, i) => <p key={i}>{w}</p>)}
             </div>
           )}
 
