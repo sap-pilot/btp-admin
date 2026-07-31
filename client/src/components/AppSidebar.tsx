@@ -79,6 +79,7 @@ export default function AppSidebar() {
   const [appTitle, setAppTitle] = useState('BTP Admin');
   const [syncAvailable, setSyncAvailable] = useState(false);
   const [syncing, setSyncing] = useState(false);
+  const [syncBusy, setSyncBusy] = useState(false);
   const [openMenus, setOpenMenus] = useState<Record<string, boolean>>({});
 
   const menus = (homepage?.menus as MenuGroup[] | undefined) ?? [];
@@ -358,18 +359,53 @@ export default function AppSidebar() {
         {/* Sync + Theme toggle — float to bottom; theme toggle visible even before login */}
         <div className="mt-auto pt-1 flex flex-col">
           {syncAvailable && (!auth.enabled || auth.loggedIn) && (
-            <button
-              onClick={() => {
-                setSyncing(true);
-                fetch('/api/sync', { method: 'POST' }).finally(() => setSyncing(false));
-              }}
-              disabled={syncing}
-              className={itemBase(collapsed) + 'text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground disabled:opacity-40 disabled:cursor-not-allowed'}
-              title="Sync"
-            >
-              <RefreshCw className={`h-4 w-4 shrink-0 ${syncing ? 'animate-spin text-blue-400' : ''}`} />
-              {!collapsed && <span className="truncate">Sync</span>}
-            </button>
+            <>
+              <button
+                onClick={async () => {
+                  setSyncing(true);
+                  setSyncBusy(false);
+                  try {
+                    const res = await fetch('/api/sync', { method: 'POST' });
+                    const data = await res.json() as { busy?: boolean };
+                    if (data.busy) {
+                      setSyncBusy(true);
+                      setTimeout(() => setSyncBusy(false), 6000);
+                    }
+                  } finally {
+                    setSyncing(false);
+                  }
+                }}
+                disabled={syncing}
+                className={itemBase(collapsed) + 'text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground disabled:opacity-40 disabled:cursor-not-allowed'}
+                title="Sync"
+              >
+                <RefreshCw className={`h-4 w-4 shrink-0 ${syncing ? 'animate-spin text-blue-400' : ''}`} />
+                {!collapsed && <span className="truncate">Sync</span>}
+              </button>
+              {syncBusy && !collapsed && (
+                <div className="mx-3 mb-1 text-[11px] text-muted-foreground leading-tight">
+                  Sync already running.
+                  {auth.isAdmin && (
+                    <> <button
+                      className="text-primary underline-offset-2 hover:underline"
+                      onClick={async () => {
+                        setSyncBusy(false);
+                        setSyncing(true);
+                        try {
+                          await fetch('/api/sync', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ force: true }),
+                          });
+                        } finally {
+                          setSyncing(false);
+                        }
+                      }}
+                    >Force sync?</button></>
+                  )}
+                </div>
+              )}
+            </>
           )}
           <button
             onClick={toggleTheme}

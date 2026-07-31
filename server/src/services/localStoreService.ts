@@ -1,9 +1,9 @@
 import { mkdir, writeFile, readdir, readFile, rename, stat, utimes, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
-import { config } from '../../config.js';
-import { getCity } from '../geoService.js';
-import { logger } from '../../logger.js';
-import type { ResponseRecord, HistoryFile } from '../../types/index.js';
+import { config } from '../config.js';
+import { getCity } from './geoService.js';
+import { logger } from '../logger.js';
+import type { ResponseRecord, HistoryFile } from '../types/index.js';
 
 export interface BrowseFile {
   name: string;
@@ -25,6 +25,11 @@ function sanitizeEndpointName(name: string): string {
   return name.replace(/[^a-zA-Z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'endpoint';
 }
 
+/** Resolve the `resp/{service}` directory under LOCAL_STORE_DIR. */
+function respDir(serviceName: string): string {
+  return join(config.LOCAL_STORE_DIR, 'resp', sanitizeName(serviceName));
+}
+
 export async function saveResponse(
   serviceName: string,
   record: ResponseRecord,
@@ -33,7 +38,7 @@ export async function saveResponse(
   htmlContent?: string,
   isRetry = false,
 ): Promise<string> {
-  const dir = join(config.RESPONSE_DIR, sanitizeName(serviceName));
+  const dir = respDir(serviceName);
   await mkdir(dir, { recursive: true });
 
   const ts = formatTimestamp(new Date());
@@ -68,7 +73,7 @@ export async function listResponseFiles(
   serviceName: string,
   range: { hours: number } | { fromMs: number; untilMs: number } | { tag: 'starred' } | { since: number },
 ): Promise<HistoryFile[]> {
-  const dir = join(config.RESPONSE_DIR, sanitizeName(serviceName));
+  const dir = respDir(serviceName);
   try {
     const files = await readdir(dir);
     const fileSet = new Set(files);
@@ -108,11 +113,10 @@ export async function listResponseFiles(
     const results: HistoryFile[] = [];
     for (const f of files) {
       if (!f.endsWith('.json')) continue;
-      if (f.endsWith('.retry.json')) continue;  // exclude retry files from history
+      if (f.endsWith('.retry.json')) continue;
       if (starredOnly && !f.includes('.starred.')) continue;
       const meta = parseFilename(f);
       if (meta && meta.timestamp >= fromMs && meta.timestamp <= untilMs) {
-        // Support both old (*.png) and new (*.screenshot.png) screenshot naming
         const pngNew = f.replace(/\.json$/, '.screenshot.png');
         const pngOld = f.replace(/\.json$/, '.png');
         const pngFile = fileSet.has(pngNew) ? pngNew : fileSet.has(pngOld) ? pngOld : null;
@@ -130,7 +134,7 @@ export async function readResponseFile(
   filename: string,
 ): Promise<ResponseRecord> {
   if (!/^[\w-]+(?:\.starred)?(?:\.retry)?\.json$/.test(filename)) throw new Error('Invalid filename');
-  const filepath = join(config.RESPONSE_DIR, sanitizeName(serviceName), filename);
+  const filepath = join(respDir(serviceName), filename);
   const raw = await readFile(filepath, 'utf-8');
   return JSON.parse(raw) as ResponseRecord;
 }
@@ -139,30 +143,24 @@ export async function readScreenshotFile(
   serviceName: string,
   filename: string,
 ): Promise<Buffer> {
-  // Accept new (*.screenshot.png / *.retry.screenshot.png / *.starred.screenshot.png) and legacy naming
   if (!/^[\w-]+(?:\.starred)?(?:\.retry)?(?:\.screenshot)?\.png$/.test(filename)) throw new Error('Invalid filename');
-  const filepath = join(config.RESPONSE_DIR, sanitizeName(serviceName), filename);
-  return readFile(filepath);
+  return readFile(join(respDir(serviceName), filename));
 }
 
 export async function readConsoleLogFile(
   serviceName: string,
   filename: string,
 ): Promise<Buffer> {
-  // Accept new (*[.starred][.retry].console.log) and legacy (*_console[.retry].log) naming
   if (!/^[\w-]+(?:(?:\.starred)?(?:\.retry)?\.console\.log|_console(?:\.retry)?\.log)$/.test(filename)) throw new Error('Invalid filename');
-  const filepath = join(config.RESPONSE_DIR, sanitizeName(serviceName), filename);
-  return readFile(filepath);
+  return readFile(join(respDir(serviceName), filename));
 }
 
 export async function readContentFile(
   serviceName: string,
   filename: string,
 ): Promise<Buffer> {
-  // Accept new (*[.starred][.retry].content.html) and legacy (*_content[.retry].html) naming
   if (!/^[\w-]+(?:(?:\.starred)?(?:\.retry)?\.content\.html|_content(?:\.retry)?\.html)$/.test(filename)) throw new Error('Invalid filename');
-  const filepath = join(config.RESPONSE_DIR, sanitizeName(serviceName), filename);
-  return readFile(filepath);
+  return readFile(join(respDir(serviceName), filename));
 }
 
 export function parseFilename(filename: string): HistoryFile | null {
@@ -233,55 +231,26 @@ export function filenameTimestamp(filename: string): number {
 }
 
 /**
- * Lists all response files in all service folders plus root-level files, with their
- * last-modified timestamps. Root-level files (e.g. homepage.json) are returned under
- * the key `""`. When `since` is provided, only files whose mtime >= since are returned.
+ * Lists all response files. Service files live in `resp/{folder}/` under LOCAL_STORE_DIR;
+ * root-level files (e.g. homepage.json) live directly in LOCAL_STORE_DIR.
+ * Returns `{ [folder]: BrowseFile[] }` where folder `""` holds root files.
+ * When `since` is provided, only files whose mtime >= since are returned.
  */
 export async function browseResponseFiles(since?: number): Promise<Record<string, BrowseFile[]>> {
   const result: Record<string, BrowseFile[]> = {};
+  const storeDir = config.LOCAL_STORE_DIR;
+
   try {
-    const entries = await readdir(config.RESPONSE_DIR, { withFileTypes: true });
-
-    // Subdirectory files (existing behaviour)
-    await Promise.all(
-      entries
-        .filter(e => e.isDirectory())
-        .map(async (dirEntry) => {
-          try {
-            const names = await readdir(join(config.RESPONSE_DIR, dirEntry.name));
-            const filtered = names.filter(f =>
-              f.endsWith('.json') || f.endsWith('.png') ||
-              f.endsWith('.log') || f.endsWith('.html'),
-            );
-            const withMtime = await Promise.all(
-              filtered.map(async (name) => {
-                try {
-                  const info = await stat(join(config.RESPONSE_DIR, dirEntry.name, name));
-                  return { name, mtime: info.mtimeMs };
-                } catch {
-                  return { name, mtime: 0 };
-                }
-              }),
-            );
-            result[dirEntry.name] = since && since > 0
-              ? withMtime.filter(f => f.mtime === 0 || f.mtime >= since)
-              : withMtime;
-            result[dirEntry.name].sort((a, b) => a.name.localeCompare(b.name));
-          } catch {
-            result[dirEntry.name] = [];
-          }
-        }),
-    );
-
     // Root-level files (e.g. homepage.json, homepage-changelog.md)
+    const rootEntries = await readdir(storeDir, { withFileTypes: true });
     const rootFiles: BrowseFile[] = [];
-    for (const e of entries) {
+    for (const e of rootEntries) {
       if (!e.isFile() || (!e.name.endsWith('.json') && !e.name.endsWith('.md'))) continue;
       try {
-        const info = await stat(join(config.RESPONSE_DIR, e.name));
-        const mtime = info.mtimeMs;
-        if (!since || since <= 0 || mtime >= since) {
-          rootFiles.push({ name: e.name, mtime });
+        const info = await stat(join(storeDir, e.name));
+        const rawMtime = info.mtimeMs;
+        if (!since || since <= 0 || rawMtime >= since) {
+          rootFiles.push({ name: e.name, mtime: Math.round(rawMtime / 1000) * 1000 });
         }
       } catch { /* skip */ }
     }
@@ -290,24 +259,66 @@ export async function browseResponseFiles(since?: number): Promise<Record<string
       result[''] = rootFiles;
     }
   } catch {
-    // response dir doesn't exist yet
+    // LOCAL_STORE_DIR doesn't exist yet
   }
+
+  try {
+    // Service response files under resp/{service}/
+    const respBase = join(storeDir, 'resp');
+    const entries = await readdir(respBase, { withFileTypes: true });
+    await Promise.all(
+      entries
+        .filter(e => e.isDirectory())
+        .map(async (dirEntry) => {
+          try {
+            const names = await readdir(join(respBase, dirEntry.name));
+            const filtered = names.filter(f =>
+              f.endsWith('.json') || f.endsWith('.png') ||
+              f.endsWith('.log') || f.endsWith('.html'),
+            );
+            // Collect raw mtimes for accurate since-filtering, then round to
+            // nearest second so filesystem precision differences (1s on some
+            // hyperscaler VMs) don't cause false mismatches in the comparison.
+            const withRawMtime = await Promise.all(
+              filtered.map(async (name) => {
+                try {
+                  const info = await stat(join(respBase, dirEntry.name, name));
+                  return { name, rawMtime: info.mtimeMs };
+                } catch {
+                  return { name, rawMtime: 0 };
+                }
+              }),
+            );
+            result[dirEntry.name] = withRawMtime
+              .filter(f => !since || since <= 0 || f.rawMtime === 0 || f.rawMtime >= since)
+              .map(({ name, rawMtime }) => ({
+                name,
+                mtime: rawMtime === 0 ? 0 : Math.round(rawMtime / 1000) * 1000,
+              }));
+            result[dirEntry.name].sort((a, b) => a.name.localeCompare(b.name));
+          } catch {
+            result[dirEntry.name] = [];
+          }
+        }),
+    );
+  } catch {
+    // resp/ subdirectory doesn't exist yet
+  }
+
   return result;
 }
 
-/** Read a root-level file directly from RESPONSE_DIR (e.g. homepage.json). */
+/** Read a root-level file directly from LOCAL_STORE_DIR (e.g. homepage.json). */
 export async function readRootFile(filename: string): Promise<Buffer> {
   if (!/^[a-zA-Z0-9][a-zA-Z0-9_.-]*\.(json|md)$/.test(filename)) {
     throw new Error('Invalid root filename');
   }
-  return readFile(join(config.RESPONSE_DIR, filename));
+  return readFile(join(config.LOCAL_STORE_DIR, filename));
 }
 
 /**
- * After a batch download, finds local starred/unstarred duplicate pairs (filenames
- * identical except for `.starred.`) among files with timestamp >= the oldest filename
- * timestamp in the newly downloaded batch, then deletes the one with the older mtime.
- * This resolves star/unstar operations that happened on the producer since the last sync.
+ * After a batch download, finds local starred/unstarred duplicate pairs and deletes
+ * the one with the older mtime. Resolves star/unstar operations from the producer.
  */
 export async function resolveSyncDuplicates(
   folder: string,
@@ -315,7 +326,6 @@ export async function resolveSyncDuplicates(
 ): Promise<void> {
   if (downloadedFilenames.length === 0) return;
 
-  // Find the oldest filename timestamp among downloaded files
   let minTs = Infinity;
   for (const f of downloadedFilenames) {
     const ts = filenameTimestamp(f);
@@ -323,7 +333,7 @@ export async function resolveSyncDuplicates(
   }
   if (!isFinite(minTs)) return;
 
-  const dir = join(config.RESPONSE_DIR, folder);
+  const dir = join(config.LOCAL_STORE_DIR, 'resp', folder);
   let allFiles: string[];
   try {
     allFiles = await readdir(dir);
@@ -331,7 +341,6 @@ export async function resolveSyncDuplicates(
     return;
   }
 
-  // Only check files with filename timestamp >= the oldest downloaded file
   const candidates = allFiles.filter(f => {
     if (!f.endsWith('.json') && !f.endsWith('.png') && !f.endsWith('.log') && !f.endsWith('.html')) return false;
     const ts = filenameTimestamp(f);
@@ -339,7 +348,6 @@ export async function resolveSyncDuplicates(
   });
   if (candidates.length === 0) return;
 
-  // Stat candidates for local mtime (includes mtimes just restored from remote)
   const mtimes = new Map<string, number>();
   await Promise.all(candidates.map(async (f) => {
     try {
@@ -348,7 +356,6 @@ export async function resolveSyncDuplicates(
     } catch { /* file may have been deleted */ }
   }));
 
-  // Find starred/canonical pairs and delete the stale one
   const processed = new Set<string>();
   for (const f of candidates) {
     if (processed.has(f) || !mtimes.has(f) || !f.includes('.starred.')) continue;
@@ -365,15 +372,13 @@ export async function resolveSyncDuplicates(
 }
 
 /**
- * Stars or unstars a response file (and all its sidecar / retry files) by renaming them
- * to include or remove the `.starred.` segment, and updating JSON references accordingly.
+ * Stars or unstars a response file (and all its sidecar / retry files).
  */
 export async function starResponseFile(
   serviceName: string,
   filename: string,
   star: boolean,
 ): Promise<void> {
-  // Only new-format main json files (not retry) are allowed
   if (
     !/^\d{8}-\d{6}_[a-zA-Z0-9-]+_[a-zA-Z0-9-]+_\d+_(200|203|400|500|503|504)(?:\.starred)?\.json$/.test(filename)
   ) {
@@ -381,9 +386,9 @@ export async function starResponseFile(
   }
 
   const isAlreadyStarred = filename.includes('.starred.json');
-  if (star === isAlreadyStarred) return; // already in desired state
+  if (star === isAlreadyStarred) return;
 
-  const dir = join(config.RESPONSE_DIR, sanitizeName(serviceName));
+  const dir = respDir(serviceName);
   const filePath = join(dir, filename);
 
   const raw = await readFile(filePath, 'utf-8');
@@ -391,7 +396,6 @@ export async function starResponseFile(
 
   function transform(name: string): string {
     if (star) {
-      // Insert .starred after the base (before the first dot)
       const firstDot = name.indexOf('.');
       return firstDot === -1 ? name : name.slice(0, firstDot) + '.starred' + name.slice(firstDot);
     }
@@ -470,13 +474,13 @@ export async function starResponseFile(
 }
 
 export async function readRawResponseFile(folder: string, filename: string): Promise<Buffer> {
-  const filepath = join(config.RESPONSE_DIR, sanitizeName(folder), filename);
+  const filepath = join(config.LOCAL_STORE_DIR, 'resp', sanitizeName(folder), filename);
   return readFile(filepath);
 }
 
 export async function responseFileSize(folder: string, filename: string): Promise<number> {
   try {
-    const info = await stat(join(config.RESPONSE_DIR, sanitizeName(folder), filename));
+    const info = await stat(join(config.LOCAL_STORE_DIR, 'resp', sanitizeName(folder), filename));
     return info.size;
   } catch {
     return 0;

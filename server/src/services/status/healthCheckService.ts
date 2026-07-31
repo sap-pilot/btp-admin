@@ -1,6 +1,6 @@
-import { getService } from './configService.js';
+import { getService } from '../configService.js';
 import { evaluateCondition } from './conditionEvaluator.js';
-import { saveResponse } from './responseStore.js';
+import { saveResponse } from '../localStoreService.js';
 import { getEvaluationMode } from './overrideService.js';
 import { runBrowserIasLogin } from './browserCheckService.js';
 import { getCity } from '../geoService.js';

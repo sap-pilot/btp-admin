@@ -40,13 +40,13 @@ Azure Traffic Manager polls these health endpoints from multiple PoPs. When all 
 
 6. **Landscape diagram with live status** — tabbed Mermaid flowchart diagrams on the Overview page showing service topology; diagram nodes are coloured by live health status and are clickable links to the service detail page; nodes in `service.endpoint` format (e.g. `wz-us10.Workzone-Login`) show per-endpoint status and link directly to that endpoint's filtered view; compose diagrams at [mermaid.live](https://mermaid.live/); active tab is persisted in the URL hash for easy sharing
 
-7. **File-based storage — no database** — every check result is saved as a plain JSON file under `./response/`; no database, message broker, or external service required; XSUAA is optional and used only for authentication; the response directory is the only persistent state
+7. **File-based storage — no database** — every check result is saved as a plain JSON file under `./localStore/resp/{service}/`; root files such as `homepage.json` are stored directly under `./localStore/`; no database, message broker, or external service required; XSUAA is optional and used only for authentication; the local store directory is the only persistent state
 
 7. **Full authentication enforcement** — when XSUAA is bound, every `/api/*` endpoint requires a valid session; unauthenticated browsers land on a minimal login gate (app title, site switcher, theme toggle, **Welcome, click here to login** button, and a report-an-issue link) rather than seeing any data; the site switcher is fully functional before login — backed by the always-public `GET /api/info` — so users can switch to another region if they lack access to the current one; exceptions: `/health` is always public (Azure Traffic Manager probes), `/api/me` and `/api/info` are always public, and HMAC-signed peer-sync requests bypass session auth so the two-instance sync continues to work regardless of user login state
 
-8. **Push-based two-instance sync for CF file persistence** — Cloud Foundry containers are ephemeral and lose local files on restart; the consumer instance sets `SYNC_REMOTE` + `SELF_URL` to point at the producer; on startup it downloads all existing files and registers itself as a webhook consumer; when the producer completes a health check it calls all registered `/api/download-trigger` webhooks; the consumer fetches only the delta (`GET /api/browse?since=<ms>`) and downloads new files via `POST /api/batch-download`; see [Remote Sync](#remote-sync)
+8. **Push-based two-instance sync for CF file persistence** — Cloud Foundry containers are ephemeral and lose local files on restart; the consumer instance sets `SYNC_REMOTE` + `SELF_URL` to point at the producer; on startup it downloads all existing files and registers itself as a webhook consumer; when the producer completes a health check it calls all registered `/api/download-trigger` webhooks; the consumer fetches only the delta (`GET /api/browse?since=<browseTs>`) using the `browseTs` timestamp returned by the previous browse response, and downloads new files via `POST /api/batch-download`; at most one normal sync runs at a time with one queue slot; a manual sync from the UI (Sync button) can force a full re-sync regardless; see [Remote Sync](#remote-sync)
 
-9. **BTP Homepage** — a configurable navigation hub at `/home` driven by `server/homepage.json` (or `HOMEPAGE_JSON` env var); organize your BTP subaccounts into tabs and directories; one column per subaccount, one row per service; a **Cockpit** row provides deep dropdown navigation with per-space sub-menus; other service rows resolve URLs from named templates with `{placeholder}` substitution; sidebar `menus` groups (e.g. Security, Resources) are filtered per `restricted` flag — unauthenticated users see only unrestricted items; copy `sample/homepage.json` as a starting point; the active tab is reflected in the URL as `/home/{tab}` so links can be bookmarked or shared; an **Edit** (pencil) button in the topbar (visible to logged-in users, enabled for `BTP_Admin` role only) opens an in-app JSON editor with live preview and change history — edits are saved to `{RESPONSE_DIR}/homepage.json` and immediately applied
+9. **BTP Homepage** — a configurable navigation hub at `/home` driven by `server/homepage.json` (or `HOMEPAGE_JSON` env var); organize your BTP subaccounts into tabs and directories; one column per subaccount, one row per service; a **Cockpit** row provides deep dropdown navigation with per-space sub-menus; other service rows resolve URLs from named templates with `{placeholder}` substitution; sidebar `menus` groups (e.g. Security, Resources) are filtered per `restricted` flag — unauthenticated users see only unrestricted items; copy `sample/homepage.json` as a starting point; the active tab is reflected in the URL as `/home/{tab}` so links can be bookmarked or shared; an **Edit** (pencil) button in the topbar (visible to logged-in users, enabled for `BTP_Admin` role only) opens an in-app JSON editor with live preview and change history — edits are saved to `{LOCAL_STORE_DIR}/homepage.json` and immediately applied
 
 10. **Minimal server dependencies** — production runtime requires only Express (HTTP), Pino (logging), and Playwright (browser checks); all HTTP requests, crypto, gzip compression, and ZIP packaging use native Node.js APIs — no axios, no ORM, no utility libraries
 
@@ -449,7 +449,7 @@ When `VCAP_SERVICES` is not set (local dev), all auth middleware passes through 
 Each health check saves a file at:
 
 ```
-./response/{service-name}/yyyyMMdd-HHmmss_{endpointSlug}_{city}_{responseTimeMs}_{200|203|400|500|503|504}.json
+./localStore/resp/{service-name}/yyyyMMdd-HHmmss_{endpointSlug}_{city}_{responseTimeMs}_{200|203|400|500|503|504}.json
 ```
 
 - **Timestamp**: UTC (`yyyyMMdd-HHmmss`)
@@ -501,7 +501,7 @@ The server uses [pino](https://getpino.io) with colorized pretty-print output.
 | `PORT` | `3000` | HTTP listen port (Cloud Foundry sets this automatically) |
 | `CONFIG_JSON` | — | Full config as a JSON string; takes priority over `CONFIG_FILE` (ideal for BTP env properties) |
 | `CONFIG_FILE` | `./config.json` | Path to config JSON file (relative to `server/` working dir; resolved as `server/config.json` from repo root) |
-| `RESPONSE_DIR` | `./response` | Directory for response file storage |
+| `LOCAL_STORE_DIR` | `./localStore` | Root directory for local file storage; response files go under `resp/{service}/`; root files (homepage.json, etc.) go directly in this directory |
 | `SYNC_REMOTE` | — | Base URL of the producer BTP Status instance (e.g. `https://btp-status-prod.cfapps.eu10.hana.ondemand.com`). On startup the consumer downloads all existing files and registers itself as a webhook consumer. Subsequent updates arrive via push (`/api/download-trigger`). |
 | `SELF_URL` | auto | Base URL of this (consumer) instance used when registering the `/api/download-trigger` webhook with the producer. Auto-detected from `VCAP_APPLICATION.application_uris[0]` in Cloud Foundry. Set explicitly if auto-detection is unavailable (e.g. local development). |
 | `SYNC_REMOTE_BATCH_SIZE` | `200` | Number of files requested per `POST /api/batch-download` call during sync. The sync job tries the batch endpoint first; if the remote does not support it, it falls back to individual `GET /api/download` requests with concurrency 10. |
@@ -532,7 +532,7 @@ SELF_URL=https://btp-status-replica.cfapps.eu10.hana.ondemand.com
 **Startup flow:**
 1. Consumer calls `GET /api/browse?callback=<SELF_URL>/api/download-trigger` on the producer  
    — registers the consumer's webhook with the producer and gets the full file list with per-file mtimes
-2. Compares against local `./response/` directory
+2. Compares against local `./localStore/` directory
 3. Downloads all missing files via `POST /api/batch-download` (ZIP batches, `SYNC_REMOTE_BATCH_SIZE` files per request)  
    — falls back to individual `GET /api/download?path=…` (concurrency 10) if the remote does not support batch
 4. Sets each downloaded file's local mtime to match the remote mtime (from the browse response)
@@ -541,7 +541,7 @@ SELF_URL=https://btp-status-replica.cfapps.eu10.hana.ondemand.com
 **Push notification flow (after each health check on the producer):**
 1. Producer completes a check and calls all registered `callback` URLs (fire-and-forget)
 2. Consumer's `GET /api/download-trigger` is called (authenticated with the shared sync key)
-3. Consumer calls `GET /api/browse?since=<lastBrowseTs>&callback=<SELF_URL>/api/download-trigger` — the `since` filter is now applied by file mtime (not filename timestamp), so star/unstar renames appear in the delta even though the filename date prefix stays the same
+3. Consumer calls `GET /api/browse?since=<lastBrowseTs>&callback=<SELF_URL>/api/download-trigger` — the `since` parameter is the `browseTs` returned by the previous browse response (a timestamp captured on the server before the filesystem scan); the `since` filter is applied by file mtime, so star/unstar renames appear in the delta even though the filename date prefix stays the same
 4. Downloads new files, restores remote mtimes, and deduplicates starred/unstarred pairs (step 4–5 above)
 
 Only one download runs at a time. A second trigger that arrives while a download is running is queued; further arrivals are dropped (the queued one will catch up on all new files).

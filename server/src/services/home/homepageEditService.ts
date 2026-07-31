@@ -3,11 +3,11 @@ import { join } from 'node:path';
 import { config } from '../../config.js';
 import { notifyCallbacks } from '../syncService.js';
 
-const HOMEPAGE_PATH = join(config.RESPONSE_DIR, 'homepage.json');
-const CHANGELOG_PATH = join(config.RESPONSE_DIR, 'homepage-changelog.md');
+const HOMEPAGE_PATH = join(config.LOCAL_STORE_DIR, 'homepage.json');
+const CHANGELOG_PATH = join(config.LOCAL_STORE_DIR, 'homepage-changelog.md');
 
 /** Read the effective raw homepage JSON following the priority chain:
- *  RESPONSE_DIR/homepage.json > HOMEPAGE_JSON env > server/homepage.json */
+ *  LOCAL_STORE_DIR/homepage.json > HOMEPAGE_JSON env > server/homepage.json */
 export function readEffectiveHomepageRaw(): string | null {
   if (existsSync(HOMEPAGE_PATH)) return readFileSync(HOMEPAGE_PATH, 'utf-8');
   if (process.env.HOMEPAGE_JSON) return process.env.HOMEPAGE_JSON;
@@ -16,7 +16,7 @@ export function readEffectiveHomepageRaw(): string | null {
 
 export function saveHomepage(jsonText: string, user: { name: string; email?: string }): void {
   const oldRaw = readEffectiveHomepageRaw();
-  mkdirSync(config.RESPONSE_DIR, { recursive: true });
+  mkdirSync(config.LOCAL_STORE_DIR, { recursive: true });
   writeFileSync(HOMEPAGE_PATH, jsonText, 'utf-8');
 
   const diff = computeDiff(oldRaw, jsonText);
