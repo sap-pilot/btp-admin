@@ -1,6 +1,6 @@
 import { mkdir, readdir, readFile, rename, stat, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, sep } from 'node:path';
 import { homedir } from 'node:os';
 import { config } from '../config.js';
 import { logger } from '../logger.js';
@@ -282,7 +282,11 @@ export interface DestSearchResult {
   matchValue: string;
 }
 
-export async function searchDestinations(query: string): Promise<DestSearchResult[]> {
+export async function searchDestinations(
+  query: string,
+  scopeRegion?: string,
+  scopeSubdomain?: string,
+): Promise<DestSearchResult[]> {
   if (!query) return [];
   const lq = query.toLowerCase();
   const results: DestSearchResult[] = [];
@@ -299,10 +303,12 @@ export async function searchDestinations(query: string): Promise<DestSearchResul
 
   const regions = await readdir(LOCAL_DEST_DIR).catch(() => [] as string[]);
   for (const region of regions) {
+    if (scopeRegion && region !== scopeRegion) continue;
     const regionDir = join(LOCAL_DEST_DIR, region);
     try { if (!(await stat(regionDir)).isDirectory()) continue; } catch { continue; }
     const subdomains = await readdir(regionDir).catch(() => [] as string[]);
     for (const subdomain of subdomains) {
+      if (scopeSubdomain && subdomain !== scopeSubdomain) continue;
       const subDir = join(regionDir, subdomain);
       try { if (!(await stat(subDir)).isDirectory()) continue; } catch { continue; }
       const org_id = orgIndex.get(`${region}/${subdomain}`) ?? '';
@@ -329,6 +335,91 @@ export async function searchDestinations(query: string): Promise<DestSearchResul
     }
   }
   return results;
+}
+
+// ─── Single-destination CRUD ──────────────────────────────────────────────────
+
+const REDACTED_SENTINEL = '***';
+
+export interface DestinationResponse {
+  data:            Record<string, unknown>;
+  sensitiveFields: string[];
+}
+
+function guardDestPath(region: string, subdomain: string, name: string): { jsonPath: string; changelogPath: string } {
+  for (const s of [region, subdomain, name]) {
+    if (!s || s.includes('..') || s.includes('/') || s.includes('\\')) {
+      throw Object.assign(new Error('Invalid path segment'), { status: 400 });
+    }
+  }
+  const base          = join(LOCAL_DEST_DIR, region, subdomain);
+  const jsonPath      = join(base, `${name}.json`);
+  const changelogPath = join(base, `${name}.changelog.md`);
+  if (!jsonPath.startsWith(LOCAL_DEST_DIR + sep)) {
+    throw Object.assign(new Error('Path traversal detected'), { status: 400 });
+  }
+  return { jsonPath, changelogPath };
+}
+
+export async function getDestination(region: string, subdomain: string, name: string): Promise<DestinationResponse | null> {
+  const { jsonPath } = guardDestPath(region, subdomain, name);
+  try {
+    const data = JSON.parse(await readFile(jsonPath, 'utf-8')) as Record<string, unknown>;
+    return { data, sensitiveFields: Object.keys(data).filter(k => isSensitiveField(k)) };
+  } catch { return null; }
+}
+
+export async function exportDestination(region: string, subdomain: string, name: string): Promise<Record<string, unknown> | null> {
+  const { jsonPath } = guardDestPath(region, subdomain, name);
+  try { return JSON.parse(await readFile(jsonPath, 'utf-8')) as Record<string, unknown>; }
+  catch { return null; }
+}
+
+export async function saveDestinationEntry(
+  region: string,
+  subdomain: string,
+  name: string,
+  incoming: Record<string, unknown>,
+  username: string,
+): Promise<void> {
+  const { jsonPath, changelogPath } = guardDestPath(region, subdomain, name);
+
+  let existing: Record<string, unknown> = {};
+  try { existing = JSON.parse(await readFile(jsonPath, 'utf-8')) as Record<string, unknown>; } catch { /* new */ }
+
+  // Restore original sensitive values when the client sent the redacted sentinel unchanged
+  const merged: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(incoming)) {
+    merged[k] = (v === REDACTED_SENTINEL && isSensitiveField(k) && k in existing) ? existing[k] : v;
+  }
+
+  // Compute diff
+  const diffLines: string[] = [];
+  const allKeys = [...new Set([...Object.keys(existing), ...Object.keys(merged)])].sort();
+  for (const k of allKeys) {
+    const pv = JSON.stringify(existing[k] ?? null);
+    const nv = JSON.stringify(merged[k] ?? null);
+    if (pv === nv) continue;
+    diffLines.push(isSensitiveField(k)
+      ? `- ${k}: [redacted] → [redacted]`
+      : `- ${k}: ${pv} → ${nv}`);
+  }
+
+  if (diffLines.length > 0) {
+    const dateStr = new Date().toISOString().replace('T', ' ').slice(0, 19) + ' UTC';
+    const entry   = `## ${name} # ${username} - ${dateStr}\n${diffLines.join('\n')}\n\n`;
+    const prev    = existsSync(changelogPath) ? await readFile(changelogPath, 'utf-8') : '';
+    await writeFile(changelogPath, entry + prev, 'utf-8');
+  }
+
+  await mkdir(join(LOCAL_DEST_DIR, region, subdomain), { recursive: true });
+  await writeFile(jsonPath, JSON.stringify(merged, null, 2), 'utf-8');
+}
+
+export async function getDestinationChangelog(region: string, subdomain: string, name: string): Promise<string> {
+  const { changelogPath } = guardDestPath(region, subdomain, name);
+  try { return await readFile(changelogPath, 'utf-8'); }
+  catch { return ''; }
 }
 
 export async function listDestinations(): Promise<Record<string, Array<{ name: string; status: 'OK' }>>> {

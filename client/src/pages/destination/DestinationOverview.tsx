@@ -4,6 +4,7 @@ import { PanelLeft, RefreshCw, Search } from 'lucide-react';
 import { useSidebar } from '@/components/AppLayout';
 import type { OrgEntry, OrgRegion } from '@/components/config/OrgsTable';
 import type { DirTab } from '@/components/config/DirsTable';
+import SubaccountDestModal from './SubaccountDestModal';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -12,7 +13,7 @@ type DestData = Record<string, DestItem[]>;
 
 interface Buckets { generic: string[]; s4: string[]; cep: string[]; others: string[] }
 
-interface ModalState { org: OrgEntry; region: string; others: string[] }
+interface ModalState { org: OrgEntry & { region: string }; allNames: string[]; initialName?: string }
 
 interface DestSearchResult {
   region:     string;
@@ -191,18 +192,30 @@ export default function DestinationOverview() {
             <div className="absolute top-full mt-1 right-0 w-[420px] bg-popover border border-border rounded-md shadow-lg z-50 max-h-[400px] overflow-auto">
               {searchResults.length === 0
                 ? <div className="px-3 py-4 text-xs text-muted-foreground text-center">No destinations found</div>
-                : searchResults.map((r, i) => (
-                  <div key={i} className="px-3 py-2 border-b border-border last:border-0 hover:bg-muted/50 select-text">
-                    <div className="font-mono text-xs font-medium text-foreground">{r.name}</div>
-                    {r.matchField !== 'Name' && (
-                      <div className="text-[10px] text-muted-foreground mt-0.5 truncate">
-                        <span className="text-muted-foreground/60">{r.matchField}: </span>
-                        {r.matchValue.length > 80 ? `${r.matchValue.slice(0, 80)}…` : r.matchValue}
-                      </div>
-                    )}
-                    <div className="text-[10px] text-muted-foreground/50 mt-0.5">{r.region} / {r.subdomain}</div>
-                  </div>
-                ))
+                : searchResults.map((r, i) => {
+                  const org = allDestOrgs.find(o => o.org_id === r.org_id);
+                  return (
+                    <button
+                      key={i}
+                      className="w-full text-left px-3 py-2 border-b border-border last:border-0 hover:bg-muted/50"
+                      onClick={() => {
+                        if (!org) return;
+                        setModal({ org, allNames: (destData[r.org_id] ?? []).map(d => d.name).sort(), initialName: r.name });
+                        setShowResults(false);
+                        setSearchQuery('');
+                      }}
+                    >
+                      <div className="font-mono text-xs font-medium text-foreground">{r.name}</div>
+                      {r.matchField !== 'Name' && (
+                        <div className="text-[10px] text-muted-foreground mt-0.5 truncate">
+                          <span className="text-muted-foreground/60">{r.matchField}: </span>
+                          {r.matchValue.length > 80 ? `${r.matchValue.slice(0, 80)}…` : r.matchValue}
+                        </div>
+                      )}
+                      <div className="text-[10px] text-muted-foreground/50 mt-0.5">{r.region} / {r.subdomain}</div>
+                    </button>
+                  );
+                })
               }
             </div>
           )}
@@ -267,7 +280,11 @@ export default function DestinationOverview() {
                       <tr className="bg-muted/30">
                         <th className="sticky left-0 z-20 bg-muted/30 text-left text-xs font-medium text-muted-foreground px-3 py-2 w-[130px] border-r border-b border-border whitespace-nowrap"></th>
                         {visibleOrgs.map(org => (
-                          <th key={org.org_id} className="text-center text-xs font-medium px-3 py-2 min-w-[160px] border-l border-b border-border text-muted-foreground">
+                          <th
+                            key={org.org_id}
+                            className="text-center text-xs font-medium px-3 py-2 min-w-[160px] border-l border-b border-border text-muted-foreground cursor-pointer hover:bg-muted/40 transition-colors"
+                            onClick={() => setModal({ org, allNames: (destData[org.org_id] ?? []).map(d => d.name).sort() })}
+                          >
                             <div className="flex flex-col gap-0.5 items-center">
                               <span>{org.alias || org.org_name}</span>
                               {org.subdomain && (
@@ -310,9 +327,12 @@ export default function DestinationOverview() {
                                 const status = fakeStatus(name, org.org_id);
                                 return (
                                   <td key={org.org_id} className={`${tdCls} text-left`}>
-                                    <span className={`font-mono text-[11px] ${status === 'OK' ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}`}>
+                                    <button
+                                      className={`font-mono text-[11px] hover:underline text-left ${status === 'OK' ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}`}
+                                      onClick={() => setModal({ org, allNames: (destData[org.org_id] ?? []).map(d => d.name).sort(), initialName: name })}
+                                    >
                                       {name}
-                                    </span>
+                                    </button>
                                   </td>
                                 );
                               })}
@@ -338,8 +358,8 @@ export default function DestinationOverview() {
                               const status  = present ? fakeStatus(name, org.org_id) : null;
                               return (
                                 <td key={org.org_id} className={`${tdCls} text-left`}>
-                                  {status === 'OK'     && <span className="text-green-600 dark:text-green-400 font-mono text-[11px]">{name}</span>}
-                                  {status === 'Failed' && <span className="text-red-600   dark:text-red-400   font-mono text-[11px]">{name}</span>}
+                                  {status === 'OK'     && <button className="text-green-600 dark:text-green-400 font-mono text-[11px] hover:underline text-left" onClick={() => setModal({ org, allNames: (destData[org.org_id] ?? []).map(d => d.name).sort(), initialName: name })}>{name}</button>}
+                                  {status === 'Failed' && <button className="text-red-600   dark:text-red-400   font-mono text-[11px] hover:underline text-left" onClick={() => setModal({ org, allNames: (destData[org.org_id] ?? []).map(d => d.name).sort(), initialName: name })}>{name}</button>}
                                   {!status             && <span className="text-muted-foreground/30 text-[11px]">—</span>}
                                 </td>
                               );
@@ -357,13 +377,14 @@ export default function DestinationOverview() {
                           </div>
                         </td>
                         {orgBuckets.map(({ org, buckets }) => {
-                          const others = buckets.others;
+                          const others   = buckets.others;
+                          const allOrgNames = (destData[org.org_id] ?? []).map(d => d.name).sort();
                           return (
                             <td key={org.org_id} className={`${tdCls} text-left`}>
                               {others.length > 0
                                 ? (
                                   <button
-                                    onClick={() => setModal({ org, region: org.region, others })}
+                                    onClick={() => setModal({ org, allNames: allOrgNames, initialName: others[0] })}
                                     className="w-full flex items-center justify-between px-2 py-1 rounded bg-muted/60 text-muted-foreground hover:bg-accent hover:text-accent-foreground text-[11px] font-medium transition-colors"
                                   >
                                     <span>{others.length} destinations</span>
@@ -385,33 +406,13 @@ export default function DestinationOverview() {
         })}
       </div>
 
-      {/* Subaccount Destinations modal (placeholder) */}
       {modal && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
-          onClick={() => setModal(null)}
-        >
-          <div
-            className="bg-background border border-border rounded-lg shadow-xl w-[90vw] max-w-5xl max-h-[90vh] flex flex-col"
-            onClick={e => e.stopPropagation()}
-          >
-            <div className="flex items-center justify-between px-4 py-3 border-b border-border shrink-0">
-              <span className="text-sm font-semibold">
-                Subaccount Destinations — {modal.org.alias || modal.org.org_name}
-              </span>
-              <button onClick={() => setModal(null)} className="text-muted-foreground hover:text-foreground text-lg leading-none px-1">×</button>
-            </div>
-            <div className="flex-1 overflow-auto p-6 flex flex-col items-center justify-center gap-3 text-muted-foreground">
-              <p className="text-sm font-medium">Full destination list — coming soon</p>
-              <p className="text-xs">Region: {modal.region} · Subdomain: {modal.org.subdomain}</p>
-              <div className="mt-4 text-xs space-y-1 max-w-md w-full">
-                {modal.others.sort().map(name => (
-                  <div key={name} className="px-2 py-1 rounded bg-muted font-mono">{name}</div>
-                ))}
-              </div>
-            </div>
-          </div>
-        </div>
+        <SubaccountDestModal
+          org={modal.org}
+          allNames={modal.allNames}
+          initialName={modal.initialName}
+          onClose={() => setModal(null)}
+        />
       )}
     </div>
   );
