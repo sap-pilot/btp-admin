@@ -1,8 +1,8 @@
 import { readdir, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
-import { config } from '../../config.js';
-import { logger } from '../../logger.js';
-import { parseFilename } from './responseStore.js';
+import { config } from '../config.js';
+import { logger } from '../logger.js';
+import { parseFilename } from './localStoreService.js';
 
 let timer: ReturnType<typeof setTimeout> | null = null;
 let stopped = false;
@@ -17,12 +17,14 @@ export async function runHousekeeping(): Promise<void> {
   let oldest = Infinity;
   let newest = 0;
 
+  const respBase = join(config.LOCAL_STORE_DIR, 'resp');
+
   try {
-    const entries = await readdir(config.RESPONSE_DIR, { withFileTypes: true });
+    const entries = await readdir(respBase, { withFileTypes: true });
 
     for (const entry of entries) {
       if (!entry.isDirectory()) continue;
-      const serviceDir = join(config.RESPONSE_DIR, entry.name);
+      const serviceDir = join(respBase, entry.name);
 
       let files: string[];
       try {
@@ -32,10 +34,8 @@ export async function runHousekeeping(): Promise<void> {
       }
 
       for (const file of files) {
-        // Starred files are retained indefinitely
         if (file.includes('.starred.')) continue;
 
-        // Derive the corresponding .json filename so we can parse the timestamp
         let jsonName: string;
         if (file.endsWith('.json')) jsonName = file;
         else if (file.endsWith('.png')) jsonName = file.replace(/\.png$/, '.json');
@@ -69,7 +69,6 @@ export async function runHousekeeping(): Promise<void> {
   }
 }
 
-// Schedules the next run 24 h from now; always reschedules even after errors.
 function scheduleNext(): void {
   if (stopped) return;
   timer = setTimeout(() => {

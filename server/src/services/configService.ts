@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
-import type { AppConfig, ServiceConfig, LandscapeConfig, SiteConfig, EndpointConfig } from '../../types/index.js';
-import { config } from '../../config.js';
-import { logger } from '../../logger.js';
+import type { AppConfig, ServiceConfig, LandscapeConfig, SiteConfig, EndpointConfig } from '../types/index.js';
+import { config } from '../config.js';
+import { logger } from '../logger.js';
 
 let appConfig: AppConfig | null = null;
 

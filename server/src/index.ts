@@ -1,10 +1,10 @@
 import express from 'express';
 import { config } from './config.js';
-import { loadConfig } from './services/status/configService.js';
+import { loadConfig } from './services/configService.js';
 import { logger } from './logger.js';
 import { startScheduler, stopScheduler } from './services/status/schedulerService.js';
-import { syncFromRemote, setLastTriggerSyncTs, startIntervalFallback, stopIntervalFallback } from './services/syncService.js';
-import { startHousekeepingScheduler, stopHousekeepingScheduler } from './services/status/housekeepingService.js';
+import { startupSync, startIntervalFallback, stopIntervalFallback } from './services/syncService.js';
+import { startHousekeepingScheduler, stopHousekeepingScheduler } from './services/housekeepingService.js';
 import { initGeo } from './services/geoService.js';
 import { closeBrowser } from './services/status/browserCheckService.js';
 import healthRouter from './routes/health.js';
@@ -51,13 +51,7 @@ const server = app.listen(config.PORT, () => {
   startScheduler();
   startHousekeepingScheduler();
   if (config.SYNC_REMOTE) {
-    // Record the start time now (≈ browse time) so the next trigger/interval sync
-    // uses since= from before the startup browse, catching any files generated
-    // between the browse and the batch-download completing.
-    const startupSyncTs = Date.now();
-    syncFromRemote(config.SYNC_REMOTE, { selfBaseUrl: config.SELF_URL })
-      .catch(err => logger.error({ err }, 'Remote sync error'))
-      .finally(() => setLastTriggerSyncTs(startupSyncTs));
+    startupSync();
     startIntervalFallback();
   }
 });

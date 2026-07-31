@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import type { Request, Response, NextFunction } from 'express';
-import { getService } from '../services/status/configService.js';
-import { listResponseFiles } from '../services/status/responseStore.js';
+import { getService } from '../services/configService.js';
+import { listResponseFiles } from '../services/localStoreService.js';
 import { getEvaluationMode } from '../services/status/overrideService.js';
 import { logger } from '../logger.js';
 

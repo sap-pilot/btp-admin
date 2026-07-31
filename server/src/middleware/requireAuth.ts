@@ -2,7 +2,7 @@ import type { Request, Response, NextFunction } from 'express';
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import { getXsuaaConfig, readSessionFromRequest } from '../services/authService.js';
 import type { SessionPayload } from '../services/authService.js';
-import { getSyncKey } from '../services/status/configService.js';
+import { getSyncKey } from '../services/configService.js';
 import { config } from '../config.js';
 import { logger } from '../logger.js';
 

@@ -1,7 +1,7 @@
 import { Router } from 'express';
-import { readRawResponseFile, readRootFile, readResponseFile, readScreenshotFile, readConsoleLogFile, readContentFile, browseResponseFiles } from '../services/status/responseStore.js';
+import { readRawResponseFile, readRootFile, readResponseFile, readScreenshotFile, readConsoleLogFile, readContentFile, browseResponseFiles } from '../services/localStoreService.js';
 import { buildZip } from '../services/zipBuilder.js';
-import { syncFromRemote, handleDownloadTrigger, registerCallback } from '../services/syncService.js';
+import { syncFromRemote, handleDownloadTrigger, registerCallback, type SyncStats } from '../services/syncService.js';
 import { config } from '../config.js';
 import { logger } from '../logger.js';
 import { getXsuaaConfig, readSessionFromRequest } from '../services/authService.js';
@@ -9,7 +9,7 @@ import { requireAuth, requireAdmin, requireSyncAuth, requireSyncAuthOrOpen } fro
 import type { AuthRequest } from '../middleware/requireAuth.js';
 import { userLabel } from '../services/authService.js';
 import { subscribe } from '../services/liveEvents.js';
-import { getSites } from '../services/status/configService.js';
+import { getSites } from '../services/configService.js';
 import { getCity } from '../services/geoService.js';
 
 const router = Router();
@@ -52,10 +52,11 @@ router.post('/sync', requireAuth, async (req, res, next) => {
     return;
   }
   try {
+    const { force } = (req.body as { force?: boolean } | undefined) ?? {};
     const user = (req as AuthRequest).authSession ? userLabel((req as AuthRequest).authSession!) : 'anon';
-    logger.info({ from: req.ip, user }, 'On-demand sync triggered');
-    const stats = await syncFromRemote(config.SYNC_REMOTE, { selfBaseUrl: config.SELF_URL });
-    res.json({ ok: !stats.error, ...stats });
+    logger.info({ from: req.ip, user, force: !!force }, 'On-demand sync triggered');
+    const stats: SyncStats = await syncFromRemote(config.SYNC_REMOTE, { selfBaseUrl: config.SELF_URL, force: !!force });
+    res.json({ ok: !stats.error && !stats.busy, ...stats });
   } catch (err) {
     next(err);
   }
@@ -132,8 +133,9 @@ router.get('/browse', requireSyncAuthOrOpen, async (req, res, next) => {
       } catch { /* invalid URL — ignore */ }
     }
 
+    const browseTs = Date.now();
     const folders = await browseResponseFiles(since && since > 0 ? since : undefined);
-    res.json({ folders });
+    res.json({ folders, browseTs });
   } catch (err) {
     next(err);
   }

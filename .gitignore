@@ -22,7 +22,7 @@ tmp-*
 server/public/
 *.mtar
 mtad.yaml
-response/
+localStore/
 server/pw-browsers/
 .env
 *.local

@@ -1,4 +1,4 @@
-import { getAllServices, getService } from './configService.js';
+import { getAllServices, getService } from '../configService.js';
 import { checkService } from './healthCheckService.js';
 import { logger } from '../../logger.js';
 

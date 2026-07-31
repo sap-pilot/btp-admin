@@ -1,6 +1,6 @@
 import { Router } from 'express';
-import { getAllServices, getLandscapes, getService } from '../services/status/configService.js';
-import { listResponseFiles, readResponseFile, starResponseFile } from '../services/status/responseStore.js';
+import { getAllServices, getLandscapes, getService } from '../services/configService.js';
+import { listResponseFiles, readResponseFile, starResponseFile } from '../services/localStoreService.js';
 import { getEvaluationMode, setEvaluationMode, getIntervalOverride, setIntervalOverride } from '../services/status/overrideService.js';
 import { rescheduleService } from '../services/status/schedulerService.js';
 import { checkService } from '../services/status/healthCheckService.js';

@@ -1,6 +1,6 @@
 const CONFIG_FILE = process.env.CONFIG_FILE ?? './config.json';
 const PORT = parseInt(process.env.PORT ?? '3000', 10);
-const RESPONSE_DIR = process.env.RESPONSE_DIR ?? './response';
+const LOCAL_STORE_DIR = process.env.LOCAL_STORE_DIR ?? './localStore';
 const SYNC_REMOTE = process.env.SYNC_REMOTE ?? '';
 const SYNC_REMOTE_BATCH_SIZE = Math.max(1, parseInt(process.env.SYNC_REMOTE_BATCH_SIZE ?? '200', 10));
 const SYNC_INTERVAL = Math.max(0, parseInt(process.env.SYNC_INTERVAL ?? '300', 10));
@@ -19,4 +19,4 @@ const SELF_URL = (() => {
   } catch { return ''; }
 })();
 
-export const config = { CONFIG_FILE, PORT, RESPONSE_DIR, SYNC_REMOTE, SELF_URL, SYNC_REMOTE_BATCH_SIZE, SYNC_INTERVAL, MAX_RESPONSE_STORAGE_DAYS, REQUEST_TIMEOUT_MS, SYNC_PROTECTION_OFF };
+export const config = { CONFIG_FILE, PORT, LOCAL_STORE_DIR, SYNC_REMOTE, SELF_URL, SYNC_REMOTE_BATCH_SIZE, SYNC_INTERVAL, MAX_RESPONSE_STORAGE_DAYS, REQUEST_TIMEOUT_MS, SYNC_PROTECTION_OFF };
