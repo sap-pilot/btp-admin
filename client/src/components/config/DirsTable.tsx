@@ -181,8 +181,8 @@ export default function DirsTable({ data, onChange, isDirty, isSaving, onReset, 
       {/* Table */}
       <div className="flex-1 overflow-auto">
         <table className="w-full border-collapse text-sm min-w-[500px]">
-          <thead className="sticky top-0 bg-background z-10">
-            <tr>
+          <thead className="sticky top-0 z-10">
+            <tr className="bg-muted/40">
               <th className={`${thCls} w-6`} />
               <th className={rszThCls} style={{ resize: 'horizontal', minWidth: 120 }}>Tab / Dir Title</th>
               <th className={rszThCls} style={{ resize: 'horizontal', minWidth: 80 }}>Alias</th>
@@ -210,7 +210,7 @@ export default function DirsTable({ data, onChange, isDirty, isSaving, onReset, 
                   key={`tab-${ti}`}
                   onDragOver={e => !isFiltering && handleTabDragOver(e, ti)}
                   onDrop={e => !isFiltering && handleTabDrop(e, ti)}
-                  className={`bg-muted/40 select-none hover:bg-muted/60 ${isTabDragging ? 'opacity-40' : ''} ${isTabDropTarget ? 'border-t-2 border-primary' : ''}`}
+                  className={`bg-muted/20 select-none hover:bg-muted/30 ${isTabDragging ? 'opacity-40' : ''} ${isTabDropTarget ? 'border-t-2 border-primary' : ''}`}
                 >
                   <td
                     draggable={!isFiltering}
