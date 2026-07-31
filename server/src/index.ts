@@ -12,6 +12,7 @@ import apiRouter from './routes/api.js';
 import statusApiRouter from './routes/status.js';
 import homepageRouter from './routes/homepage.js';
 import configRouter from './routes/config.js';
+import destRouter from './routes/destinations.js';
 import authRouter from './routes/auth.js';
 import { requireSessionGlobal } from './middleware/requireAuth.js';
 import { errorHandler } from './middleware/errorHandler.js';
@@ -34,6 +35,7 @@ app.use('/api', requireSessionGlobal);
 app.use('/api/status', statusApiRouter);
 app.use('/api/homepage', homepageRouter);
 app.use('/api/config', configRouter);
+app.use('/api/destinations', destRouter);
 app.use('/api', apiRouter);
 
 try {
@@ -45,7 +47,7 @@ try {
 app.use(errorHandler);
 
 const server = app.listen(config.PORT, () => {
-  logger.info({ port: config.PORT }, 'BTP Admin server started');
+  logger.info({ port: config.PORT }, 'btp-admin server started');
   if (config.SYNC_PROTECTION_OFF) {
     logger.warn('SYNC_PROTECTION_OFF is active — /api/browse and /api/batch-download require no authentication');
   }

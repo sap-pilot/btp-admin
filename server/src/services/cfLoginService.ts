@@ -61,7 +61,7 @@ function sleep(ms: number): Promise<void> {
 
 // Retries on HTTP 429, honouring the Retry-After header (seconds).
 // Falls back to exponential backoff (2 s, 4 s, 8 s) when the header is absent.
-async function fetchWithRateLimit(request: () => Promise<Response>, label: string): Promise<Response> {
+export async function fetchWithRateLimit(request: () => Promise<Response>, label: string): Promise<Response> {
   for (let attempt = 0; ; attempt++) {
     const res = await request();
     if (res.status !== 429 || attempt >= RATE_LIMIT_MAX_RETRIES) return res;
