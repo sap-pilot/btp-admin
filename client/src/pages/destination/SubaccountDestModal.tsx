@@ -166,73 +166,36 @@ function DestPropsTable({ props, onUpdate, onDelete, onAdd }: DestPropsTableProp
 // ─── PropertiesTab ────────────────────────────────────────────────────────────
 
 interface PropsTabProps {
-  name:        string;
-  props:       DestProp[];
-  dirty:       boolean;
-  saving:      boolean;
-  importing:   boolean;
-  loading:     boolean;
-  error:       string;
-  exportCount: number;
-  onUpdate:    (idx: number, patch: Partial<DestProp>) => void;
-  onDelete:    (idx: number) => void;
-  onAdd:       () => void;
-  onSave:      () => void;
-  onReset:     () => void;
-  onExport:    () => void;
-  onImport:    () => void;
-  onCreate:    () => void;
+  name:      string;
+  props:     DestProp[];
+  dirty:     boolean;
+  saving:    boolean;
+  importing: boolean;
+  loading:   boolean;
+  error:     string;
+  onUpdate:  (idx: number, patch: Partial<DestProp>) => void;
+  onDelete:  (idx: number) => void;
+  onAdd:     () => void;
+  onSave:    () => void;
+  onReset:   () => void;
 }
 
 function PropertiesTab({
-  name, props, dirty, saving, importing, loading, error, exportCount,
-  onUpdate, onDelete, onAdd, onSave, onReset, onExport, onImport, onCreate,
+  name, props, dirty, saving, importing, loading, error,
+  onUpdate, onDelete, onAdd, onSave, onReset,
 }: PropsTabProps) {
   const btnBase    = 'inline-flex items-center gap-1.5 px-3 py-1.5 rounded text-xs font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed';
   const btnOutline = `${btnBase} border border-border hover:bg-accent hover:text-accent-foreground`;
   const btnPrimary = `${btnBase} bg-primary text-primary-foreground hover:bg-primary/90`;
 
-  const exportLabel = exportCount > 1 ? `Export (${exportCount})` : 'Export';
-  const exportTitle = exportCount > 1
-    ? `Download ${exportCount} selected destinations as {region}_{subdomain}_multi_destinations.json`
-    : 'Download destination JSON — Ctrl/⌘+click or Shift+click to select multiple for bulk export';
-
   return (
     <div className="flex flex-col h-full">
-      {/* Toolbar: name | Create | Import | Export | divider | Reset | Save */}
-      <div className="flex items-center gap-2 px-4 py-3 border-b border-border shrink-0 flex-wrap gap-y-2">
+      {/* Toolbar: name | Reset | Save */}
+      <div className="flex items-center gap-2 px-4 py-3 border-b border-border shrink-0">
         <h2 className="text-sm font-mono font-semibold text-foreground truncate min-w-0 flex-1">
           {name || <span className="font-normal text-xs text-muted-foreground">Select or create a destination</span>}
         </h2>
         <div className="flex items-center gap-1.5 shrink-0">
-          <button
-            onClick={onCreate}
-            disabled={saving || importing}
-            className={btnOutline}
-            title="Create a new destination from scratch"
-          >
-            <Plus className="h-3.5 w-3.5" />
-            Create
-          </button>
-          <button
-            onClick={onImport}
-            disabled={importing || saving}
-            className={btnOutline}
-            title="Import single or multiple destinations into this subaccount. New destinations will be created, existing destinations will be updated."
-          >
-            <Upload className="h-3.5 w-3.5" />
-            {importing ? 'Importing…' : 'Import'}
-          </button>
-          <button
-            onClick={onExport}
-            disabled={exportCount === 0 && !name}
-            className={btnOutline}
-            title={exportTitle}
-          >
-            <Download className="h-3.5 w-3.5" />
-            {exportLabel}
-          </button>
-          <div className="w-px h-4 bg-border mx-0.5" />
           <button onClick={onReset} disabled={!dirty || saving || importing} className={btnOutline}>
             <RotateCcw className="h-3.5 w-3.5" />
             Reset
@@ -588,6 +551,15 @@ export default function SubaccountDestModal({ org, allNames, initialName, onClos
     return () => clearTimeout(searchTimer.current);
   }, [searchQuery, localAllNames, org.region, org.subdomain]);
 
+  // Sync browser URL with selected destination
+  useEffect(() => {
+    if (!selectedName) return;
+    history.replaceState(
+      null, '',
+      `/destinations/${encodeURIComponent(org.region)}/${encodeURIComponent(org.subdomain)}/${encodeURIComponent(selectedName)}`,
+    );
+  }, [selectedName, org.region, org.subdomain]);
+
   // Close on Escape
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
@@ -766,16 +738,59 @@ export default function SubaccountDestModal({ org, allNames, initialName, onClos
     >
       <div className="bg-background border border-border rounded-lg shadow-xl flex flex-col w-full h-full max-w-[1800px] max-h-[calc(100vh-1.5rem)]">
         {/* Modal header */}
-        <div className="flex items-center justify-between px-4 py-3 border-b border-border shrink-0">
-          <span className="text-sm font-semibold">
+        <div className="flex items-center gap-3 px-4 py-3 border-b border-border shrink-0">
+          <span className="text-sm font-semibold min-w-0 truncate">
             Subaccount Destinations
             <span className="text-muted-foreground font-normal ml-2 text-xs">
               {org.alias || org.org_name} · {org.subdomain} · {org.region}
             </span>
           </span>
-          <button onClick={onClose} className="p-1.5 rounded text-muted-foreground hover:text-foreground hover:bg-accent transition-colors">
-            <X className="h-4 w-4" />
-          </button>
+          <div className="ml-auto flex items-center gap-1.5 shrink-0">
+            {(() => {
+              const btnBase    = 'inline-flex items-center gap-1.5 px-3 py-1.5 rounded text-xs font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed';
+              const btnOutline = `${btnBase} border border-border hover:bg-accent hover:text-accent-foreground`;
+              const exportCount = selectedNames.size;
+              const exportLabel = exportCount > 1 ? `Export (${exportCount})` : 'Export';
+              const exportTitle = exportCount > 1
+                ? `Download ${exportCount} selected destinations as {region}_{subdomain}_multi_destinations.json`
+                : 'Download destination JSON — Ctrl/⌘+click or Shift+click to select multiple for bulk export';
+              return (
+                <>
+                  <button
+                    onClick={handleCreateClick}
+                    disabled={isSaving || isImporting}
+                    className={btnOutline}
+                    title="Create a new destination from scratch"
+                  >
+                    <Plus className="h-3.5 w-3.5" />
+                    Create
+                  </button>
+                  <button
+                    onClick={() => fileInputRef.current?.click()}
+                    disabled={isImporting || isSaving}
+                    className={btnOutline}
+                    title="Import single or multiple destinations into this subaccount. New destinations will be created, existing destinations will be updated."
+                  >
+                    <Upload className="h-3.5 w-3.5" />
+                    {isImporting ? 'Importing…' : 'Import'}
+                  </button>
+                  <button
+                    onClick={handleExport}
+                    disabled={exportCount === 0 && !selectedName}
+                    className={btnOutline}
+                    title={exportTitle}
+                  >
+                    <Download className="h-3.5 w-3.5" />
+                    {exportLabel}
+                  </button>
+                  <div className="w-px h-4 bg-border mx-0.5" />
+                </>
+              );
+            })()}
+            <button onClick={onClose} className="p-1.5 rounded text-muted-foreground hover:text-foreground hover:bg-accent transition-colors">
+              <X className="h-4 w-4" />
+            </button>
+          </div>
         </div>
 
         {/* Body */}
@@ -859,15 +874,11 @@ export default function SubaccountDestModal({ org, allNames, initialName, onClos
                   importing={isImporting}
                   loading={isLoading}
                   error={saveError}
-                  exportCount={selectedNames.size}
                   onUpdate={(idx, patch) => setEditedProps(prev => prev.map((p, i) => i === idx ? { ...p, ...patch } : p))}
                   onDelete={idx => setEditedProps(prev => prev.filter((_, i) => i !== idx))}
                   onAdd={() => setEditedProps(prev => [...prev, { key: '', value: '', isSensitive: false, revealed: false }])}
                   onSave={handleSave}
                   onReset={() => { setEditedProps(structuredClone(serverProps)); setSaveError(''); }}
-                  onExport={handleExport}
-                  onImport={() => fileInputRef.current?.click()}
-                  onCreate={handleCreateClick}
                 />
               )}
               {activeTab === 'changelog' && (

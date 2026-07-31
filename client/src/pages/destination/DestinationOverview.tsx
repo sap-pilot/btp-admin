@@ -60,7 +60,9 @@ const CAT_META = {
 
 export default function DestinationOverview() {
   const { toggle } = useSidebar();
-  const { tab: tabParam } = useParams<{ tab?: string }>();
+  const { tab: tabParam, region: regionParam, subdomain: subdomainParam, name: nameParam } = useParams<{
+    tab?: string; region?: string; subdomain?: string; name?: string;
+  }>();
   const navigate = useNavigate();
 
   const [dirTabs,  setDirTabs]  = useState<DirTab[]>([]);
@@ -69,6 +71,8 @@ export default function DestinationOverview() {
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [error, setError]   = useState('');
   const [modal, setModal]   = useState<ModalState | null>(null);
+
+  const deepLinkOpened = useRef(false);
 
   // Search
   const [searchQuery,   setSearchQuery]   = useState('');
@@ -92,6 +96,19 @@ export default function DestinationOverview() {
   }
 
   useEffect(() => { void loadData().catch(() => setError('Failed to load data')); }, []);
+
+  // Open modal from deep-link URL: /destinations/:region/:subdomain/:name
+  useEffect(() => {
+    if (deepLinkOpened.current || !regionParam || !subdomainParam || orgData.length === 0) return;
+    const destOrgs = orgData.flatMap(r =>
+      r.orgs.filter(o => o.manageDestination).map(o => ({ ...o, region: r.region })),
+    );
+    const org = destOrgs.find(o => o.region === regionParam && o.subdomain === subdomainParam);
+    if (!org) return;
+    deepLinkOpened.current = true;
+    const names = (destData[org.org_id] ?? []).map(d => d.name).sort();
+    setModal({ org, allNames: names, initialName: nameParam ?? names[0] });
+  }, [regionParam, subdomainParam, nameParam, orgData, destData]);
 
   // Debounced search
   useEffect(() => {
@@ -411,7 +428,11 @@ export default function DestinationOverview() {
           org={modal.org}
           allNames={modal.allNames}
           initialName={modal.initialName}
-          onClose={() => setModal(null)}
+          onClose={() => {
+            setModal(null);
+            const base = activeTab ? `/destinations/${encodeURIComponent(activeTab.tab)}` : '/destinations';
+            navigate(base, { replace: true });
+          }}
         />
       )}
     </div>
