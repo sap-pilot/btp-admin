@@ -20,6 +20,7 @@ interface NavItem {
   icon: React.ReactNode;
   disabled?: boolean;
   soon?: boolean;
+  wip?: boolean;
   restricted?: boolean;
   children?: NavChild[];
 }
@@ -39,7 +40,7 @@ const NAV_ITEMS: NavItem[] = [
   { label: 'Home', href: '/home', icon: <Home className="h-4 w-4 shrink-0" /> },
   { label: 'Status', href: '/status', icon: <Activity className="h-4 w-4 shrink-0" /> },
   { label: 'Apps', href: '/apps', icon: <LayoutGrid className="h-4 w-4 shrink-0" />, soon: true, restricted: true },
-  { label: 'Destinations', href: '/destinations', icon: <Globe className="h-4 w-4 shrink-0" />, restricted: true },
+  { label: 'Destinations', href: '/destinations', icon: <Globe className="h-4 w-4 shrink-0" />, wip: true, restricted: true },
   {
     label: 'Integration', href: '/int', icon: <Network className="h-4 w-4 shrink-0" />, soon: true, restricted: true,
     children: [
@@ -286,7 +287,8 @@ export default function AppSidebar() {
                 {!collapsed && (
                   <span className="truncate">
                     {item.label}
-                    {(item.disabled || item.soon) && <span className="ml-1 text-[10px] opacity-60">(soon)</span>}
+                    {(item.disabled || item.soon) && <span className="ml-1 text-[10px] opacity-60" title="coming soon">(soon)</span>}
+                    {item.wip && <span className="ml-1 text-[10px] opacity-60" title="work in progress">(wip)</span>}
                   </span>
                 )}
               </>
@@ -364,10 +366,10 @@ export default function AppSidebar() {
               className={itemBase(collapsed) + (location.pathname.startsWith('/config')
                 ? 'bg-sidebar-accent text-sidebar-accent-foreground font-medium'
                 : 'text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground')}
-              title="Configuration"
+              title="configure subaccounts/orgs, tabs/directories and menu items"
             >
               <Settings className="h-4 w-4 shrink-0" />
-              {!collapsed && <span className="truncate">Configuration</span>}
+              {!collapsed && <span className="truncate">Config</span>}
             </Link>
           )}
           {syncAvailable && (!auth.enabled || auth.loggedIn) && (
