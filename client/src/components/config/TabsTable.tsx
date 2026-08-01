@@ -1,70 +1,84 @@
-import { useState } from 'react';
+import { useState, useRef } from 'react';
 import { ChevronDown, ChevronRight, RotateCcw, Save, GripVertical, Plus, X } from 'lucide-react';
 
-export interface TabGroup {
-  groupId:    string;
-  groupTitle: string;
-}
+export type BannerColor = 'transparent' | 'blue' | 'green' | 'yellow' | 'red' | 'purple';
+
+export type TabSection =
+  | { type: 'subaccountGroup'; title?: string; groupId: string }
+  | { type: 'banner';          message: string; backgroundColor: BannerColor }
+  | { type: 'table';           title?: string;  tableContent: string[][] };
 
 export interface TabEntry {
-  tab:    string;
-  groups: TabGroup[];
+  tab:      string;
+  sections: TabSection[];
 }
 
 interface Props {
-  data:       TabEntry[];
-  onChange:   (data: TabEntry[]) => void;
-  isDirty:    boolean;
-  isSaving:   boolean;
-  onReset:    () => void;
-  onSave:     () => void;
+  data:        TabEntry[];
+  onChange:    (data: TabEntry[]) => void;
+  isDirty:     boolean;
+  isSaving:    boolean;
+  onReset:     () => void;
+  onSave:      () => void;
   saveStatus?: { message: string; ok: boolean } | null;
 }
 
-function matchesFilter(tab: TabEntry, filter: string): { tabMatch: boolean; groups: TabGroup[] } {
-  if (!filter) return { tabMatch: true, groups: tab.groups };
-  const q = filter.toLowerCase();
-  const tabMatch = tab.tab.toLowerCase().includes(q);
-  const groups = tab.groups.filter(g => g.groupId.toLowerCase().includes(q) || g.groupTitle.toLowerCase().includes(q));
-  return { tabMatch: tabMatch || groups.length > 0, groups: tabMatch ? tab.groups : groups };
+const BANNER_COLORS: BannerColor[] = ['transparent', 'blue', 'green', 'yellow', 'red', 'purple'];
+
+function bannerRowBg(color: BannerColor): string {
+  switch (color) {
+    case 'blue':        return 'bg-blue-500/35';
+    case 'green':       return 'bg-green-500/35';
+    case 'yellow':      return 'bg-yellow-400/50';
+    case 'red':         return 'bg-red-500/35';
+    case 'purple':      return 'bg-purple-500/35';
+    case 'transparent': return '';
+  }
+}
+
+
+function matchesFilter(tab: TabEntry, q: string): { tabMatch: boolean; sections: TabSection[] } {
+  if (!q) return { tabMatch: true, sections: tab.sections };
+  const lower = q.toLowerCase();
+  const tabMatch = tab.tab.toLowerCase().includes(lower);
+  const sections = tab.sections.filter(s => {
+    if (s.type === 'subaccountGroup') return s.groupId.toLowerCase().includes(lower) || (s.title ?? '').toLowerCase().includes(lower);
+    if (s.type === 'banner')          return s.message.toLowerCase().includes(lower);
+    if (s.type === 'table')           return (s.title ?? '').toLowerCase().includes(lower) || s.tableContent.some(r => r.some(c => c.toLowerCase().includes(lower)));
+    return false;
+  });
+  return { tabMatch: tabMatch || sections.length > 0, sections: tabMatch ? tab.sections : sections };
 }
 
 export default function TabsTable({ data, onChange, isDirty, isSaving, onReset, onSave, saveStatus }: Props) {
   const [filter, setFilter]           = useState('');
   const [expanded, setExpanded]       = useState<Set<number>>(() => new Set(data.map((_, i) => i)));
-  const [dragging, setDragging]       = useState<{ ti: number; gi: number } | null>(null);
-  const [dragOver, setDragOver]       = useState<{ ti: number; gi: number } | null>(null);
+  const [dragging, setDragging]       = useState<{ ti: number; si: number } | null>(null);
+  const [dragOver, setDragOver]       = useState<{ ti: number; si: number } | null>(null);
   const [dragTab, setDragTab]         = useState<number | null>(null);
   const [dragOverTab, setDragOverTab] = useState<number | null>(null);
+  const dragTabRef                    = useRef<number | null>(null);
 
-  const isFiltering        = filter.trim().length > 0;
-  const totalTabs          = data.length;
-  const totalGroups        = data.reduce((n, t) => n + t.groups.length, 0);
-  const filteredTabCount   = isFiltering ? data.filter(t => matchesFilter(t, filter).tabMatch).length : totalTabs;
-  const filteredGroupCount = isFiltering
-    ? data.reduce((n, t) => { const { tabMatch, groups } = matchesFilter(t, filter); return n + (tabMatch ? groups.length : 0); }, 0)
-    : totalGroups;
+  const isFiltering    = filter.trim().length > 0;
+  const totalTabs      = data.length;
+  const totalSections  = data.reduce((n, t) => n + t.sections.length, 0);
+  const filteredTabCount = isFiltering ? data.filter(t => matchesFilter(t, filter).tabMatch).length : totalTabs;
+  const filteredSectionCount = isFiltering
+    ? data.reduce((n, t) => { const { tabMatch, sections } = matchesFilter(t, filter); return n + (tabMatch ? t.sections.length : sections.length); }, 0)
+    : totalSections;
+
+  // ── Tab mutations ──────────────────────────────────────────────────────────
 
   function toggleTab(ti: number) {
-    setExpanded(prev => {
-      const next = new Set(prev);
-      next.has(ti) ? next.delete(ti) : next.add(ti);
-      return next;
-    });
+    setExpanded(prev => { const next = new Set(prev); next.has(ti) ? next.delete(ti) : next.add(ti); return next; });
   }
 
-  function updateTab(ti: number, patch: Partial<TabEntry>) {
-    onChange(data.map((t, i) => i !== ti ? t : { ...t, ...patch }));
-  }
-
-  function updateGroup(ti: number, gi: number, patch: Partial<TabGroup>) {
-    onChange(data.map((t, i) =>
-      i !== ti ? t : { ...t, groups: t.groups.map((g, j) => j !== gi ? g : { ...g, ...patch }) },
-    ));
+  function updateTabName(ti: number, name: string) {
+    onChange(data.map((t, i) => i !== ti ? t : { ...t, tab: name }));
   }
 
   function addTab() {
-    const next = [...data, { tab: 'New Tab', groups: [] }];
+    const next = [...data, { tab: 'New Tab', sections: [] }];
     onChange(next);
     setExpanded(prev => new Set([...prev, next.length - 1]));
   }
@@ -78,83 +92,302 @@ export default function TabsTable({ data, onChange, isDirty, isSaving, onReset, 
     });
   }
 
-  function addGroup(ti: number) {
-    const groups = [...data[ti]!.groups, { groupId: '', groupTitle: '' }];
-    onChange(data.map((t, i) => i !== ti ? t : { ...t, groups }));
+  // ── Section mutations ──────────────────────────────────────────────────────
+
+  function updateSectionAt(ti: number, si: number, updater: (s: TabSection) => TabSection) {
+    onChange(data.map((t, i) => i !== ti ? t : {
+      ...t,
+      sections: t.sections.map((s, j) => j !== si ? s : updater(s)),
+    }));
+  }
+
+  function addSection(ti: number, type: TabSection['type']) {
+    let section: TabSection;
+    if (type === 'subaccountGroup') section = { type, groupId: '' };
+    else if (type === 'banner')     section = { type, message: '', backgroundColor: 'transparent' };
+    else                            section = { type, tableContent: [['', '', ''], ['', '', ''], ['', '', '']] };
+    const sections = [...data[ti]!.sections, section];
+    onChange(data.map((t, i) => i !== ti ? t : { ...t, sections }));
     setExpanded(prev => new Set([...prev, ti]));
   }
 
-  function deleteGroup(ti: number, gi: number) {
-    const groups = data[ti]!.groups.filter((_, j) => j !== gi);
-    onChange(data.map((t, i) => i !== ti ? t : { ...t, groups }));
+  function deleteSection(ti: number, si: number) {
+    const sections = data[ti]!.sections.filter((_, j) => j !== si);
+    onChange(data.map((t, i) => i !== ti ? t : { ...t, sections }));
   }
 
-  // Group drag (within a tab only)
-  function handleGroupDragStart(ti: number, gi: number) { setDragging({ ti, gi }); }
+  // ── Table cell mutations ───────────────────────────────────────────────────
 
-  function handleGroupDragOver(e: React.DragEvent, ti: number, gi: number) {
+  function updateTableCell(ti: number, si: number, row: number, col: number, value: string) {
+    updateSectionAt(ti, si, s => {
+      if (s.type !== 'table') return s;
+      return { ...s, tableContent: s.tableContent.map((r, ri) => ri !== row ? r : r.map((c, ci) => ci !== col ? c : value)) };
+    });
+  }
+
+  function addTableRow(ti: number, si: number) {
+    updateSectionAt(ti, si, s => {
+      if (s.type !== 'table') return s;
+      const cols = s.tableContent[0]?.length ?? 2;
+      return { ...s, tableContent: [...s.tableContent, Array<string>(cols).fill('')] };
+    });
+  }
+
+  function addTableCol(ti: number, si: number) {
+    updateSectionAt(ti, si, s => {
+      if (s.type !== 'table') return s;
+      return { ...s, tableContent: s.tableContent.map(r => [...r, '']) };
+    });
+  }
+
+  function deleteTableRow(ti: number, si: number, row: number) {
+    updateSectionAt(ti, si, s => {
+      if (s.type !== 'table') return s;
+      const next = s.tableContent.filter((_, ri) => ri !== row);
+      return { ...s, tableContent: next.length ? next : [['']] };
+    });
+  }
+
+  function deleteTableCol(ti: number, si: number, col: number) {
+    updateSectionAt(ti, si, s => {
+      if (s.type !== 'table') return s;
+      const next = s.tableContent.map(r => r.filter((_, ci) => ci !== col));
+      return { ...s, tableContent: next[0]?.length ? next : next.map(() => ['']) };
+    });
+  }
+
+  // ── Section drag-and-drop ─────────────────────────────────────────────────
+
+  function handleSectionDragStart(ti: number, si: number) { setDragging({ ti, si }); }
+
+  function handleSectionDragOver(e: React.DragEvent, ti: number, si: number) {
     e.preventDefault();
-    if (dragging && dragging.ti === ti) setDragOver({ ti, gi });
+    if (dragging && dragging.ti === ti) setDragOver({ ti, si });
   }
 
-  function handleGroupDrop(e: React.DragEvent, ti: number, targetGi: number) {
+  function handleSectionDrop(e: React.DragEvent, ti: number, targetSi: number) {
     e.preventDefault();
     if (!dragging || dragging.ti !== ti) { setDragging(null); setDragOver(null); return; }
-    const { gi: fromGi } = dragging;
-    if (fromGi === targetGi) { setDragging(null); setDragOver(null); return; }
-    const groups = [...data[ti]!.groups];
-    const [moved] = groups.splice(fromGi, 1);
-    groups.splice(targetGi, 0, moved);
-    onChange(data.map((t, i) => i !== ti ? t : { ...t, groups }));
+    const { si: fromSi } = dragging;
+    if (fromSi === targetSi) { setDragging(null); setDragOver(null); return; }
+    const sections = [...data[ti]!.sections];
+    const [moved] = sections.splice(fromSi, 1);
+    sections.splice(targetSi, 0, moved);
+    onChange(data.map((t, i) => i !== ti ? t : { ...t, sections }));
     setDragging(null); setDragOver(null);
   }
 
-  function handleGroupDragEnd() { setDragging(null); setDragOver(null); }
+  function handleSectionDragEnd() { setDragging(null); setDragOver(null); }
 
-  // Tab drag (reorder tabs)
-  function handleTabDragStart(ti: number) { setDragTab(ti); }
+  // ── Tab drag-and-drop ─────────────────────────────────────────────────────
+
+  function handleTabDragStart(ti: number) { dragTabRef.current = ti; setDragTab(ti); }
 
   function handleTabDragOver(e: React.DragEvent, ti: number) {
     e.preventDefault();
-    if (dragTab !== null && dragTab !== ti) setDragOverTab(ti);
+    if (dragTabRef.current !== null && dragTabRef.current !== ti) setDragOverTab(ti);
   }
 
   function handleTabDrop(e: React.DragEvent, targetTi: number) {
     e.preventDefault();
-    if (dragTab === null || dragTab === targetTi) { setDragTab(null); setDragOverTab(null); return; }
+    const fromTi = dragTabRef.current;
+    if (fromTi === null || fromTi === targetTi) { dragTabRef.current = null; setDragTab(null); setDragOverTab(null); return; }
     const tabs = [...data];
-    const [moved] = tabs.splice(dragTab, 1);
+    const [moved] = tabs.splice(fromTi, 1);
     tabs.splice(targetTi, 0, moved);
     onChange(tabs);
-    // splice past end appends, so actual final index is capped at data.length-1
-    const finalTi = dragTab < targetTi ? Math.min(targetTi, data.length - 1) : targetTi;
+    const finalTi = fromTi < targetTi ? Math.min(targetTi, data.length - 1) : targetTi;
     setExpanded(prev => {
       const next = new Set<number>();
       for (const v of [...prev]) {
-        if (v === dragTab) { next.add(finalTi); continue; }
+        if (v === fromTi) { next.add(finalTi); continue; }
         let nv = v;
-        if (dragTab < targetTi) {
-          if (v > dragTab && v <= targetTi) nv = v - 1;
-        } else {
-          if (v >= targetTi && v < dragTab) nv = v + 1;
-        }
+        if (fromTi < targetTi) { if (v > fromTi && v <= targetTi) nv = v - 1; }
+        else                   { if (v >= targetTi && v < fromTi)  nv = v + 1; }
         next.add(nv);
       }
       return next;
     });
-    setDragTab(null); setDragOverTab(null);
+    dragTabRef.current = null; setDragTab(null); setDragOverTab(null);
   }
 
-  function handleTabDragEnd() { setDragTab(null); setDragOverTab(null); }
+  function handleTabDragEnd() { dragTabRef.current = null; setDragTab(null); setDragOverTab(null); }
 
-  const btnBase    = 'inline-flex items-center gap-1.5 px-3 py-1.5 rounded text-xs font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed';
+  // ── Styles ────────────────────────────────────────────────────────────────
+
+  const btnBase    = 'inline-flex items-center gap-1 px-2 py-1 rounded text-xs font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed';
   const btnOutline = `${btnBase} border border-border hover:bg-accent hover:text-accent-foreground`;
-  const btnPrimary = `${btnBase} bg-primary text-primary-foreground hover:bg-primary/90`;
-  const btnGhost   = 'inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-xs text-muted-foreground hover:text-foreground hover:bg-accent transition-colors';
+  const btnPrimary = `${btnBase} bg-primary text-primary-foreground hover:bg-primary/90 gap-1.5 px-3 py-1.5`;
+  const btnGhost   = 'inline-flex items-center gap-1 px-1 py-0.5 rounded text-xs text-muted-foreground hover:text-foreground hover:bg-accent transition-colors';
+  const inpCls     = 'bg-transparent border-b border-transparent hover:border-border focus:border-primary outline-none text-xs py-0.5 placeholder:text-muted-foreground/40';
 
-  const thCls  = 'px-2 py-1.5 text-left text-xs font-medium text-muted-foreground whitespace-nowrap border-b border-border';
-  const tdCls  = 'px-2 py-1 text-xs border-b border-border align-middle';
-  const inpCls = 'w-full bg-transparent border-b border-transparent hover:border-border focus:border-primary outline-none text-xs py-0.5 placeholder:text-muted-foreground/50';
+  function badge(label: string, color: string) {
+    return <span className={`shrink-0 text-[10px] px-1.5 py-0.5 rounded font-medium uppercase tracking-wide ${color}`}>{label}</span>;
+  }
+
+  // ── Section renderers ─────────────────────────────────────────────────────
+
+  function renderSection(ti: number, si: number, sec: TabSection, isVisible: boolean) {
+    if (!isVisible) return null;
+    const isSecDragging   = dragging?.ti === ti && dragging.si === si;
+    const isSecDropTarget = dragOver?.ti === ti && dragOver.si === si;
+
+    const wrapCls = `flex items-start gap-2 px-2 py-1.5 border-b border-border hover:bg-muted/10 pl-10 ${isSecDragging ? 'opacity-40' : ''} ${isSecDropTarget ? 'border-t-2 border-primary' : ''}`;
+
+    const gripEl = (
+      <div
+        draggable
+        onDragStart={() => handleSectionDragStart(ti, si)}
+        onDragEnd={handleSectionDragEnd}
+        onDragOver={e => handleSectionDragOver(e, ti, si)}
+        onDrop={e => handleSectionDrop(e, ti, si)}
+        className="shrink-0 text-muted-foreground/40 cursor-grab active:cursor-grabbing mt-0.5"
+      >
+        <GripVertical className="h-3.5 w-3.5" />
+      </div>
+    );
+
+    if (sec.type === 'subaccountGroup') {
+      return (
+        <div key={`sec-${ti}-${si}`} className={wrapCls}
+          onDragOver={e => handleSectionDragOver(e, ti, si)}
+          onDrop={e => handleSectionDrop(e, ti, si)}
+        >
+          {gripEl}
+          {badge('Group', 'bg-blue-500/10 text-blue-600 dark:text-blue-400')}
+          <input
+            className={`${inpCls} flex-1 min-w-0`}
+            value={sec.title ?? ''}
+            placeholder="Title"
+            onChange={e => updateSectionAt(ti, si, s => ({ ...s, title: e.target.value || undefined } as TabSection))}
+          />
+          <input
+            className={`${inpCls} font-mono w-36 shrink-0`}
+            value={sec.groupId}
+            placeholder="group-id"
+            onChange={e => updateSectionAt(ti, si, s => ({ ...s, groupId: e.target.value } as TabSection))}
+          />
+          <button onClick={() => deleteSection(ti, si)} className={`${btnGhost} shrink-0`} title="Delete section"><X className="h-3.5 w-3.5" /></button>
+        </div>
+      );
+    }
+
+    if (sec.type === 'banner') {
+      const rowBg    = bannerRowBg(sec.backgroundColor);
+      const bannerWrapCls = `flex items-start gap-2 px-2 py-1.5 border-b border-border pl-10 transition-colors ${rowBg || 'hover:bg-muted/10'} ${isSecDragging ? 'opacity-40' : ''} ${isSecDropTarget ? 'border-t-2 border-primary' : ''}`;
+      return (
+        <div key={`sec-${ti}-${si}`} className={bannerWrapCls}
+          onDragOver={e => handleSectionDragOver(e, ti, si)}
+          onDrop={e => handleSectionDrop(e, ti, si)}
+        >
+          {gripEl}
+          {badge('Banner', 'bg-amber-500/10 text-amber-600 dark:text-amber-400')}
+          <div className="relative flex-1 min-w-0">
+            <input
+              className={`${inpCls} w-full`}
+              value={sec.message}
+              placeholder="Message"
+              onChange={e => updateSectionAt(ti, si, s => ({ ...s, message: e.target.value } as TabSection))}
+            />
+            {!sec.message && (
+              <span className="absolute right-0 top-1/2 -translate-y-1/2 text-[10px] text-muted-foreground/40 pointer-events-none select-none whitespace-nowrap">
+                markdown syntax is supported
+              </span>
+            )}
+          </div>
+          <select
+            value={sec.backgroundColor}
+            onChange={e => updateSectionAt(ti, si, s => ({ ...s, backgroundColor: e.target.value as BannerColor } as TabSection))}
+            className="shrink-0 w-36 text-xs bg-background border border-border rounded px-1.5 py-0.5 outline-none focus:border-primary text-foreground"
+          >
+            {BANNER_COLORS.map(c => <option key={c} value={c}>{c}</option>)}
+          </select>
+          <button onClick={() => deleteSection(ti, si)} className={`${btnGhost} shrink-0`} title="Delete section"><X className="h-3.5 w-3.5" /></button>
+        </div>
+      );
+    }
+
+    // table
+    const colCount = sec.tableContent[0]?.length ?? 0;
+    return (
+      <div key={`sec-${ti}-${si}`} className={`border-b border-border ${isSecDragging ? 'opacity-40' : ''} ${isSecDropTarget ? 'border-t-2 border-primary' : ''}`}
+        onDragOver={e => handleSectionDragOver(e, ti, si)}
+        onDrop={e => handleSectionDrop(e, ti, si)}
+      >
+        {/* Table section header */}
+        <div className="flex items-center gap-2 px-2 py-1.5 pl-10 hover:bg-muted/10">
+          {gripEl}
+          {badge('Table', 'bg-violet-500/10 text-violet-600 dark:text-violet-400')}
+          <input
+            className={`${inpCls} flex-1 min-w-0`}
+            value={sec.title ?? ''}
+            placeholder="Table title"
+            onChange={e => updateSectionAt(ti, si, s => ({ ...s, title: e.target.value || undefined } as TabSection))}
+          />
+          <button onClick={() => addTableRow(ti, si)} className={btnGhost} title="Add row"><Plus className="h-3 w-3" /> Add Row</button>
+          <button onClick={() => addTableCol(ti, si)} className={btnGhost} title="Add column"><Plus className="h-3 w-3" /> Add Column</button>
+          <button onClick={() => deleteSection(ti, si)} className={`${btnGhost} ml-1`} title="Delete section"><X className="h-3.5 w-3.5" /></button>
+        </div>
+        {/* Table editor */}
+        <div className="pl-14 pr-3 pb-2 overflow-x-auto">
+          <table className="border-collapse text-xs w-full">
+            <thead>
+              <tr>
+                <th className="w-5" /> {/* corner */}
+                {Array.from({ length: colCount }, (_, ci) => (
+                  <th key={ci} className={`px-1 pb-0.5 text-center ${ci === 0 ? 'w-28' : ''}`}>
+                    <button
+                      onClick={() => deleteTableCol(ti, si, ci)}
+                      className="text-muted-foreground/50 hover:text-destructive transition-colors"
+                      title="Delete column"
+                    >
+                      <X className="h-3 w-3" />
+                    </button>
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {sec.tableContent.map((row, ri) => (
+                <tr key={ri}>
+                  <td className="pr-1 align-middle">
+                    <button
+                      onClick={() => deleteTableRow(ti, si, ri)}
+                      className="text-muted-foreground/50 hover:text-destructive transition-colors"
+                      title="Delete row"
+                    >
+                      <X className="h-3 w-3" />
+                    </button>
+                  </td>
+                  {row.map((cell, ci) => {
+                    const isHeadRow = ri === 0;
+                    const isLeadCol = ci === 0;
+                    const tdCls = [
+                      'border border-border/40 px-0.5 py-0.5',
+                      isHeadRow ? 'bg-muted/50' : isLeadCol ? 'bg-muted/25' : '',
+                      isLeadCol ? 'w-28' : '',
+                    ].join(' ');
+                    return (
+                      <td key={ci} className={tdCls}>
+                        <input
+                          className={`w-full min-w-[60px] bg-transparent outline-none text-xs px-1 py-0.5 placeholder:text-muted-foreground/30 ${isHeadRow || isLeadCol ? 'font-medium' : ''}`}
+                          value={cell}
+                          placeholder={isHeadRow || isLeadCol ? '' : 'markdown syntax supported eg: [text](url)'}
+                          onChange={e => updateTableCell(ti, si, ri, ci, e.target.value)}
+                        />
+                      </td>
+                    );
+                  })}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    );
+  }
+
+  // ── Render ────────────────────────────────────────────────────────────────
 
   return (
     <div className="flex flex-col h-full">
@@ -163,43 +396,29 @@ export default function TabsTable({ data, onChange, isDirty, isSaving, onReset, 
         <div className="relative flex-1 min-w-0">
           <input
             type="text"
-            placeholder="Filter tabs / groups…"
+            placeholder="Filter tabs / sections…"
             value={filter}
             onChange={e => setFilter(e.target.value)}
             className="w-full h-7 px-2 pr-44 text-xs bg-transparent border border-border rounded outline-none focus:border-primary placeholder:text-muted-foreground/50"
           />
           <span className={`absolute top-1/2 -translate-y-1/2 text-xs text-muted-foreground/50 pointer-events-none select-none whitespace-nowrap ${isFiltering ? 'right-6' : 'right-2'}`}>
             {isFiltering
-              ? `${filteredTabCount}/${totalTabs} tabs & ${filteredGroupCount}/${totalGroups} sections`
-              : `${totalTabs} tabs & ${totalGroups} sections`}
+              ? `${filteredTabCount}/${totalTabs} tabs & ${filteredSectionCount}/${totalSections} sections`
+              : `${totalTabs} tabs & ${totalSections} sections`}
           </span>
           {filter && (
-            <button
-              onClick={() => setFilter('')}
-              className="absolute right-1 top-1/2 -translate-y-1/2 p-0.5 rounded text-muted-foreground hover:text-foreground transition-colors"
-              aria-label="Clear filter"
-            >
+            <button onClick={() => setFilter('')} className="absolute right-1 top-1/2 -translate-y-1/2 p-0.5 rounded text-muted-foreground hover:text-foreground transition-colors" aria-label="Clear filter">
               <X className="h-3 w-3" />
             </button>
           )}
         </div>
-        <button onClick={() => setExpanded(new Set(data.map((_, i) => i)))} disabled={isFiltering} className={btnOutline}>
-          Expand
-        </button>
-        <button onClick={() => setExpanded(new Set())} disabled={isFiltering} className={btnOutline}>
-          Collapse
-        </button>
-        <button onClick={onReset} disabled={!isDirty || isSaving} className={btnOutline}>
-          <RotateCcw className="h-3.5 w-3.5" />
-          Reset
-        </button>
-        <button onClick={onSave} disabled={!isDirty || isSaving} className={btnPrimary}>
-          <Save className="h-3.5 w-3.5" />
-          {isSaving ? 'Saving…' : 'Save'}
-        </button>
+        <button onClick={() => setExpanded(new Set(data.map((_, i) => i)))} disabled={isFiltering} className={btnOutline}>Expand</button>
+        <button onClick={() => setExpanded(new Set())} disabled={isFiltering} className={btnOutline}>Collapse</button>
+        <button onClick={onReset} disabled={!isDirty || isSaving} className={btnOutline}><RotateCcw className="h-3.5 w-3.5" /> Reset</button>
+        <button onClick={onSave}  disabled={!isDirty || isSaving} className={btnPrimary}><Save className="h-3.5 w-3.5" />{isSaving ? 'Saving…' : 'Save'}</button>
       </div>
 
-      {/* Save status banner — matches SubaccountsTable progress bar style */}
+      {/* Save status banner */}
       {saveStatus && (
         <div className="shrink-0 relative h-7 border-b border-border overflow-hidden">
           <div className={`absolute inset-y-0 left-0 w-full ${saveStatus.ok ? 'bg-green-500/50' : 'bg-destructive/50'}`} />
@@ -209,149 +428,97 @@ export default function TabsTable({ data, onChange, isDirty, isSaving, onReset, 
         </div>
       )}
 
-      {/* Table */}
+      {/* Content */}
       <div className="flex-1 overflow-auto">
-        <table className="w-full border-collapse text-sm min-w-[500px]">
-          <thead className="sticky top-0 z-10">
-            <tr className="bg-muted/40">
-              <th className={`${thCls} w-6`} />
-              <th className={thCls} style={{ minWidth: 120 }}>Group Title</th>
-              <th className={thCls} style={{ minWidth: 80 }}>Group ID</th>
-              <th className={`${thCls} w-8`} />
-            </tr>
-          </thead>
-          <tbody>
-            {data.length === 0 && !isFiltering && (
-              <tr>
-                <td colSpan={4} className="px-3 py-8 text-center text-sm text-muted-foreground">
-                  No tabs yet. Click <strong>Add Tab</strong> below to create one.
-                </td>
-              </tr>
-            )}
-            {data.map((tab, ti) => {
-              const { tabMatch, groups: visibleGroups } = matchesFilter(tab, filter);
-              if (isFiltering && !tabMatch) return null;
-              const isTabDragging   = dragTab === ti;
-              const isTabDropTarget = dragOverTab === ti;
-              const isExpanded      = isFiltering || expanded.has(ti);
+        {data.length === 0 && !isFiltering && (
+          <div className="px-4 py-8 text-center text-sm text-muted-foreground">
+            No tabs yet. Click <strong>Add Tab</strong> below to create one.
+          </div>
+        )}
 
-              return [
-                // Tab header row
-                <tr
-                  key={`tab-${ti}`}
-                  onDragOver={e => !isFiltering && handleTabDragOver(e, ti)}
-                  onDrop={e => !isFiltering && handleTabDrop(e, ti)}
-                  className={`bg-muted/20 select-none hover:bg-muted/30 ${isTabDragging ? 'opacity-40' : ''} ${isTabDropTarget ? 'border-t-2 border-primary' : ''}`}
+        {data.map((tab, ti) => {
+          const { tabMatch, sections: visibleSections } = matchesFilter(tab, filter);
+          if (isFiltering && !tabMatch) return null;
+          const isTabDragging   = dragTab === ti;
+          const isTabDropTarget = dragOverTab === ti;
+          const isExpanded      = isFiltering || expanded.has(ti);
+
+          return (
+            <div
+              key={`tab-${ti}`}
+              onDragOver={e => !isFiltering && handleTabDragOver(e, ti)}
+              onDrop={e => !isFiltering && handleTabDrop(e, ti)}
+              className={isTabDropTarget ? 'border-t-2 border-primary' : ''}
+            >
+              {/* Tab header */}
+              <div className={`flex items-center gap-1.5 px-2 py-1.5 border-b border-border bg-muted/20 hover:bg-muted/30 select-none ${isTabDragging ? 'opacity-40' : ''}`}>
+                <div
+                  draggable={!isFiltering}
+                  onDragStart={() => !isFiltering && handleTabDragStart(ti)}
+                  onDragEnd={handleTabDragEnd}
+                  className={`shrink-0 text-muted-foreground/50 ${!isFiltering ? 'cursor-grab active:cursor-grabbing' : ''}`}
                 >
-                  <td
-                    draggable={!isFiltering}
-                    onDragStart={() => !isFiltering && handleTabDragStart(ti)}
-                    onDragEnd={handleTabDragEnd}
-                    className={`${tdCls} w-6 text-muted-foreground ${!isFiltering ? 'cursor-grab active:cursor-grabbing' : ''}`}
-                  >
-                    {!isFiltering && <GripVertical className="h-3.5 w-3.5" />}
-                  </td>
-                  <td className="px-2 py-1 text-xs border-b border-border align-middle" colSpan={2}>
-                    <div className="flex items-center gap-1.5">
-                      <button onClick={() => toggleTab(ti)} className="shrink-0 text-muted-foreground hover:text-foreground">
-                        {isExpanded ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
-                      </button>
-                      <input
-                        className="font-semibold text-xs bg-transparent outline-none border-b border-transparent hover:border-border focus:border-primary py-0.5 min-w-0 flex-1"
-                        value={tab.tab}
-                        onChange={e => updateTab(ti, { tab: e.target.value })}
-                        onClick={e => e.stopPropagation()}
-                      />
-                      <span className="text-xs text-muted-foreground shrink-0">({tab.groups.length})</span>
-                      <button onClick={() => addGroup(ti)} className={`${btnGhost} shrink-0`} title="Add group">
-                        <Plus className="h-3 w-3" /> Add Group
-                      </button>
-                    </div>
-                  </td>
-                  <td className={`${tdCls} text-right`}>
-                    <button onClick={() => deleteTab(ti)} className={btnGhost} title="Delete tab">
-                      <X className="h-3.5 w-3.5" />
-                    </button>
-                  </td>
-                </tr>,
+                  {!isFiltering && <GripVertical className="h-3.5 w-3.5" />}
+                </div>
+                <button onClick={() => toggleTab(ti)} className="shrink-0 text-muted-foreground hover:text-foreground">
+                  {isExpanded ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
+                </button>
+                <input
+                  className="font-semibold text-xs bg-transparent outline-none border-b border-transparent hover:border-border focus:border-primary py-0.5 min-w-0 flex-1"
+                  value={tab.tab}
+                  onChange={e => updateTabName(ti, e.target.value)}
+                  onClick={e => e.stopPropagation()}
+                />
+                <span className="text-xs text-muted-foreground shrink-0">({tab.sections.length})</span>
+                <button onClick={() => addSection(ti, 'subaccountGroup')} className={`${btnGhost} shrink-0`}>
+                  <Plus className="h-3 w-3" /> Add Subaccount Group
+                </button>
+                <button onClick={() => addSection(ti, 'banner')} className={`${btnGhost} shrink-0`}>
+                  <Plus className="h-3 w-3" /> Add Banner
+                </button>
+                <button onClick={() => addSection(ti, 'table')} className={`${btnGhost} shrink-0`}>
+                  <Plus className="h-3 w-3" /> Add Table
+                </button>
+                <button onClick={() => deleteTab(ti)} className={`${btnGhost} shrink-0 ml-1`} title="Delete tab">
+                  <X className="h-3.5 w-3.5" />
+                </button>
+              </div>
 
-                // Group rows
-                ...(isExpanded ? visibleGroups : []).map((grp) => {
-                  const realGi      = tab.groups.indexOf(grp);
-                  const isGrpDragging   = dragging?.ti === ti && dragging.gi === realGi;
-                  const isGrpDropTarget = dragOver?.ti === ti && dragOver.gi === realGi;
-                  return (
-                    <tr
-                      key={`grp-${ti}-${realGi}`}
-                      onDragOver={e => handleGroupDragOver(e, ti, realGi)}
-                      onDrop={e => handleGroupDrop(e, ti, realGi)}
-                      className={`hover:bg-muted/20 ${isGrpDragging ? 'opacity-40' : ''} ${isGrpDropTarget ? 'border-t-2 border-primary' : ''}`}
-                    >
-                      <td
-                        draggable
-                        onDragStart={() => handleGroupDragStart(ti, realGi)}
-                        onDragEnd={handleGroupDragEnd}
-                        className={`${tdCls} w-6 pl-8 text-muted-foreground cursor-grab active:cursor-grabbing`}
-                      >
-                        <GripVertical className="h-3.5 w-3.5" />
-                      </td>
-                      <td className={`${tdCls} pl-8`}>
-                        <input
-                          className={inpCls}
-                          value={grp.groupTitle}
-                          placeholder="Group title"
-                          onChange={e => updateGroup(ti, realGi, { groupTitle: e.target.value })}
-                        />
-                      </td>
-                      <td className={tdCls}>
-                        <input
-                          className={`${inpCls} font-mono`}
-                          value={grp.groupId}
-                          placeholder="group-id"
-                          onChange={e => updateGroup(ti, realGi, { groupId: e.target.value })}
-                        />
-                      </td>
-                      <td className={`${tdCls} text-right`}>
-                        <button onClick={() => deleteGroup(ti, realGi)} className={btnGhost} title="Delete group">
-                          <X className="h-3.5 w-3.5" />
-                        </button>
-                      </td>
-                    </tr>
-                  );
-                }),
+              {/* Sections */}
+              {isExpanded && (
+                <>
+                  {tab.sections.map((sec, si) => {
+                    const isVisible = !isFiltering || visibleSections.includes(sec);
+                    return renderSection(ti, si, sec, isVisible);
+                  })}
 
-                // Sentinel: drop-at-end target for groups within this tab
-                ...(isExpanded && !isFiltering && dragging?.ti === ti ? [
-                  <tr
-                    key={`grp-sentinel-${ti}`}
-                    onDragOver={e => { e.preventDefault(); setDragOver({ ti, gi: tab.groups.length }); }}
-                    onDrop={e => handleGroupDrop(e, ti, tab.groups.length)}
-                    className={dragOver?.ti === ti && dragOver.gi === tab.groups.length ? 'border-t-2 border-primary' : ''}
-                  >
-                    <td colSpan={4} className="h-3" />
-                  </tr>,
-                ] : []),
-              ];
-            })}
+                  {/* Sentinel: drop-at-end for sections */}
+                  {!isFiltering && dragging?.ti === ti && (
+                    <div
+                      onDragOver={e => { e.preventDefault(); setDragOver({ ti, si: tab.sections.length }); }}
+                      onDrop={e => handleSectionDrop(e, ti, tab.sections.length)}
+                      className={`h-3 ${dragOver?.ti === ti && dragOver.si === tab.sections.length ? 'border-t-2 border-primary' : ''}`}
+                    />
+                  )}
+                </>
+              )}
+            </div>
+          );
+        })}
 
-            {/* Sentinel: drop-at-end target for tabs */}
-            {dragTab !== null && !isFiltering && (
-              <tr
-                onDragOver={e => { e.preventDefault(); setDragOverTab(data.length); }}
-                onDrop={e => handleTabDrop(e, data.length)}
-                className={dragOverTab === data.length ? 'border-t-2 border-primary' : ''}
-              >
-                <td colSpan={4} className="h-3" />
-              </tr>
-            )}
-          </tbody>
-        </table>
+        {/* Sentinel: drop-at-end for tabs */}
+        {dragTab !== null && !isFiltering && (
+          <div
+            onDragOver={e => { e.preventDefault(); setDragOverTab(data.length); }}
+            onDrop={e => handleTabDrop(e, data.length)}
+            className={`h-3 ${dragOverTab === data.length ? 'border-t-2 border-primary' : ''}`}
+          />
+        )}
 
         {!isFiltering && (
           <div className="px-3 py-2">
             <button onClick={addTab} className={btnOutline}>
-              <Plus className="h-3.5 w-3.5" />
-              Add Tab
+              <Plus className="h-3.5 w-3.5" /> Add Tab
             </button>
           </div>
         )}

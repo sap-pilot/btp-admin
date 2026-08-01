@@ -10,7 +10,7 @@ interface Props {
   onClose: () => void;
 }
 
-type Tab = 'subaccounts' | 'tabs' | 'menus';
+type Tab = 'subaccounts' | 'tabs';
 
 export default function ConfigModal({ open, onClose }: Props) {
   const [activeTab, setActiveTab] = useState<Tab>('subaccounts');
@@ -141,7 +141,7 @@ export default function ConfigModal({ open, onClose }: Props) {
     }`;
 
   const totalSas    = sasData.length;
-  const totalGroups = tabsData.reduce((n, t) => n + t.groups.length, 0);
+  const totalGroups = tabsData.reduce((n, t) => n + t.sections.length, 0);
 
   return (
     <DialogPrimitive.Root open={open} onOpenChange={v => { if (!v) handleClose(); }}>
@@ -163,9 +163,6 @@ export default function ConfigModal({ open, onClose }: Props) {
               <button className={tabCls('tabs')} onClick={() => setActiveTab('tabs')}>
                 Tabs / Groups
                 {totalGroups > 0 && <span className="ml-1.5 text-[10px] text-muted-foreground">({totalGroups})</span>}
-              </button>
-              <button className={tabCls('menus')} onClick={() => setActiveTab('menus')}>
-                Extra Menus
               </button>
             </div>
             <div className="flex items-center px-2 py-2">
@@ -219,11 +216,6 @@ export default function ConfigModal({ open, onClose }: Props) {
                 onReset={handleTabsReset}
                 onSave={handleTabsSave}
               />
-            )}
-            {activeTab === 'menus' && (
-              <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
-                Extra Menus configuration — coming soon
-              </div>
             )}
           </div>
         </DialogPrimitive.Content>

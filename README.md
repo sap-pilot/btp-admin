@@ -256,6 +256,37 @@ The file is also editable in-app via the **Edit** (pencil) button in the topbar 
 
 See `sample/homepage.json` for a full example covering multiple global accounts, directories, and all supported service templates.
 
+### tabs.json — Tab Sections Configuration
+
+`{LOCAL_STORE_DIR}/config/tabs.json` maps subaccounts to homepage tabs and drives the Destination Overview tab/group layout.
+
+**Format:**
+
+```json
+[
+  {
+    "tab": "Tab Name",
+    "sections": [
+      { "type": "subaccountGroup", "title": "Optional group heading", "groupId": "my-group" },
+      { "type": "banner", "message": "**Note:** some *markdown* text", "backgroundColor": "blue" },
+      { "type": "table", "title": "Optional table heading", "tableContent": [["Col A", "Col B"], ["val 1", "val 2"]] }
+    ]
+  }
+]
+```
+
+**Section types:**
+
+| `type`             | Fields                                                       | Notes                                              |
+|--------------------|--------------------------------------------------------------|----------------------------------------------------|
+| `subaccountGroup`  | `groupId` (required), `title` (optional)                    | Joins with `subaccounts.json` `groupIds` CSV field |
+| `banner`           | `message` (required), `backgroundColor` (required)          | `message` supports markdown (bold, italic, links)  |
+| `table`            | `tableContent` (required 2D array), `title` (optional)      | Cells support markdown (e.g. `[text](url)`)        |
+
+**`backgroundColor` options for banners:** `transparent` · `blue` · `green` · `yellow` · `red` · `purple`
+
+**Migration:** existing files using the old `groups: [{groupId, groupTitle}]` format are automatically converted to `sections[]` of type `subaccountGroup` on next read — no manual migration needed.
+
 ### Status Page Configuration
 
 The server resolves configuration in this priority order:
