@@ -254,7 +254,7 @@ export default function ConfigPage() {
     }`;
 
   const totalSas  = sasData.length;
-  const totalGroups = tabsData.reduce((n, t) => n + t.groups.length, 0);
+  const totalGroups = tabsData.reduce((n, t) => n + t.sections.length, 0);
 
   return (
     <div className="flex flex-col h-full">

@@ -9,20 +9,39 @@ import { appendConfigChangelog } from './configChangelogService.js';
 const CONFIG_DIR = join(config.LOCAL_STORE_DIR, 'config');
 const TABS_PATH  = join(CONFIG_DIR, 'tabs.json');
 
-export interface TabGroup {
-  groupId:    string;
-  groupTitle: string;
-}
+export type BannerColor = 'transparent' | 'blue' | 'green' | 'yellow' | 'red' | 'purple';
+
+export type TabSection =
+  | { type: 'subaccountGroup'; title?: string; groupId: string }
+  | { type: 'banner';          message: string; backgroundColor: BannerColor }
+  | { type: 'table';           title?: string;  tableContent: string[][] };
 
 export interface TabEntry {
-  tab:    string;
-  groups: TabGroup[];
+  tab:      string;
+  sections: TabSection[];
+}
+
+function migrateLegacy(raw: unknown): TabEntry[] {
+  if (!Array.isArray(raw)) return [];
+  return (raw as unknown[]).map((t): TabEntry => {
+    const entry = t as Record<string, unknown>;
+    if (Array.isArray(entry['sections'])) return entry as unknown as TabEntry;
+    const groups = Array.isArray(entry['groups']) ? (entry['groups'] as Record<string, unknown>[]) : [];
+    return {
+      tab: typeof entry['tab'] === 'string' ? entry['tab'] : '',
+      sections: groups.map(g => ({
+        type:    'subaccountGroup' as const,
+        title:   typeof g['groupTitle'] === 'string' && g['groupTitle'] ? g['groupTitle'] : undefined,
+        groupId: typeof g['groupId']    === 'string' ? g['groupId'] : '',
+      })),
+    };
+  });
 }
 
 export async function readTabs(): Promise<TabEntry[]> {
   try {
     const raw = await readFile(TABS_PATH, 'utf-8');
-    return JSON.parse(raw) as TabEntry[];
+    return migrateLegacy(JSON.parse(raw));
   } catch { return []; }
 }
 
@@ -36,6 +55,10 @@ async function writeTabs(data: TabEntry[]): Promise<void> {
   logger.info({ tabs: data.length }, 'tabs.json saved');
 }
 
+type SaGroup = Extract<TabSection, { type: 'subaccountGroup' }>;
+type Banner  = Extract<TabSection, { type: 'banner' }>;
+type Table   = Extract<TabSection, { type: 'table' }>;
+
 function diffTabs(before: TabEntry[], after: TabEntry[]): string {
   const beforeMap = new Map(before.map(t => [t.tab, t]));
   const afterMap  = new Map(after.map(t => [t.tab, t]));
@@ -44,7 +67,6 @@ function diffTabs(before: TabEntry[], after: TabEntry[]): string {
   for (const [tab] of afterMap)  { if (!beforeMap.has(tab)) lines.push(`+ tab: "${tab}"`); }
   for (const [tab] of beforeMap) { if (!afterMap.has(tab))  lines.push(`- tab: "${tab}"`); }
 
-  // Tab order among tabs present in both
   const commonBefore = before.map(t => t.tab).filter(t => afterMap.has(t));
   const commonAfter  = after.map(t => t.tab).filter(t => beforeMap.has(t));
   if (commonBefore.join('\0') !== commonAfter.join('\0'))
@@ -53,22 +75,51 @@ function diffTabs(before: TabEntry[], after: TabEntry[]): string {
   for (const [tab, aft] of afterMap) {
     const bef = beforeMap.get(tab);
     if (!bef) continue;
-    const bGroups = new Map(bef.groups.map(g => [g.groupId, g]));
-    const aGroups = new Map(aft.groups.map(g => [g.groupId, g]));
     const tabLines: string[] = [];
-    for (const [id] of aGroups) { if (!bGroups.has(id)) tabLines.push(`    + group: ${id}`); }
-    for (const [id] of bGroups) { if (!aGroups.has(id)) tabLines.push(`    - group: ${id}`); }
-    for (const [id, ag] of aGroups) {
-      const bg = bGroups.get(id);
-      if (!bg) continue;
-      if (bg.groupTitle !== ag.groupTitle)
-        tabLines.push(`    ~ group: ${id}  title: ${JSON.stringify(bg.groupTitle)} → ${JSON.stringify(ag.groupTitle)}`);
+
+    // subaccountGroup sections — keyed by groupId
+    const befSaGroups = bef.sections.filter((s): s is SaGroup => s.type === 'subaccountGroup');
+    const aftSaGroups = aft.sections.filter((s): s is SaGroup => s.type === 'subaccountGroup');
+    const bGrpMap = new Map(befSaGroups.map(g => [g.groupId, g]));
+    const aGrpMap = new Map(aftSaGroups.map(g => [g.groupId, g]));
+    for (const [id] of aGrpMap) { if (!bGrpMap.has(id)) tabLines.push(`    + subaccountGroup: ${id}`); }
+    for (const [id] of bGrpMap) { if (!aGrpMap.has(id)) tabLines.push(`    - subaccountGroup: ${id}`); }
+    for (const [id, ag] of aGrpMap) {
+      const bg = bGrpMap.get(id);
+      if (!bg || (bg.title ?? '') === (ag.title ?? '')) continue;
+      tabLines.push(`    ~ subaccountGroup: ${id}  title: ${JSON.stringify(bg.title ?? '')} → ${JSON.stringify(ag.title ?? '')}`);
     }
-    // Group order among groups present in both
-    const commonGrpsBefore = bef.groups.map(g => g.groupId).filter(id => aGroups.has(id));
-    const commonGrpsAfter  = aft.groups.map(g => g.groupId).filter(id => bGroups.has(id));
-    if (commonGrpsBefore.join('\0') !== commonGrpsAfter.join('\0'))
-      tabLines.push(`    ~ group order: ${commonGrpsBefore.join(', ')} → ${commonGrpsAfter.join(', ')}`);
+    const cGrpB = befSaGroups.map(g => g.groupId).filter(id => aGrpMap.has(id));
+    const cGrpA = aftSaGroups.map(g => g.groupId).filter(id => bGrpMap.has(id));
+    if (cGrpB.join('\0') !== cGrpA.join('\0'))
+      tabLines.push(`    ~ subaccountGroup order: ${cGrpB.join(', ')} → ${cGrpA.join(', ')}`);
+
+    // banner/table sections — compared by index
+    const befOther = bef.sections.filter(s => s.type !== 'subaccountGroup');
+    const aftOther = aft.sections.filter(s => s.type !== 'subaccountGroup');
+    const maxLen = Math.max(befOther.length, aftOther.length);
+    for (let i = 0; i < maxLen; i++) {
+      const bs = befOther[i];
+      const as_ = aftOther[i];
+      if (!bs && as_) { tabLines.push(`    + ${as_.type} section`); continue; }
+      if (bs && !as_) { tabLines.push(`    - ${bs.type} section`); continue; }
+      if (!bs || !as_) continue;
+      if (bs.type !== as_.type) { tabLines.push(`    ~ section[${i}]: ${bs.type} → ${as_.type}`); continue; }
+      if (bs.type === 'banner' && as_.type === 'banner') {
+        const b = bs as Banner; const a = as_ as Banner;
+        if (b.message !== a.message) tabLines.push(`    ~ banner[${i}] message changed`);
+        if (b.backgroundColor !== a.backgroundColor) tabLines.push(`    ~ banner[${i}] color: ${b.backgroundColor} → ${a.backgroundColor}`);
+      }
+      if (bs.type === 'table' && as_.type === 'table') {
+        const b = bs as Table; const a = as_ as Table;
+        if ((b.title ?? '') !== (a.title ?? ''))
+          tabLines.push(`    ~ table[${i}] title: ${JSON.stringify(b.title ?? '')} → ${JSON.stringify(a.title ?? '')}`);
+        const [bR, bC] = [b.tableContent.length, b.tableContent[0]?.length ?? 0];
+        const [aR, aC] = [a.tableContent.length, a.tableContent[0]?.length ?? 0];
+        if (bR !== aR || bC !== aC) tabLines.push(`    ~ table[${i}] size: ${bR}×${bC} → ${aR}×${aC}`);
+      }
+    }
+
     if (tabLines.length) { lines.push(`~ tab: "${tab}"`); lines.push(...tabLines); }
   }
 

@@ -3,7 +3,7 @@ import { useParams, useNavigate } from 'react-router';
 import { PanelLeft, RefreshCw, Search } from 'lucide-react';
 import { useSidebar } from '@/components/AppLayout';
 import type { SubaccountEntry } from '@/components/config/SubaccountsTable';
-import type { TabEntry } from '@/components/config/TabsTable';
+import type { TabEntry, TabSection } from '@/components/config/TabsTable';
 import SubaccountDestModal from './SubaccountDestModal';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -166,7 +166,7 @@ export default function DestinationOverview() {
 
   // Build visible tabs: only tabs that have at least one group with visible subaccounts
   const visibleTabs = tabEntries.filter(te =>
-    te.groups.some(g => allDestSas.some(sa => csvIncludes(sa.groupIds, g.groupId))),
+    te.sections.some(s => s.type === 'subaccountGroup' && allDestSas.some(sa => csvIncludes(sa.groupIds, s.groupId))),
   );
 
   const activeTabEntry = visibleTabs.find(te => te.tab === decodeURIComponent(tabParam ?? '')) ?? visibleTabs[0];
@@ -272,7 +272,9 @@ export default function DestinationOverview() {
           </div>
         )}
 
-        {activeTabEntry?.groups.map(grp => {
+        {activeTabEntry?.sections
+          .filter((s): s is Extract<TabSection, { type: 'subaccountGroup' }> => s.type === 'subaccountGroup')
+          .map(grp => {
           const visibleSas = allDestSas
             .filter(sa => csvIncludes(sa.groupIds, grp.groupId))
             .sort((a, b) => a.pos - b.pos);
@@ -286,7 +288,7 @@ export default function DestinationOverview() {
           return (
             <div key={grp.groupId} className="space-y-1.5">
               <div className="px-1">
-                <span className="text-xs font-semibold text-foreground">{grp.groupTitle}</span>
+                <span className="text-xs font-semibold text-foreground">{grp.title ?? grp.groupId}</span>
                 <span className="text-xs text-muted-foreground ml-2">({grp.groupId})</span>
               </div>
 
