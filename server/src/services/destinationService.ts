@@ -70,16 +70,26 @@ async function saveTokenStore(store: TokenStore): Promise<void> {
 // ─── CF v3 API helpers ────────────────────────────────────────────────────────
 
 async function cfGet(region: string, path: string): Promise<unknown> {
-  const token = await getOrRefreshToken(region);
-  const url   = `${token.api_url}${path}`;
-  const t0    = Date.now();
-  const res   = await fetchWithRateLimit(
-    () => fetch(url, { headers: { Authorization: `${token.token_type} ${token.access_token}` } }),
+  const token      = await getOrRefreshToken(region);
+  const url        = `${token.api_url}${path}`;
+  const reqHeaders = { Authorization: `${token.token_type} ${token.access_token}` };
+  if (logger.isLevelEnabled('trace')) {
+    logger.trace({ method: 'GET', url, reqHeaders }, 'CF v3 API request');
+  }
+  const t0  = Date.now();
+  const res = await fetchWithRateLimit(
+    () => fetch(url, { headers: reqHeaders }),
     url,
   );
-  logger.debug({ method: 'GET', url, status: res.status, cl: res.headers.get('content-length'), ms: Date.now() - t0 }, 'CF v3 API call');
+  const ms = Date.now() - t0;
+  let resText: string | undefined;
+  if (logger.isLevelEnabled('trace')) {
+    resText = await res.text().catch(() => '');
+    logger.trace({ method: 'GET', url, status: res.status, resHeaders: Object.fromEntries(res.headers.entries()), resBody: resText }, 'CF v3 API response');
+  }
+  logger.debug({ method: 'GET', url, status: res.status, cl: res.headers.get('content-length'), ms }, 'CF v3 API call');
   if (!res.ok) throw new Error(`CF GET ${path} → HTTP ${res.status}`);
-  return res.json();
+  return resText !== undefined ? JSON.parse(resText) : res.json();
 }
 
 async function fetchDestInstanceGuid(region: string, orgGuid: string): Promise<string | null> {
@@ -114,24 +124,30 @@ async function getDestToken(entry: DestKeyEntry, store: TokenStore): Promise<str
   if (cached && cached.expires_at - Date.now() > 60_000) return cached.access_token;
 
   const { url, clientid, clientsecret } = entry.credentials;
-  const basic    = Buffer.from(`${clientid}:${clientsecret}`).toString('base64');
-  const tokenUrl = `${url}/oauth/token`;
-  const t0       = Date.now();
-
+  const basic      = Buffer.from(`${clientid}:${clientsecret}`).toString('base64');
+  const tokenUrl   = `${url}/oauth/token`;
+  const reqHeaders = { 'Content-Type': 'application/x-www-form-urlencoded', Authorization: `Basic ${basic}` };
+  const reqBody    = 'grant_type=client_credentials';
+  if (logger.isLevelEnabled('trace')) {
+    logger.trace({ method: 'POST', url: tokenUrl, reqHeaders, reqBody, org: entry.org_id }, 'Destination OAuth request');
+  }
+  const t0  = Date.now();
   const res = await fetchWithRateLimit(
-    () => fetch(tokenUrl, {
-      method:  'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded', Authorization: `Basic ${basic}` },
-      body:    'grant_type=client_credentials',
-    }),
+    () => fetch(tokenUrl, { method: 'POST', headers: reqHeaders, body: reqBody }),
     tokenUrl,
   );
-  logger.debug({ method: 'POST', url: tokenUrl, grant_type: 'client_credentials', org: entry.org_id, status: res.status, cl: res.headers.get('content-length'), ms: Date.now() - t0 }, 'Destination OAuth token call');
+  const ms = Date.now() - t0;
+  let resText: string | undefined;
+  if (logger.isLevelEnabled('trace')) {
+    resText = await res.text().catch(() => '');
+    logger.trace({ method: 'POST', url: tokenUrl, status: res.status, org: entry.org_id, resHeaders: Object.fromEntries(res.headers.entries()), resBody: resText }, 'Destination OAuth response');
+  }
+  logger.debug({ method: 'POST', url: tokenUrl, grant_type: 'client_credentials', org: entry.org_id, status: res.status, cl: res.headers.get('content-length'), ms }, 'Destination OAuth token call');
   if (!res.ok) {
-    const text = await res.text().catch(() => '');
+    const text = resText ?? await res.text().catch(() => '');
     throw new Error(`Destination OAuth for ${entry.org_id} → HTTP ${res.status}: ${text.slice(0, 200)}`);
   }
-  const data = await res.json() as { access_token: string; expires_in?: number };
+  const data = (resText !== undefined ? JSON.parse(resText) : await res.json()) as { access_token: string; expires_in?: number };
   const expiresIn = typeof data.expires_in === 'number' ? data.expires_in : 1800;
   store[entry.org_id] = { org_id: entry.org_id, access_token: data.access_token, expires_at: Date.now() + expiresIn * 1000 };
   return data.access_token;
@@ -140,18 +156,28 @@ async function getDestToken(entry: DestKeyEntry, store: TokenStore): Promise<str
 // ─── Destination API ──────────────────────────────────────────────────────────
 
 async function fetchSubaccountDestinations(entry: DestKeyEntry, token: string): Promise<unknown[]> {
-  const url = `${entry.credentials.uri}/destination-configuration/v1/subaccountDestinations`;
+  const url        = `${entry.credentials.uri}/destination-configuration/v1/subaccountDestinations`;
+  const reqHeaders = { Authorization: `Bearer ${token}` };
+  if (logger.isLevelEnabled('trace')) {
+    logger.trace({ method: 'GET', url, reqHeaders, org: entry.org_id }, 'Destination API request');
+  }
   const t0  = Date.now();
   const res = await fetchWithRateLimit(
-    () => fetch(url, { headers: { Authorization: `Bearer ${token}` } }),
+    () => fetch(url, { headers: reqHeaders }),
     url,
   );
-  logger.debug({ method: 'GET', url, org: entry.org_id, status: res.status, cl: res.headers.get('content-length'), ms: Date.now() - t0 }, 'Destination API call');
+  const ms = Date.now() - t0;
+  let resText: string | undefined;
+  if (logger.isLevelEnabled('trace')) {
+    resText = await res.text().catch(() => '');
+    logger.trace({ method: 'GET', url, status: res.status, org: entry.org_id, resHeaders: Object.fromEntries(res.headers.entries()), resBody: resText }, 'Destination API response');
+  }
+  logger.debug({ method: 'GET', url, org: entry.org_id, status: res.status, cl: res.headers.get('content-length'), ms }, 'Destination API call');
   if (!res.ok) {
-    const text = await res.text().catch(() => '');
+    const text = resText ?? await res.text().catch(() => '');
     throw new Error(`Destination API for ${entry.org_id} → HTTP ${res.status}: ${text.slice(0, 200)}`);
   }
-  const data = await res.json();
+  const data = resText !== undefined ? JSON.parse(resText) : await res.json();
   return Array.isArray(data) ? data : [];
 }
 

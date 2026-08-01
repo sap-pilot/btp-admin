@@ -23,7 +23,7 @@ export default function ConfigPage() {
   const [isSavingSas, setIsSavingSas] = useState(false);
   const [refreshProgress, setRefreshProgress] = useState<RefreshProgress | null>(null);
   const [selectedSa, setSelectedSa]   = useState<SubaccountEntry | null>(null);
-  const [refreshWarnings, setRefreshWarnings] = useState<string[]>([]);
+  const progressTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
   // Tabs state
   const [tabsData, setTabsData]         = useState<TabEntry[]>([]);
@@ -80,8 +80,10 @@ export default function ConfigPage() {
 
       if (data.type === 'progress') {
         const pct = typeof data.pct === 'number' ? data.pct : 0;
-        setRefreshProgress({ pct, message: String(data.message ?? ''), error: null });
-        if (pct >= 100) setTimeout(() => setRefreshProgress(null), 2000);
+        setRefreshProgress(prev => {
+          if (prev?.error || prev?.warning) return prev;
+          return { pct, message: String(data.message ?? ''), error: null };
+        });
         return;
       }
       if (data.type === 'progress-error') {
@@ -114,6 +116,7 @@ export default function ConfigPage() {
 
   async function handleRefresh() {
     if (!window.confirm('Refresh will re-fetch subaccounts from BTP CLI / CF API and merge with local edits. Continue?')) return;
+    clearTimeout(progressTimerRef.current);
     setIsRefreshing(true);
     setError('');
     setRefreshProgress({ pct: 0, message: 'Starting refresh…', error: null });
@@ -124,10 +127,18 @@ export default function ConfigPage() {
       setSasData(json.data ?? []);
       setOriginalSas(json.data ?? []);
       setIsSasDirty(false);
-      setRefreshWarnings(json.warnings ?? []);
+      const warnings = json.warnings ?? [];
+      if (warnings.length > 0) {
+        setRefreshProgress({ pct: 100, message: warnings.join(' · '), error: null, warning: true });
+      } else {
+        progressTimerRef.current = setTimeout(
+          () => setRefreshProgress(prev => (prev?.error || prev?.warning ? prev : null)),
+          3000,
+        );
+      }
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Refresh failed');
-      setRefreshProgress(null);
+      const msg = err instanceof Error ? err.message : 'Refresh failed';
+      setRefreshProgress({ pct: 100, message: msg, error: msg });
     } finally {
       setIsRefreshing(false);
     }
@@ -138,7 +149,7 @@ export default function ConfigPage() {
     setSasData(originalSas);
     setIsSasDirty(false);
     setError('');
-    setRefreshWarnings([]);
+    setRefreshProgress(null);
   }
 
   async function handleSasSave() {
@@ -287,16 +298,10 @@ export default function ConfigPage() {
         </button>
       </div>
 
-      {/* Error banner */}
+      {/* Error banner — save / import / load errors only */}
       {error && (
         <div className="shrink-0 px-4 py-2 bg-destructive/10 text-destructive text-xs border-b border-destructive/20">
           {error}
-        </div>
-      )}
-      {/* Warnings banner */}
-      {refreshWarnings.length > 0 && (
-        <div className="shrink-0 px-4 py-2 bg-yellow-500/10 text-yellow-700 dark:text-yellow-400 text-xs border-b border-yellow-500/20">
-          {refreshWarnings.map((w, i) => <p key={i}>{w}</p>)}
         </div>
       )}
 
@@ -347,7 +352,7 @@ export default function ConfigPage() {
               {isLoadingChangelog && changelog === null
                 ? <p className="text-xs text-muted-foreground">Loading…</p>
                 : changelog
-                  ? <pre className="text-xs font-mono whitespace-pre-wrap break-words text-foreground leading-relaxed">{changelog}</pre>
+                  ? <div className="font-mono text-xs leading-relaxed">{renderConfigChangelog(changelog)}</div>
                   : <p className="text-xs text-muted-foreground">No changes recorded yet.</p>
               }
             </div>
@@ -359,4 +364,35 @@ export default function ConfigPage() {
       <SubaccountDetailModal sa={selectedSa} onClose={() => setSelectedSa(null)} />
     </div>
   );
+}
+
+function renderConfigChangelog(text: string): React.ReactNode {
+  return text.split('\n').map((line, i) => {
+    if (line.startsWith('## ')) {
+      return <div key={i} className="font-bold mt-4 mb-1 text-foreground first:mt-0">{line.slice(3)}</div>;
+    }
+    if (line.startsWith('+ ')) {
+      return <div key={i} className="text-green-600 dark:text-green-400">{line}</div>;
+    }
+    if (line.startsWith('- ')) {
+      return <div key={i} className="text-red-500 dark:text-red-400">{line}</div>;
+    }
+    if (line.startsWith('~ ')) {
+      return <div key={i} className="text-amber-600 dark:text-amber-400">{line}</div>;
+    }
+    if (line.startsWith('    ')) {
+      const arrowIdx = line.indexOf(' → ');
+      if (arrowIdx !== -1) {
+        return (
+          <div key={i} className="pl-4">
+            <span className="text-red-400/80">{line.slice(0, arrowIdx)}</span>
+            <span className="text-muted-foreground"> → </span>
+            <span className="text-green-500/80">{line.slice(arrowIdx + 3)}</span>
+          </div>
+        );
+      }
+      return <div key={i} className="pl-4 text-muted-foreground">{line}</div>;
+    }
+    return <div key={i} className="text-muted-foreground">{line || ' '}</div>;
+  });
 }
