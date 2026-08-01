@@ -84,26 +84,47 @@ export async function fetchWithRateLimit(request: () => Promise<Response>, label
 }
 
 async function httpGet(url: string, headers: Record<string, string> = {}): Promise<unknown> {
+  if (logger.isLevelEnabled('trace')) {
+    logger.trace({ method: 'GET', url, reqHeaders: headers }, 'CF API request');
+  }
   const t0  = Date.now();
   const res = await fetchWithRateLimit(() => fetch(url, { headers }), url);
-  logger.debug({ method: 'GET', url, status: res.status, cl: res.headers.get('content-length'), ms: Date.now() - t0 }, 'CF API call');
+  const ms  = Date.now() - t0;
+  let resText: string | undefined;
+  if (logger.isLevelEnabled('trace')) {
+    resText = await res.text().catch(() => '');
+    logger.trace({ method: 'GET', url, status: res.status, resHeaders: Object.fromEntries(res.headers.entries()), resBody: resText }, 'CF API response');
+  }
+  logger.debug({ method: 'GET', url, status: res.status, cl: res.headers.get('content-length'), ms }, 'CF API call');
   if (!res.ok) throw new Error(`GET ${url} → HTTP ${res.status}`);
-  return res.json();
+  return resText !== undefined ? JSON.parse(resText) : res.json();
 }
 
 async function httpPostForm(url: string, params: Record<string, string>): Promise<Record<string, unknown>> {
-  const t0   = Date.now();
-  const form = new URLSearchParams(params).toString();
-  const res  = await fetchWithRateLimit(
-    () => fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: form }),
+  const form       = new URLSearchParams(params).toString();
+  const reqHeaders = { 'Content-Type': 'application/x-www-form-urlencoded' };
+  if (logger.isLevelEnabled('trace')) {
+    logger.trace({ method: 'POST', url, reqHeaders, reqBody: form }, 'CF API request');
+  }
+  const t0  = Date.now();
+  const res = await fetchWithRateLimit(
+    () => fetch(url, { method: 'POST', headers: reqHeaders, body: form }),
     url,
   );
-  logger.debug({ method: 'POST', url, grant_type: params['grant_type'], status: res.status, cl: res.headers.get('content-length'), ms: Date.now() - t0 }, 'CF OAuth token call');
+  const ms = Date.now() - t0;
+  let resText: string | undefined;
+  if (logger.isLevelEnabled('trace')) {
+    resText = await res.text().catch(() => '');
+    logger.trace({ method: 'POST', url, status: res.status, resHeaders: Object.fromEntries(res.headers.entries()), resBody: resText }, 'CF API response');
+  }
+  logger.debug({ method: 'POST', url, grant_type: params['grant_type'], status: res.status, cl: res.headers.get('content-length'), ms }, 'CF OAuth token call');
   if (!res.ok) {
-    const text = await res.text().catch(() => '');
+    const text = resText ?? await res.text().catch(() => '');
     throw new Error(`POST ${url} → HTTP ${res.status}: ${text.slice(0, 200)}`);
   }
-  return res.json() as Promise<Record<string, unknown>>;
+  return resText !== undefined
+    ? JSON.parse(resText) as Record<string, unknown>
+    : res.json() as Promise<Record<string, unknown>>;
 }
 
 async function getTokenEndpoint(region: string): Promise<string> {

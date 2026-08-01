@@ -8,6 +8,7 @@ import { getCfCredentials, getCfRegions, fetchOrgsForRegion, fetchSpacesByOrgs }
 import {
   btpLogin, btpListGlobalAccounts, btpListSubaccounts,
   btpListEnvInstances, btpListSubscriptions, btpListServiceInstances, btpListServicePlans,
+  type GaInfo,
 } from './btpCliService.js';
 import { appendConfigChangelog } from './configChangelogService.js';
 
@@ -28,9 +29,11 @@ export interface ServiceInstanceEntry {
 }
 
 export interface SubaccountEntry {
-  region:             string;
-  globalAccountGUID:  string;
-  subdomain:          string;
+  region:                 string;
+  globalAccountGUID:      string;
+  globalAccountName:      string;
+  globalAccountSubdomain: string;
+  subdomain:              string;
   subaccountId:       string;
   subaccountName:     string;
   groupIds:           string;
@@ -48,21 +51,32 @@ export interface SubaccountEntry {
   serviceInstances: ServiceInstanceEntry[];
 }
 
-export async function readSubaccounts(): Promise<SubaccountEntry[]> {
+async function readSubaccountsFile(): Promise<{ subaccounts: SubaccountEntry[]; globalAccounts: GaInfo[] }> {
   try {
-    const raw = await readFile(SUBACCOUNTS_PATH, 'utf-8');
-    return JSON.parse(raw) as SubaccountEntry[];
-  } catch { return []; }
+    const raw  = await readFile(SUBACCOUNTS_PATH, 'utf-8');
+    const data = JSON.parse(raw) as unknown;
+    if (Array.isArray(data)) return { subaccounts: data as SubaccountEntry[], globalAccounts: [] };
+    const obj = data as { subaccounts?: SubaccountEntry[]; globalAccounts?: GaInfo[] };
+    return {
+      subaccounts:    Array.isArray(obj.subaccounts)    ? obj.subaccounts    : [],
+      globalAccounts: Array.isArray(obj.globalAccounts) ? obj.globalAccounts : [],
+    };
+  } catch { return { subaccounts: [], globalAccounts: [] }; }
 }
 
-async function writeSubaccounts(data: SubaccountEntry[]): Promise<void> {
+export async function readSubaccounts(): Promise<SubaccountEntry[]> {
+  return (await readSubaccountsFile()).subaccounts;
+}
+
+async function writeSubaccounts(subaccounts: SubaccountEntry[], globalAccounts?: GaInfo[]): Promise<void> {
+  const gas = globalAccounts ?? (await readSubaccountsFile()).globalAccounts;
   await mkdir(CONFIG_DIR, { recursive: true });
-  await writeFile(SUBACCOUNTS_PATH, JSON.stringify(data, null, 2), 'utf-8');
+  await writeFile(SUBACCOUNTS_PATH, JSON.stringify({ subaccounts, globalAccounts: gas }, null, 2), 'utf-8');
   notifyCallbacks();
   const ts = Date.now();
   emit('root',   { files: ['config/subaccounts.json'], ts });
   emit('config', { files: ['subaccounts.json'], ts });
-  logger.info({ subaccounts: data.length }, 'subaccounts.json saved');
+  logger.info({ subaccounts: subaccounts.length, globalAccounts: gas.length }, 'subaccounts.json saved');
 }
 
 const SA_DIFF_FIELDS = [
@@ -154,14 +168,15 @@ export async function refreshSubaccounts(user = 'system'): Promise<{ data: Subac
 
   // ── BTP CLI: login + collect all subaccounts across all global accounts ──
   type SaWithGa = { saRaw: import('./btpCliService.js').SaRaw; gaSubdomain: string };
-  let allSas: SaWithGa[] = [];
-  let sessionId: string | null = null;
+  let allSas:     SaWithGa[]   = [];
+  let sessionId:  string | null = null;
+  let fetchedGas: GaInfo[]     = [];
 
   try {
-    sessionId = await btpLogin(username, password);
-    const gas = await btpListGlobalAccounts(sessionId);
-    logger.info({ globalAccounts: gas.length }, 'BTP CLI: global accounts fetched');
-    for (const ga of gas) {
+    sessionId  = await btpLogin(username, password);
+    fetchedGas = await btpListGlobalAccounts(sessionId);
+    logger.info({ globalAccounts: fetchedGas.length }, 'BTP CLI: global accounts fetched');
+    for (const ga of fetchedGas) {
       try {
         const sas = await btpListSubaccounts(sessionId, ga.subdomain);
         for (const saRaw of sas) allSas.push({ saRaw, gaSubdomain: ga.subdomain });
@@ -242,6 +257,8 @@ export async function refreshSubaccounts(user = 'system'): Promise<{ data: Subac
   const cfOrgMap = await cfOrgMapPromise;
 
   // ── Build fresh SubaccountEntry[] ──
+  const gaMap = new Map(fetchedGas.map(ga => [ga.guid, ga]));
+
   const fresh: SubaccountEntry[] = [];
   for (const { saRaw } of allSas) {
     const result    = saResults.get(saRaw.guid);
@@ -258,8 +275,10 @@ export async function refreshSubaccounts(user = 'system'): Promise<{ data: Subac
 
     fresh.push({
       region:             cfOrg?.region  ?? saRaw.region,
-      globalAccountGUID:  saRaw.globalAccountGUID,
-      subdomain:          saRaw.subdomain,
+      globalAccountGUID:      saRaw.globalAccountGUID,
+      globalAccountName:      gaMap.get(saRaw.globalAccountGUID)?.displayName ?? '',
+      globalAccountSubdomain: gaMap.get(saRaw.globalAccountGUID)?.subdomain   ?? '',
+      subdomain:              saRaw.subdomain,
       subaccountId:       saRaw.guid,
       subaccountName:     saRaw.displayName,
       groupIds:           '',
@@ -283,7 +302,7 @@ export async function refreshSubaccounts(user = 'system'): Promise<{ data: Subac
   const merged     = mergeSubaccounts(existing, fresh);
   const normalized = normalizeSubaccountPositions(merged);
   const diff       = diffSubaccounts(existing, normalized);
-  await writeSubaccounts(normalized);
+  await writeSubaccounts(normalized, fetchedGas.length > 0 ? fetchedGas : undefined);
   await appendConfigChangelog('Refresh', user, 'subaccounts.json', diff);
 
   emit('refresh-subaccounts', { type: 'progress', pct: 100, message: 'Done' });

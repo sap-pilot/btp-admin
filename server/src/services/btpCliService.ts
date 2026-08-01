@@ -22,20 +22,27 @@ async function btpRetry(request: () => Promise<Response>): Promise<Response> {
 }
 
 export async function btpLogin(username: string, password: string): Promise<string> {
-  const url = `${BTP_BASE}/login/v2.106.1`;
+  const url        = `${BTP_BASE}/login/v2.106.1`;
+  const reqHeaders = {
+    'content-type':    'application/json',
+    'user-agent':      BTP_UA,
+    'x-correlationid': randomUUID(),
+  };
+  const reqBody = JSON.stringify({ customIdp: '', userName: username, password, jwt: '' });
+  if (logger.isLevelEnabled('trace')) {
+    logger.trace({ method: 'POST', url, reqHeaders, reqBody }, 'BTP CLI request');
+  }
   const t0  = Date.now();
-  const res = await btpRetry(() => fetch(url, {
-    method: 'POST',
-    headers: {
-      'content-type':   'application/json',
-      'user-agent':     BTP_UA,
-      'x-correlationid': randomUUID(),
-    },
-    body: JSON.stringify({ customIdp: '', userName: username, password, jwt: '' }),
-  }));
-  logger.debug({ method: 'POST', url, status: res.status, cl: res.headers.get('content-length'), ms: Date.now() - t0 }, 'BTP CLI call');
+  const res = await btpRetry(() => fetch(url, { method: 'POST', headers: reqHeaders, body: reqBody }));
+  const ms  = Date.now() - t0;
+  let resText: string | undefined;
+  if (logger.isLevelEnabled('trace')) {
+    resText = await res.text().catch(() => '');
+    logger.trace({ method: 'POST', url, status: res.status, resHeaders: Object.fromEntries(res.headers.entries()), resBody: resText }, 'BTP CLI response');
+  }
+  logger.debug({ method: 'POST', url, status: res.status, cl: res.headers.get('content-length'), ms }, 'BTP CLI call');
   if (!res.ok) {
-    const text = await res.text().catch(() => '');
+    const text = resText ?? await res.text().catch(() => '');
     throw new Error(`BTP CLI login → HTTP ${res.status}: ${text.slice(0, 200)}`);
   }
   const sessionId = res.headers.get('x-cpcli-sessionid');
@@ -50,26 +57,33 @@ async function btpPost(
   body?:       unknown,
   format =     'json',
 ): Promise<unknown> {
-  const url = `${BTP_BASE}${path}`;
+  const url        = `${BTP_BASE}${path}`;
+  const reqHeaders = {
+    'x-cpcli-sessionid': sessionId,
+    'x-cpcli-subdomain': gaSubdomain,
+    'x-cpcli-format':    format,
+    'content-type':      'application/json',
+    'x-correlationid':   randomUUID(),
+    'user-agent':        BTP_UA,
+  };
+  const reqBody = body !== undefined ? JSON.stringify(body) : '';
+  if (logger.isLevelEnabled('trace')) {
+    logger.trace({ method: 'POST', url, reqHeaders, reqBody }, 'BTP CLI request');
+  }
   const t0  = Date.now();
-  const res = await btpRetry(() => fetch(url, {
-    method: 'POST',
-    headers: {
-      'x-cpcli-sessionid': sessionId,
-      'x-cpcli-subdomain': gaSubdomain,
-      'x-cpcli-format':    format,
-      'content-type':      'application/json',
-      'x-correlationid':   randomUUID(),
-      'user-agent':        BTP_UA,
-    },
-    body: body !== undefined ? JSON.stringify(body) : '',
-  }));
-  logger.debug({ method: 'POST', url, status: res.status, cl: res.headers.get('content-length'), ms: Date.now() - t0 }, 'BTP CLI call');
+  const res = await btpRetry(() => fetch(url, { method: 'POST', headers: reqHeaders, body: reqBody }));
+  const ms  = Date.now() - t0;
+  let resText: string | undefined;
+  if (logger.isLevelEnabled('trace')) {
+    resText = await res.text().catch(() => '');
+    logger.trace({ method: 'POST', url, status: res.status, resHeaders: Object.fromEntries(res.headers.entries()), resBody: resText }, 'BTP CLI response');
+  }
+  logger.debug({ method: 'POST', url, status: res.status, cl: res.headers.get('content-length'), ms }, 'BTP CLI call');
   if (!res.ok) {
-    const text = await res.text().catch(() => '');
+    const text = resText ?? await res.text().catch(() => '');
     throw new Error(`BTP CLI POST ${path} → HTTP ${res.status}: ${text.slice(0, 200)}`);
   }
-  return res.json();
+  return resText !== undefined ? JSON.parse(resText) : res.json();
 }
 
 export interface GaInfo {
