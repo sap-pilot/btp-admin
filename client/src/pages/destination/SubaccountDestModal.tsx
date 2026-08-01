@@ -3,7 +3,7 @@ import {
   Download, Eye, EyeOff, Lock, Plus, RotateCcw, Save, Search, Send, Trash2, Upload, X,
 } from 'lucide-react';
 import { useAuth } from '@/hooks/useAuth';
-import type { OrgEntry } from '@/components/config/OrgsTable';
+import type { SubaccountEntry } from '@/components/config/SubaccountsTable';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -19,7 +19,7 @@ type Tab        = 'properties' | 'changelog' | 'test';
 type HttpMethod = 'GET' | 'POST' | 'PUT' | 'DELETE' | 'PATCH';
 
 export interface SubaccountDestModalProps {
-  org:          OrgEntry;
+  org:          SubaccountEntry;
   allNames:     string[];
   initialName?: string;
   onClose:      () => void;
@@ -742,7 +742,7 @@ export default function SubaccountDestModal({ org, allNames, initialName, onClos
           <span className="text-sm font-semibold min-w-0 truncate">
             Subaccount Destinations
             <span className="text-muted-foreground font-normal ml-2 text-xs">
-              {org.alias || org.org_name} · {org.subdomain} · {org.region}
+              {org.alias || org.subaccountName} · {org.subdomain} · {org.region}
             </span>
           </span>
           <div className="ml-auto flex items-center gap-1.5 shrink-0">

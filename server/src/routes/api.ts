@@ -29,7 +29,7 @@ router.get('/events', (req, res) => {
   if (homepageOnly) {
     topics = ['homepage'];
   } else if (configOnly) {
-    topics = ['config'];
+    topics = ['config', 'refresh-subaccounts'];
   } else if (destOnly) {
     topics = ['dest'];
   } else {

@@ -1,66 +1,68 @@
 import { useEffect, useState } from 'react';
 import * as DialogPrimitive from '@radix-ui/react-dialog';
 import { X } from 'lucide-react';
-import OrgsTable, { type OrgEntry } from './OrgsTable';
-import DirsTable, { type DirTab } from './DirsTable';
+import SubaccountsTable, { type SubaccountEntry } from './SubaccountsTable';
+import SubaccountDetailModal from './SubaccountDetailModal';
+import TabsTable, { type TabEntry } from './TabsTable';
 
 interface Props {
   open: boolean;
   onClose: () => void;
 }
 
-type Tab = 'orgs' | 'dirs' | 'menus';
+type Tab = 'subaccounts' | 'tabs' | 'menus';
 
 export default function ConfigModal({ open, onClose }: Props) {
-  const [activeTab, setActiveTab]         = useState<Tab>('orgs');
+  const [activeTab, setActiveTab] = useState<Tab>('subaccounts');
 
-  // Orgs state
-  const [orgsData, setOrgsData]           = useState<OrgEntry[]>([]);
-  const [originalOrgs, setOriginalOrgs]   = useState<OrgEntry[]>([]);
-  const [isOrgsDirty, setIsOrgsDirty]     = useState(false);
+  // Subaccounts state
+  const [sasData, setSasData]             = useState<SubaccountEntry[]>([]);
+  const [originalSas, setOriginalSas]     = useState<SubaccountEntry[]>([]);
+  const [isSasDirty, setIsSasDirty]       = useState(false);
   const [isRefreshing, setIsRefreshing]   = useState(false);
-  const [isSavingOrgs, setIsSavingOrgs]   = useState(false);
-
-  // Dirs state
-  const [dirsData, setDirsData]           = useState<DirTab[]>([]);
-  const [originalDirs, setOriginalDirs]   = useState<DirTab[]>([]);
-  const [isDirsDirty, setIsDirsDirty]     = useState(false);
-  const [isSavingDirs, setIsSavingDirs]   = useState(false);
-
-  const [error, setError]                 = useState('');
+  const [isSavingSas, setIsSavingSas]     = useState(false);
+  const [selectedSa, setSelectedSa]       = useState<SubaccountEntry | null>(null);
   const [refreshWarnings, setRefreshWarnings] = useState<string[]>([]);
+
+  // Tabs state
+  const [tabsData, setTabsData]           = useState<TabEntry[]>([]);
+  const [originalTabs, setOriginalTabs]   = useState<TabEntry[]>([]);
+  const [isTabsDirty, setIsTabsDirty]     = useState(false);
+  const [isSavingTabs, setIsSavingTabs]   = useState(false);
+
+  const [error, setError] = useState('');
 
   useEffect(() => {
     if (!open) return;
-    setActiveTab('orgs');
-    setIsOrgsDirty(false);
-    setIsDirsDirty(false);
+    setActiveTab('subaccounts');
+    setIsSasDirty(false);
+    setIsTabsDirty(false);
     setError('');
 
-    void fetch('/api/config/orgs')
-      .then(r => r.json() as Promise<{ ok: boolean; data: OrgEntry[] }>)
-      .then(({ data }) => { setOrgsData(data); setOriginalOrgs(data); })
-      .catch(() => setError('Failed to load orgs'));
+    void fetch('/api/config/subaccounts')
+      .then(r => r.json() as Promise<{ ok: boolean; data: SubaccountEntry[] }>)
+      .then(({ data }) => { setSasData(data); setOriginalSas(data); })
+      .catch(() => setError('Failed to load subaccounts'));
 
-    void fetch('/api/config/dirs')
-      .then(r => r.json() as Promise<{ ok: boolean; data: DirTab[] }>)
-      .then(({ data }) => { setDirsData(data); setOriginalDirs(data); })
-      .catch(() => setError('Failed to load dirs'));
+    void fetch('/api/config/tabs')
+      .then(r => r.json() as Promise<{ ok: boolean; data: TabEntry[] }>)
+      .then(({ data }) => { setTabsData(data); setOriginalTabs(data); })
+      .catch(() => setError('Failed to load tabs'));
   }, [open]);
 
-  function handleOrgsChange(data: OrgEntry[]) { setOrgsData(data); setIsOrgsDirty(true); }
+  function handleSasChange(data: SubaccountEntry[]) { setSasData(data); setIsSasDirty(true); }
 
   async function handleRefresh() {
-    if (!window.confirm('Refresh will re-fetch orgs from CF API and merge with local edits. Continue?')) return;
+    if (!window.confirm('Refresh will re-fetch subaccounts from BTP CLI / CF API and merge with local edits. Continue?')) return;
     setIsRefreshing(true);
     setError('');
     try {
-      const res  = await fetch('/api/config/orgs/refresh', { method: 'POST' });
-      const json = await res.json() as { ok: boolean; data?: OrgEntry[]; warnings?: string[]; error?: string };
+      const res  = await fetch('/api/config/subaccounts/refresh', { method: 'POST' });
+      const json = await res.json() as { ok: boolean; data?: SubaccountEntry[]; warnings?: string[]; error?: string };
       if (!json.ok) throw new Error(json.error ?? 'Refresh failed');
-      setOrgsData(json.data ?? []);
-      setOriginalOrgs(json.data ?? []);
-      setIsOrgsDirty(false);
+      setSasData(json.data ?? []);
+      setOriginalSas(json.data ?? []);
+      setIsSasDirty(false);
       setRefreshWarnings(json.warnings ?? []);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Refresh failed');
@@ -69,65 +71,65 @@ export default function ConfigModal({ open, onClose }: Props) {
     }
   }
 
-  function handleOrgsReset() {
-    if (isOrgsDirty && !window.confirm('Discard unsaved changes?')) return;
-    setOrgsData(originalOrgs);
-    setIsOrgsDirty(false);
+  function handleSasReset() {
+    if (isSasDirty && !window.confirm('Discard unsaved changes?')) return;
+    setSasData(originalSas);
+    setIsSasDirty(false);
     setError('');
     setRefreshWarnings([]);
   }
 
-  async function handleOrgsSave() {
-    setIsSavingOrgs(true);
+  async function handleSasSave() {
+    setIsSavingSas(true);
     setError('');
     try {
-      const res  = await fetch('/api/config/orgs/save', {
+      const res  = await fetch('/api/config/subaccounts/save', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ data: orgsData }),
+        body: JSON.stringify({ data: sasData }),
       });
       const json = await res.json() as { ok: boolean; error?: string };
       if (!json.ok) throw new Error(json.error ?? 'Save failed');
-      setOriginalOrgs(orgsData);
-      setIsOrgsDirty(false);
+      setOriginalSas(sasData);
+      setIsSasDirty(false);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Save failed');
     } finally {
-      setIsSavingOrgs(false);
+      setIsSavingSas(false);
     }
   }
 
-  function handleDirsChange(data: DirTab[]) { setDirsData(data); setIsDirsDirty(true); }
+  function handleTabsChange(data: TabEntry[]) { setTabsData(data); setIsTabsDirty(true); }
 
-  function handleDirsReset() {
-    if (isDirsDirty && !window.confirm('Discard unsaved changes?')) return;
-    setDirsData(originalDirs);
-    setIsDirsDirty(false);
+  function handleTabsReset() {
+    if (isTabsDirty && !window.confirm('Discard unsaved changes?')) return;
+    setTabsData(originalTabs);
+    setIsTabsDirty(false);
     setError('');
   }
 
-  async function handleDirsSave() {
-    setIsSavingDirs(true);
+  async function handleTabsSave() {
+    setIsSavingTabs(true);
     setError('');
     try {
-      const res  = await fetch('/api/config/dirs/save', {
+      const res  = await fetch('/api/config/tabs/save', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ data: dirsData }),
+        body: JSON.stringify({ data: tabsData }),
       });
       const json = await res.json() as { ok: boolean; error?: string };
       if (!json.ok) throw new Error(json.error ?? 'Save failed');
-      setOriginalDirs(dirsData);
-      setIsDirsDirty(false);
+      setOriginalTabs(tabsData);
+      setIsTabsDirty(false);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Save failed');
     } finally {
-      setIsSavingDirs(false);
+      setIsSavingTabs(false);
     }
   }
 
   function handleClose() {
-    if ((isOrgsDirty || isDirsDirty) && !window.confirm('You have unsaved changes. Close anyway?')) return;
+    if ((isSasDirty || isTabsDirty) && !window.confirm('You have unsaved changes. Close anyway?')) return;
     onClose();
   }
 
@@ -138,8 +140,8 @@ export default function ConfigModal({ open, onClose }: Props) {
         : 'border-transparent text-muted-foreground hover:text-foreground'
     }`;
 
-  const totalOrgs = orgsData.length;
-  const totalDirs = dirsData.reduce((n, t) => n + t.dirs.length, 0);
+  const totalSas    = sasData.length;
+  const totalGroups = tabsData.reduce((n, t) => n + t.groups.length, 0);
 
   return (
     <DialogPrimitive.Root open={open} onOpenChange={v => { if (!v) handleClose(); }}>
@@ -151,22 +153,21 @@ export default function ConfigModal({ open, onClose }: Props) {
           onEscapeKeyDown={handleClose}
           aria-describedby={undefined}
         >
-          {/* Top bar: tabs + close only */}
+          {/* Top bar */}
           <div className="flex items-center justify-between border-b border-border shrink-0 px-2">
             <div className="flex items-center">
-              <button className={tabCls('orgs')} onClick={() => setActiveTab('orgs')}>
-                Subaccounts / Orgs
-                {totalOrgs > 0 && <span className="ml-1.5 text-[10px] text-muted-foreground">({totalOrgs})</span>}
+              <button className={tabCls('subaccounts')} onClick={() => setActiveTab('subaccounts')}>
+                Subaccounts
+                {totalSas > 0 && <span className="ml-1.5 text-[10px] text-muted-foreground">({totalSas})</span>}
               </button>
-              <button className={tabCls('dirs')} onClick={() => setActiveTab('dirs')}>
-                Tabs / Directories
-                {totalDirs > 0 && <span className="ml-1.5 text-[10px] text-muted-foreground">({totalDirs})</span>}
+              <button className={tabCls('tabs')} onClick={() => setActiveTab('tabs')}>
+                Tabs / Groups
+                {totalGroups > 0 && <span className="ml-1.5 text-[10px] text-muted-foreground">({totalGroups})</span>}
               </button>
               <button className={tabCls('menus')} onClick={() => setActiveTab('menus')}>
-                Menu / Links
+                Extra Menus
               </button>
             </div>
-
             <div className="flex items-center px-2 py-2">
               <DialogPrimitive.Title className="sr-only">Configuration</DialogPrimitive.Title>
               <DialogPrimitive.Close asChild>
@@ -187,7 +188,6 @@ export default function ConfigModal({ open, onClose }: Props) {
               {error}
             </div>
           )}
-          {/* CIS warning banner */}
           {refreshWarnings.length > 0 && (
             <div className="shrink-0 px-4 py-2 bg-yellow-500/10 text-yellow-700 dark:text-yellow-400 text-xs border-b border-yellow-500/20">
               {refreshWarnings.map((w, i) => <p key={i}>{w}</p>)}
@@ -196,36 +196,41 @@ export default function ConfigModal({ open, onClose }: Props) {
 
           {/* Body */}
           <div className="flex-1 overflow-hidden">
-            {activeTab === 'orgs' && (
-              <OrgsTable
-                data={orgsData}
-                onChange={handleOrgsChange}
-                isDirty={isOrgsDirty}
+            {activeTab === 'subaccounts' && (
+              <SubaccountsTable
+                data={sasData}
+                onChange={handleSasChange}
+                isDirty={isSasDirty}
                 onRefresh={handleRefresh}
                 isRefreshing={isRefreshing}
-                onReset={handleOrgsReset}
-                isSaving={isSavingOrgs}
-                onSave={handleOrgsSave}
+                onReset={handleSasReset}
+                isSaving={isSavingSas}
+                onSave={handleSasSave}
+                refreshProgress={null}
+                onOpenDetail={setSelectedSa}
               />
             )}
-            {activeTab === 'dirs' && (
-              <DirsTable
-                data={dirsData}
-                onChange={handleDirsChange}
-                isDirty={isDirsDirty}
-                isSaving={isSavingDirs}
-                onReset={handleDirsReset}
-                onSave={handleDirsSave}
+            {activeTab === 'tabs' && (
+              <TabsTable
+                data={tabsData}
+                onChange={handleTabsChange}
+                isDirty={isTabsDirty}
+                isSaving={isSavingTabs}
+                onReset={handleTabsReset}
+                onSave={handleTabsSave}
               />
             )}
             {activeTab === 'menus' && (
               <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
-                Menu / Links configuration — coming soon
+                Extra Menus configuration — coming soon
               </div>
             )}
           </div>
         </DialogPrimitive.Content>
       </DialogPrimitive.Portal>
+
+      {/* Subaccount detail modal (layered above ConfigModal) */}
+      <SubaccountDetailModal sa={selectedSa} onClose={() => setSelectedSa(null)} />
     </DialogPrimitive.Root>
   );
 }
