@@ -2,8 +2,8 @@ import { useEffect, useRef, useState } from 'react';
 import { useParams, useNavigate } from 'react-router';
 import { PanelLeft, RefreshCw, Search } from 'lucide-react';
 import { useSidebar } from '@/components/AppLayout';
-import type { OrgEntry } from '@/components/config/OrgsTable';
-import type { DirTab } from '@/components/config/DirsTable';
+import type { SubaccountEntry } from '@/components/config/SubaccountsTable';
+import type { TabEntry } from '@/components/config/TabsTable';
 import SubaccountDestModal from './SubaccountDestModal';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -13,7 +13,7 @@ type DestData = Record<string, DestItem[]>;
 
 interface Buckets { generic: string[]; s4: string[]; cep: string[]; others: string[] }
 
-interface ModalState { org: OrgEntry; allNames: string[]; initialName?: string }
+interface ModalState { sa: SubaccountEntry; allNames: string[]; initialName?: string }
 
 interface DestSearchResult {
   region:     string;
@@ -26,28 +26,31 @@ interface DestSearchResult {
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
+function saOrgId(sa: SubaccountEntry): string {
+  return sa.org?.orgId ?? '';
+}
+
 function categorise(name: string): keyof Buckets {
-  if (/^API_(S4|MDG)_(HTTP|RFC)_/i.test(name))   return 'generic';
-  if (/^API_/i.test(name))             return 's4';
-  if (/^cep-.*-runtime$/i.test(name))  return 'cep';
+  if (/^API_(S4|MDG)_(HTTP|RFC)_/i.test(name))  return 'generic';
+  if (/^API_/i.test(name))                       return 's4';
+  if (/^cep-.*-runtime$/i.test(name))            return 'cep';
   return 'others';
 }
 
-function bucketOrg(dests: DestItem[]): Buckets {
+function bucketSa(dests: DestItem[]): Buckets {
   const b: Buckets = { generic: [], s4: [], cep: [], others: [] };
   for (const d of dests) b[categorise(d.name)].push(d.name);
   return b;
 }
 
-// Stable deterministic fake status: ~90% OK, ~10% Failed (seeded by name+org)
 function fakeStatus(name: string, orgId: string): 'OK' | 'Failed' {
   let h = 0;
   for (const c of name + orgId) h = (h * 31 + c.charCodeAt(0)) & 0xffff;
   return h % 10 === 0 ? 'Failed' : 'OK';
 }
 
-function csvIncludes(csv: string, alias: string): boolean {
-  return csv.split(',').map(s => s.trim()).includes(alias);
+function csvIncludes(csv: string, id: string): boolean {
+  return csv.split(',').map(s => s.trim()).includes(id);
 }
 
 const CAT_META = {
@@ -65,12 +68,12 @@ export default function DestinationOverview() {
   }>();
   const navigate = useNavigate();
 
-  const [dirTabs,  setDirTabs]  = useState<DirTab[]>([]);
-  const [orgData,  setOrgData]  = useState<OrgEntry[]>([]);
-  const [destData, setDestData] = useState<DestData>({});
+  const [tabEntries, setTabEntries] = useState<TabEntry[]>([]);
+  const [saData,     setSaData]     = useState<SubaccountEntry[]>([]);
+  const [destData,   setDestData]   = useState<DestData>({});
   const [isRefreshing, setIsRefreshing] = useState(false);
-  const [error, setError]   = useState('');
-  const [modal, setModal]   = useState<ModalState | null>(null);
+  const [error, setError]  = useState('');
+  const [modal, setModal]  = useState<ModalState | null>(null);
 
   const deepLinkOpened = useRef(false);
 
@@ -82,16 +85,16 @@ export default function DestinationOverview() {
   const searchRef = useRef<HTMLDivElement>(null);
 
   async function loadData() {
-    const [dirsRes, orgsRes, destsRes] = await Promise.all([
-      fetch('/api/config/dirs'),
-      fetch('/api/config/orgs'),
+    const [tabsRes, sasRes, destsRes] = await Promise.all([
+      fetch('/api/config/tabs'),
+      fetch('/api/config/subaccounts'),
       fetch('/api/destinations'),
     ]);
-    const dirs  = await dirsRes.json()  as { ok: boolean; data: DirTab[] };
-    const orgs  = await orgsRes.json()  as { ok: boolean; data: OrgEntry[] };
+    const tabs  = await tabsRes.json()  as { ok: boolean; data: TabEntry[] };
+    const sas   = await sasRes.json()   as { ok: boolean; data: SubaccountEntry[] };
     const dests = await destsRes.json() as { ok: boolean; data: DestData };
-    if (dirs.ok)  setDirTabs(dirs.data);
-    if (orgs.ok)  setOrgData(orgs.data);
+    if (tabs.ok)  setTabEntries(tabs.data);
+    if (sas.ok)   setSaData(sas.data);
     if (dests.ok) setDestData(dests.data);
   }
 
@@ -110,14 +113,14 @@ export default function DestinationOverview() {
 
   // Open modal from deep-link URL: /destinations/:region/:subdomain/:name
   useEffect(() => {
-    if (deepLinkOpened.current || !regionParam || !subdomainParam || orgData.length === 0) return;
-    const destOrgs = orgData.filter(o => o.manage_destinations);
-    const org = destOrgs.find(o => o.region === regionParam && o.subdomain === subdomainParam);
-    if (!org) return;
+    if (deepLinkOpened.current || !regionParam || !subdomainParam || saData.length === 0) return;
+    const destSas = saData.filter(sa => sa.manageDestinations && !!sa.org?.orgId);
+    const sa = destSas.find(sa => sa.region === regionParam && sa.subdomain === subdomainParam);
+    if (!sa) return;
     deepLinkOpened.current = true;
-    const names = (destData[org.org_id] ?? []).map(d => d.name).sort();
-    setModal({ org, allNames: names, initialName: nameParam ?? names[0] });
-  }, [regionParam, subdomainParam, nameParam, orgData, destData]);
+    const names = (destData[saOrgId(sa)] ?? []).map(d => d.name).sort();
+    setModal({ sa, allNames: names, initialName: nameParam ?? names[0] });
+  }, [regionParam, subdomainParam, nameParam, saData, destData]);
 
   // Debounced search
   useEffect(() => {
@@ -129,9 +132,7 @@ export default function DestinationOverview() {
         const res  = await fetch(`/api/destinations/search?q=${encodeURIComponent(q)}`);
         const json = await res.json() as { ok: boolean; data: DestSearchResult[] };
         if (json.ok) { setSearchResults(json.data); setShowResults(true); }
-      } catch { /* ignore */ } finally {
-        setIsSearching(false);
-      }
+      } catch { /* ignore */ } finally { setIsSearching(false); }
     }, 300);
     return () => clearTimeout(id);
   }, [searchQuery]);
@@ -139,9 +140,7 @@ export default function DestinationOverview() {
   // Close dropdown on outside click
   useEffect(() => {
     function onDown(e: MouseEvent) {
-      if (searchRef.current && !searchRef.current.contains(e.target as Node)) {
-        setShowResults(false);
-      }
+      if (searchRef.current && !searchRef.current.contains(e.target as Node)) setShowResults(false);
     }
     document.addEventListener('mousedown', onDown);
     return () => document.removeEventListener('mousedown', onDown);
@@ -163,16 +162,14 @@ export default function DestinationOverview() {
     }
   }
 
-  const allDestOrgs = orgData.filter(o => o.manage_destinations);
+  const allDestSas = saData.filter(sa => sa.manageDestinations && !!sa.org?.orgId);
 
-  // Build visible tabs: only tabs that have at least one directory with visible orgs
-  const visibleTabs = dirTabs.filter(dt =>
-    dt.dirs.some(dir =>
-      allDestOrgs.some(o => csvIncludes(o.directories, dir.alias)),
-    ),
+  // Build visible tabs: only tabs that have at least one group with visible subaccounts
+  const visibleTabs = tabEntries.filter(te =>
+    te.groups.some(g => allDestSas.some(sa => csvIncludes(sa.groupIds, g.groupId))),
   );
 
-  const activeTab = visibleTabs.find(dt => dt.tab === decodeURIComponent(tabParam ?? '')) ?? visibleTabs[0];
+  const activeTabEntry = visibleTabs.find(te => te.tab === decodeURIComponent(tabParam ?? '')) ?? visibleTabs[0];
 
   const tabCls = (active: boolean) =>
     `px-4 py-2 text-sm transition-colors border-b-2 shrink-0 ${
@@ -207,23 +204,21 @@ export default function DestinationOverview() {
               placeholder="Search destinations…"
               className="h-8 pl-7 pr-7 text-xs border border-border rounded bg-background text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring w-[220px]"
             />
-            {isSearching && (
-              <RefreshCw className="absolute right-2 h-3 w-3 animate-spin text-muted-foreground" />
-            )}
+            {isSearching && <RefreshCw className="absolute right-2 h-3 w-3 animate-spin text-muted-foreground" />}
           </div>
           {showResults && (
             <div className="absolute top-full mt-1 right-0 w-[420px] bg-popover border border-border rounded-md shadow-lg z-50 max-h-[400px] overflow-auto">
               {searchResults.length === 0
                 ? <div className="px-3 py-4 text-xs text-muted-foreground text-center">No destinations found</div>
                 : searchResults.map((r, i) => {
-                  const org = allDestOrgs.find(o => o.org_id === r.org_id);
+                  const sa = allDestSas.find(s => saOrgId(s) === r.org_id);
                   return (
                     <button
                       key={i}
                       className="w-full text-left px-3 py-2 border-b border-border last:border-0 hover:bg-muted/50"
                       onClick={() => {
-                        if (!org) return;
-                        setModal({ org, allNames: (destData[r.org_id] ?? []).map(d => d.name).sort(), initialName: r.name });
+                        if (!sa) return;
+                        setModal({ sa, allNames: (destData[r.org_id] ?? []).map(d => d.name).sort(), initialName: r.name });
                         setShowResults(false);
                         setSearchQuery('');
                       }}
@@ -260,9 +255,9 @@ export default function DestinationOverview() {
       {/* Tab bar */}
       {visibleTabs.length > 0 && (
         <div className="flex items-center border-b border-border shrink-0 px-2 overflow-x-auto">
-          {visibleTabs.map(dt => (
-            <button key={dt.tab} className={tabCls(dt === activeTab)} onClick={() => navigate(`/destinations/${encodeURIComponent(dt.tab)}`)}>
-              {dt.tab}
+          {visibleTabs.map(te => (
+            <button key={te.tab} className={tabCls(te === activeTabEntry)} onClick={() => navigate(`/destinations/${encodeURIComponent(te.tab)}`)}>
+              {te.tab}
             </button>
           ))}
         </div>
@@ -273,27 +268,26 @@ export default function DestinationOverview() {
         {visibleTabs.length === 0 && (
           <div className="flex flex-col items-center justify-center h-full gap-2 text-muted-foreground">
             <p className="text-sm">No destinations configured.</p>
-            <p className="text-xs">Set <code className="bg-muted px-1 rounded">manage_destinations=true</code> on orgs in Configuration, then click <strong>Refresh</strong>.</p>
+            <p className="text-xs">Set <code className="bg-muted px-1 rounded">Manage Destinations</code> on subaccounts in Configuration, then click <strong>Refresh</strong>.</p>
           </div>
         )}
 
-        {activeTab?.dirs.map(dir => {
-          const visibleOrgs = allDestOrgs
-            .filter(o => csvIncludes(o.directories, dir.alias))
+        {activeTabEntry?.groups.map(grp => {
+          const visibleSas = allDestSas
+            .filter(sa => csvIncludes(sa.groupIds, grp.groupId))
             .sort((a, b) => a.pos - b.pos);
-          if (visibleOrgs.length === 0) return null;
+          if (visibleSas.length === 0) return null;
 
-          const orgBuckets = visibleOrgs.map(org => ({
-            org,
-            buckets: bucketOrg(destData[org.org_id] ?? []),
+          const saBuckets = visibleSas.map(sa => ({
+            sa,
+            buckets: bucketSa(destData[saOrgId(sa)] ?? []),
           }));
 
           return (
-            <div key={dir.alias} className="space-y-1.5">
-              {/* Directory name outside the table — like the home page */}
+            <div key={grp.groupId} className="space-y-1.5">
               <div className="px-1">
-                <span className="text-xs font-semibold text-foreground">{dir.title}</span>
-                <span className="text-xs text-muted-foreground ml-2">({dir.alias})</span>
+                <span className="text-xs font-semibold text-foreground">{grp.groupTitle}</span>
+                <span className="text-xs text-muted-foreground ml-2">({grp.groupId})</span>
               </div>
 
               <div className="border border-border rounded-md overflow-hidden">
@@ -302,16 +296,16 @@ export default function DestinationOverview() {
                     <thead className="sticky top-0 z-10">
                       <tr className="bg-muted/30">
                         <th className="sticky left-0 z-20 bg-muted/30 text-left text-xs font-medium text-muted-foreground px-3 py-2 w-[130px] border-r border-b border-border whitespace-nowrap"></th>
-                        {visibleOrgs.map(org => (
+                        {visibleSas.map(sa => (
                           <th
-                            key={org.org_id}
+                            key={sa.subaccountId}
                             className="text-center text-xs font-medium px-3 py-2 min-w-[160px] border-l border-b border-border text-muted-foreground cursor-pointer hover:bg-muted/40 transition-colors"
-                            onClick={() => setModal({ org, allNames: (destData[org.org_id] ?? []).map(d => d.name).sort() })}
+                            onClick={() => setModal({ sa, allNames: (destData[saOrgId(sa)] ?? []).map(d => d.name).sort() })}
                           >
                             <div className="flex flex-col gap-0.5 items-center">
-                              <span>{org.alias || org.org_name}</span>
-                              {org.subdomain && (
-                                <span className="text-[10px] font-normal font-mono text-muted-foreground/60 leading-tight">{org.subdomain}</span>
+                              <span>{sa.alias || sa.subaccountName}</span>
+                              {sa.subdomain && (
+                                <span className="text-[10px] font-normal font-mono text-muted-foreground/60 leading-tight">{sa.subdomain}</span>
                               )}
                             </div>
                           </th>
@@ -323,12 +317,11 @@ export default function DestinationOverview() {
                         const { label, pattern } = CAT_META[cat];
 
                         if (cat === 's4') {
-                          // Positional rows: each org shows its Nth sorted S/4 destination independently
-                          const sortedPerOrg = orgBuckets.map(b => ({
-                            org:   b.org,
+                          const sortedPerSa = saBuckets.map(b => ({
+                            sa:    b.sa,
                             names: [...b.buckets.s4].sort(),
                           }));
-                          const maxRows = Math.max(0, ...sortedPerOrg.map(b => b.names.length));
+                          const maxRows = Math.max(0, ...sortedPerSa.map(b => b.names.length));
                           if (maxRows === 0) return null;
                           return Array.from({ length: maxRows }, (_, i) => (
                             <tr key={`s4-${i}`} className="hover:bg-muted/20">
@@ -340,19 +333,20 @@ export default function DestinationOverview() {
                                   </div>
                                 </td>
                               )}
-                              {sortedPerOrg.map(({ org, names }) => {
+                              {sortedPerSa.map(({ sa, names }) => {
                                 const name = names[i];
                                 if (!name) return (
-                                  <td key={org.org_id} className={`${tdCls} text-left`}>
+                                  <td key={sa.subaccountId} className={`${tdCls} text-left`}>
                                     <span className="text-muted-foreground/30 text-[11px]">—</span>
                                   </td>
                                 );
-                                const status = fakeStatus(name, org.org_id);
+                                const orgId  = saOrgId(sa);
+                                const status = fakeStatus(name, orgId);
                                 return (
-                                  <td key={org.org_id} className={`${tdCls} text-left`}>
+                                  <td key={sa.subaccountId} className={`${tdCls} text-left`}>
                                     <button
                                       className={`font-mono text-[11px] hover:underline text-left ${status === 'OK' ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}`}
-                                      onClick={() => setModal({ org, allNames: (destData[org.org_id] ?? []).map(d => d.name).sort(), initialName: name })}
+                                      onClick={() => setModal({ sa, allNames: (destData[orgId] ?? []).map(d => d.name).sort(), initialName: name })}
                                     >
                                       {name}
                                     </button>
@@ -363,8 +357,7 @@ export default function DestinationOverview() {
                           ));
                         }
 
-                        // Union-matched rows for Generic and Workzone (names standardised across orgs)
-                        const allNames = [...new Set(orgBuckets.flatMap(b => [...b.buckets[cat]]))].sort();
+                        const allNames = [...new Set(saBuckets.flatMap(b => [...b.buckets[cat]]))].sort();
                         if (allNames.length === 0) return null;
                         return allNames.map((name, i) => (
                           <tr key={`${cat}-${name}`} className="hover:bg-muted/20">
@@ -376,13 +369,14 @@ export default function DestinationOverview() {
                                 </div>
                               </td>
                             )}
-                            {orgBuckets.map(({ org, buckets }) => {
+                            {saBuckets.map(({ sa, buckets }) => {
                               const present = buckets[cat].includes(name);
-                              const status  = present ? fakeStatus(name, org.org_id) : null;
+                              const orgId   = saOrgId(sa);
+                              const status  = present ? fakeStatus(name, orgId) : null;
                               return (
-                                <td key={org.org_id} className={`${tdCls} text-left`}>
-                                  {status === 'OK'     && <button className="text-green-600 dark:text-green-400 font-mono text-[11px] hover:underline text-left" onClick={() => setModal({ org, allNames: (destData[org.org_id] ?? []).map(d => d.name).sort(), initialName: name })}>{name}</button>}
-                                  {status === 'Failed' && <button className="text-red-600   dark:text-red-400   font-mono text-[11px] hover:underline text-left" onClick={() => setModal({ org, allNames: (destData[org.org_id] ?? []).map(d => d.name).sort(), initialName: name })}>{name}</button>}
+                                <td key={sa.subaccountId} className={`${tdCls} text-left`}>
+                                  {status === 'OK'     && <button className="text-green-600 dark:text-green-400 font-mono text-[11px] hover:underline text-left" onClick={() => setModal({ sa, allNames: (destData[orgId] ?? []).map(d => d.name).sort(), initialName: name })}>{name}</button>}
+                                  {status === 'Failed' && <button className="text-red-600   dark:text-red-400   font-mono text-[11px] hover:underline text-left" onClick={() => setModal({ sa, allNames: (destData[orgId] ?? []).map(d => d.name).sort(), initialName: name })}>{name}</button>}
                                   {!status             && <span className="text-muted-foreground/30 text-[11px]">—</span>}
                                 </td>
                               );
@@ -391,7 +385,7 @@ export default function DestinationOverview() {
                         ));
                       })}
 
-                      {/* OTHERS row — full-width button per org cell */}
+                      {/* OTHERS row */}
                       <tr className="hover:bg-muted/20">
                         <td className={catTdCls}>
                           <div className="flex flex-col gap-0.5">
@@ -399,15 +393,16 @@ export default function DestinationOverview() {
                             <span className="text-[10px] text-muted-foreground/60">all other destinations</span>
                           </div>
                         </td>
-                        {orgBuckets.map(({ org, buckets }) => {
-                          const others   = buckets.others;
-                          const allOrgNames = (destData[org.org_id] ?? []).map(d => d.name).sort();
+                        {saBuckets.map(({ sa, buckets }) => {
+                          const orgId      = saOrgId(sa);
+                          const others     = buckets.others;
+                          const allSaNames = (destData[orgId] ?? []).map(d => d.name).sort();
                           return (
-                            <td key={org.org_id} className={`${tdCls} text-left`}>
+                            <td key={sa.subaccountId} className={`${tdCls} text-left`}>
                               {others.length > 0
                                 ? (
                                   <button
-                                    onClick={() => setModal({ org, allNames: allOrgNames, initialName: others[0] })}
+                                    onClick={() => setModal({ sa, allNames: allSaNames, initialName: others[0] })}
                                     className="w-full flex items-center justify-between px-2 py-1 rounded bg-muted/60 text-muted-foreground hover:bg-accent hover:text-accent-foreground text-[11px] font-medium transition-colors"
                                   >
                                     <span>{others.length} destinations</span>
@@ -431,12 +426,12 @@ export default function DestinationOverview() {
 
       {modal && (
         <SubaccountDestModal
-          org={modal.org}
+          org={modal.sa}
           allNames={modal.allNames}
           initialName={modal.initialName}
           onClose={() => {
             setModal(null);
-            const base = activeTab ? `/destinations/${encodeURIComponent(activeTab.tab)}` : '/destinations';
+            const base = activeTabEntry ? `/destinations/${encodeURIComponent(activeTabEntry.tab)}` : '/destinations';
             navigate(base, { replace: true });
           }}
         />

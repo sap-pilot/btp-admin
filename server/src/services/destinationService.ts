@@ -5,7 +5,7 @@ import { homedir } from 'node:os';
 import { config } from '../config.js';
 import { logger } from '../logger.js';
 import { getOrRefreshToken, fetchWithRateLimit } from './cfLoginService.js';
-import { readOrgs, type OrgEntry } from './orgsService.js';
+import { readSubaccounts, type SubaccountEntry } from './subaccountsService.js';
 import { notifyCallbacks } from './syncService.js';
 import { emit } from './liveEvents.js';
 
@@ -193,11 +193,13 @@ async function persistDestination(
 // ─── Public API ──────────────────────────────────────────────────────────────
 
 export async function refreshDestinations(): Promise<{ refreshed: number; errors: string[] }> {
-  const allOrgs    = await readOrgs();
-  const targetOrgs = allOrgs.filter(o => o.manage_destinations);
+  const allSas    = await readSubaccounts();
+  const targetSas = allSas.filter((sa): sa is SubaccountEntry & { org: NonNullable<SubaccountEntry['org']> } =>
+    sa.manageDestinations && !!sa.org?.orgId,
+  );
 
-  if (targetOrgs.length === 0) {
-    logger.info('No orgs with manage_destinations=true — nothing to refresh');
+  if (targetSas.length === 0) {
+    logger.info('No subaccounts with manageDestinations=true — nothing to refresh');
     return { refreshed: 0, errors: [] };
   }
 
@@ -207,39 +209,41 @@ export async function refreshDestinations(): Promise<{ refreshed: number; errors
   let refreshed = 0;
 
   // Step 1: discover missing keys
-  for (const org of targetOrgs) {
-    if (keyStore[org.org_id]) continue;
+  for (const sa of targetSas) {
+    const orgId = sa.org.orgId;
+    if (keyStore[orgId]) continue;
     try {
-      const instanceGuid = await fetchDestInstanceGuid(org.region, org.org_id);
+      const instanceGuid = await fetchDestInstanceGuid(sa.region, orgId);
       if (!instanceGuid) {
-        logger.warn({ org: org.org_id, region: org.region }, 'No "destination" service instance found — skipping');
+        logger.warn({ org: orgId, region: sa.region }, 'No "destination" service instance found — skipping');
         continue;
       }
-      const keyGuid = await fetchDestKeyGuid(org.region, instanceGuid);
+      const keyGuid = await fetchDestKeyGuid(sa.region, instanceGuid);
       if (!keyGuid) {
-        logger.warn({ org: org.org_id, region: org.region }, 'No service key found for destination instance — skipping');
+        logger.warn({ org: orgId, region: sa.region }, 'No service key found for destination instance — skipping');
         continue;
       }
-      const credentials = await fetchDestCredentials(org.region, keyGuid);
-      keyStore[org.org_id] = { org_id: org.org_id, region: org.region, subdomain: org.subdomain, credentials };
-      logger.info({ org: org.org_id, region: org.region }, 'Destination service key acquired');
+      const credentials = await fetchDestCredentials(sa.region, keyGuid);
+      keyStore[orgId] = { org_id: orgId, region: sa.region, subdomain: sa.subdomain, credentials };
+      logger.info({ org: orgId, region: sa.region }, 'Destination service key acquired');
     } catch (err) {
-      const msg = `Key discovery failed for ${org.org_id}: ${String(err)}`;
-      logger.error({ org: org.org_id, err }, msg);
+      const msg = `Key discovery failed for ${orgId}: ${String(err)}`;
+      logger.error({ org: orgId, err }, msg);
       errors.push(msg);
     }
   }
   await saveKeyStore(keyStore);
 
-  // Step 2: fetch destinations for each org that has a key
-  for (const org of targetOrgs) {
-    const keyEntry = keyStore[org.org_id];
+  // Step 2: fetch destinations for each subaccount that has a key
+  for (const sa of targetSas) {
+    const orgId    = sa.org.orgId;
+    const keyEntry = keyStore[orgId];
     if (!keyEntry) continue;
     try {
-      const accessToken = await getDestToken(keyEntry, tokenStore);
+      const accessToken  = await getDestToken(keyEntry, tokenStore);
       const destinations = await fetchSubaccountDestinations(keyEntry, accessToken);
 
-      const destDir = join(LOCAL_DEST_DIR, org.region, org.subdomain);
+      const destDir = join(LOCAL_DEST_DIR, sa.region, sa.subdomain);
       await mkdir(destDir, { recursive: true });
 
       // Track names returned by API
@@ -259,15 +263,15 @@ export async function refreshDestinations(): Promise<{ refreshed: number; errors
         const destName = fname.slice(0, -5);
         if (!apiNames.has(destName)) {
           await rename(join(destDir, fname), join(destDir, `${destName}.deleted.json`));
-          logger.info({ org: org.org_id, destination: destName }, 'Destination marked as deleted');
+          logger.info({ org: orgId, destination: destName }, 'Destination marked as deleted');
         }
       }
 
-      logger.info({ org: org.org_id, region: org.region, count: apiNames.size }, 'Destinations refreshed');
+      logger.info({ org: orgId, region: sa.region, count: apiNames.size }, 'Destinations refreshed');
       refreshed++;
     } catch (err) {
-      const msg = `Destination refresh failed for ${org.org_id}: ${String(err)}`;
-      logger.error({ org: org.org_id, err }, msg);
+      const msg = `Destination refresh failed for ${orgId}: ${String(err)}`;
+      logger.error({ org: orgId, err }, msg);
       errors.push(msg);
     }
   }
@@ -301,10 +305,10 @@ export async function searchDestinations(
 
   if (!existsSync(LOCAL_DEST_DIR)) return results;
 
-  const allOrgs = await readOrgs();
-  const orgIndex = new Map<string, string>(); // "region/subdomain" → org_id
-  for (const org of allOrgs) {
-    if (org.manage_destinations) orgIndex.set(`${org.region}/${org.subdomain}`, org.org_id);
+  const allSas = await readSubaccounts();
+  const orgIndex = new Map<string, string>(); // "region/subdomain" → org_id (CF org GUID)
+  for (const sa of allSas) {
+    if (sa.manageDestinations && sa.org?.orgId) orgIndex.set(`${sa.region}/${sa.subdomain}`, sa.org.orgId);
   }
 
   const regions = await readdir(LOCAL_DEST_DIR).catch(() => [] as string[]);
@@ -433,11 +437,11 @@ export async function getDestinationChangelog(region: string, subdomain: string,
 export async function listDestinations(): Promise<Record<string, Array<{ name: string; status: 'OK' }>>> {
   const result: Record<string, Array<{ name: string; status: 'OK' }>> = {};
 
-  // Build a lookup: region/subdomain → org_id from orgs.json
-  const allOrgs = await readOrgs();
-  const orgIndex = new Map<string, string>(); // "region/subdomain" → org_id
-  for (const org of allOrgs) {
-    if (org.manage_destinations) orgIndex.set(`${org.region}/${org.subdomain}`, org.org_id);
+  // Build a lookup: region/subdomain → org_id (CF org GUID) from subaccounts.json
+  const allSas = await readSubaccounts();
+  const orgIndex = new Map<string, string>(); // "region/subdomain" → org_id (CF org GUID)
+  for (const sa of allSas) {
+    if (sa.manageDestinations && sa.org?.orgId) orgIndex.set(`${sa.region}/${sa.subdomain}`, sa.org.orgId);
   }
 
   if (!existsSync(LOCAL_DEST_DIR)) return result;

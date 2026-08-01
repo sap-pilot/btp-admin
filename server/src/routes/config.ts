@@ -1,10 +1,10 @@
 import { Router } from 'express';
 import { requireAdmin } from '../middleware/requireAuth.js';
 import type { AuthRequest } from '../middleware/requireAuth.js';
-import { readOrgs, refreshOrgs, saveOrgs, exportConfig, importConfig } from '../services/orgsService.js';
-import type { OrgEntry } from '../services/orgsService.js';
-import { readDirs, saveDirs } from '../services/dirsService.js';
-import type { DirTab } from '../services/dirsService.js';
+import { readSubaccounts, refreshSubaccounts, saveSubaccounts, exportConfig, importConfig } from '../services/subaccountsService.js';
+import type { SubaccountEntry } from '../services/subaccountsService.js';
+import { readTabs, saveTabs } from '../services/tabsService.js';
+import type { TabEntry } from '../services/tabsService.js';
 import { readConfigChangelog } from '../services/configChangelogService.js';
 
 const router = Router();
@@ -13,47 +13,47 @@ function reqUser(req: Parameters<typeof requireAdmin>[0]): string {
   return (req as AuthRequest).authSession?.email || 'local';
 }
 
-router.get('/orgs', requireAdmin, async (_req, res, next) => {
+router.get('/subaccounts', requireAdmin, async (_req, res, next) => {
   try {
-    const data = await readOrgs();
+    const data = await readSubaccounts();
     res.json({ ok: true, data });
   } catch (err) { next(err); }
 });
 
-router.post('/orgs/refresh', requireAdmin, async (req, res, next) => {
+router.post('/subaccounts/refresh', requireAdmin, async (req, res, next) => {
   try {
-    const { data, warnings } = await refreshOrgs(reqUser(req));
+    const { data, warnings } = await refreshSubaccounts(reqUser(req));
     res.json({ ok: true, data, warnings });
   } catch (err) { next(err); }
 });
 
-router.post('/orgs/save', requireAdmin, async (req, res, next) => {
+router.post('/subaccounts/save', requireAdmin, async (req, res, next) => {
   try {
     const { data } = req.body as { data?: unknown };
     if (!Array.isArray(data)) {
       res.status(400).json({ ok: false, error: 'data must be an array' });
       return;
     }
-    await saveOrgs(data as OrgEntry[], reqUser(req));
+    await saveSubaccounts(data as SubaccountEntry[], reqUser(req));
     res.json({ ok: true });
   } catch (err) { next(err); }
 });
 
-router.get('/dirs', requireAdmin, async (_req, res, next) => {
+router.get('/tabs', requireAdmin, async (_req, res, next) => {
   try {
-    const data = await readDirs();
+    const data = await readTabs();
     res.json({ ok: true, data });
   } catch (err) { next(err); }
 });
 
-router.post('/dirs/save', requireAdmin, async (req, res, next) => {
+router.post('/tabs/save', requireAdmin, async (req, res, next) => {
   try {
     const { data } = req.body as { data?: unknown };
     if (!Array.isArray(data)) {
       res.status(400).json({ ok: false, error: 'data must be an array' });
       return;
     }
-    await saveDirs(data as DirTab[], reqUser(req));
+    await saveTabs(data as TabEntry[], reqUser(req));
     res.json({ ok: true });
   } catch (err) { next(err); }
 });

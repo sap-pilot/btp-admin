@@ -1,40 +1,39 @@
 import { useState } from 'react';
 import { ChevronDown, ChevronRight, RotateCcw, Save, GripVertical, Plus, X } from 'lucide-react';
 
-export interface DirEntry {
-  alias: string;
-  title: string;
-  pos:   number;
+export interface TabGroup {
+  groupId:    string;
+  groupTitle: string;
 }
 
-export interface DirTab {
-  tab:  string;
-  dirs: DirEntry[];
+export interface TabEntry {
+  tab:    string;
+  groups: TabGroup[];
 }
 
 interface Props {
-  data:     DirTab[];
-  onChange: (data: DirTab[]) => void;
+  data:     TabEntry[];
+  onChange: (data: TabEntry[]) => void;
   isDirty:  boolean;
   isSaving: boolean;
   onReset:  () => void;
   onSave:   () => void;
 }
 
-function matchesFilter(tab: DirTab, filter: string): { tabMatch: boolean; dirs: DirEntry[] } {
-  if (!filter) return { tabMatch: true, dirs: tab.dirs };
+function matchesFilter(tab: TabEntry, filter: string): { tabMatch: boolean; groups: TabGroup[] } {
+  if (!filter) return { tabMatch: true, groups: tab.groups };
   const q = filter.toLowerCase();
   const tabMatch = tab.tab.toLowerCase().includes(q);
-  const dirs = tab.dirs.filter(d => d.alias.toLowerCase().includes(q) || d.title.toLowerCase().includes(q));
-  return { tabMatch: tabMatch || dirs.length > 0, dirs: tabMatch ? tab.dirs : dirs };
+  const groups = tab.groups.filter(g => g.groupId.toLowerCase().includes(q) || g.groupTitle.toLowerCase().includes(q));
+  return { tabMatch: tabMatch || groups.length > 0, groups: tabMatch ? tab.groups : groups };
 }
 
-export default function DirsTable({ data, onChange, isDirty, isSaving, onReset, onSave }: Props) {
-  const [filter, setFilter]          = useState('');
-  const [expanded, setExpanded]      = useState<Set<number>>(() => new Set(data.map((_, i) => i)));
-  const [dragging, setDragging]      = useState<{ ti: number; di: number } | null>(null);
-  const [dragOver, setDragOver]      = useState<{ ti: number; di: number } | null>(null);
-  const [dragTab, setDragTab]        = useState<number | null>(null);
+export default function TabsTable({ data, onChange, isDirty, isSaving, onReset, onSave }: Props) {
+  const [filter, setFilter]           = useState('');
+  const [expanded, setExpanded]       = useState<Set<number>>(() => new Set(data.map((_, i) => i)));
+  const [dragging, setDragging]       = useState<{ ti: number; gi: number } | null>(null);
+  const [dragOver, setDragOver]       = useState<{ ti: number; gi: number } | null>(null);
+  const [dragTab, setDragTab]         = useState<number | null>(null);
   const [dragOverTab, setDragOverTab] = useState<number | null>(null);
 
   const isFiltering = filter.trim().length > 0;
@@ -47,18 +46,18 @@ export default function DirsTable({ data, onChange, isDirty, isSaving, onReset, 
     });
   }
 
-  function updateTab(ti: number, patch: Partial<DirTab>) {
+  function updateTab(ti: number, patch: Partial<TabEntry>) {
     onChange(data.map((t, i) => i !== ti ? t : { ...t, ...patch }));
   }
 
-  function updateDir(ti: number, di: number, patch: Partial<DirEntry>) {
+  function updateGroup(ti: number, gi: number, patch: Partial<TabGroup>) {
     onChange(data.map((t, i) =>
-      i !== ti ? t : { ...t, dirs: t.dirs.map((d, j) => j !== di ? d : { ...d, ...patch }) },
+      i !== ti ? t : { ...t, groups: t.groups.map((g, j) => j !== gi ? g : { ...g, ...patch }) },
     ));
   }
 
   function addTab() {
-    const next = [...data, { tab: 'New Tab', dirs: [] }];
+    const next = [...data, { tab: 'New Tab', groups: [] }];
     onChange(next);
     setExpanded(prev => new Set([...prev, next.length - 1]));
   }
@@ -72,38 +71,38 @@ export default function DirsTable({ data, onChange, isDirty, isSaving, onReset, 
     });
   }
 
-  function addDir(ti: number) {
-    const dirs = [...data[ti]!.dirs, { alias: '', title: '', pos: data[ti]!.dirs.length }];
-    onChange(data.map((t, i) => i !== ti ? t : { ...t, dirs }));
+  function addGroup(ti: number) {
+    const groups = [...data[ti]!.groups, { groupId: '', groupTitle: '' }];
+    onChange(data.map((t, i) => i !== ti ? t : { ...t, groups }));
     setExpanded(prev => new Set([...prev, ti]));
   }
 
-  function deleteDir(ti: number, di: number) {
-    const dirs = data[ti]!.dirs.filter((_, j) => j !== di).map((d, idx) => ({ ...d, pos: idx }));
-    onChange(data.map((t, i) => i !== ti ? t : { ...t, dirs }));
+  function deleteGroup(ti: number, gi: number) {
+    const groups = data[ti]!.groups.filter((_, j) => j !== gi);
+    onChange(data.map((t, i) => i !== ti ? t : { ...t, groups }));
   }
 
-  // Dir drag (within a tab)
-  function handleDirDragStart(ti: number, di: number) { setDragging({ ti, di }); }
+  // Group drag (within a tab only)
+  function handleGroupDragStart(ti: number, gi: number) { setDragging({ ti, gi }); }
 
-  function handleDirDragOver(e: React.DragEvent, ti: number, di: number) {
+  function handleGroupDragOver(e: React.DragEvent, ti: number, gi: number) {
     e.preventDefault();
-    if (dragging && dragging.ti === ti) setDragOver({ ti, di });
+    if (dragging && dragging.ti === ti) setDragOver({ ti, gi });
   }
 
-  function handleDirDrop(e: React.DragEvent, ti: number, targetDi: number) {
+  function handleGroupDrop(e: React.DragEvent, ti: number, targetGi: number) {
     e.preventDefault();
     if (!dragging || dragging.ti !== ti) { setDragging(null); setDragOver(null); return; }
-    const { di: fromDi } = dragging;
-    if (fromDi === targetDi) { setDragging(null); setDragOver(null); return; }
-    const dirs = [...data[ti]!.dirs];
-    const [moved] = dirs.splice(fromDi, 1);
-    dirs.splice(targetDi, 0, moved);
-    onChange(data.map((t, i) => i !== ti ? t : { ...t, dirs: dirs.map((d, idx) => ({ ...d, pos: idx })) }));
+    const { gi: fromGi } = dragging;
+    if (fromGi === targetGi) { setDragging(null); setDragOver(null); return; }
+    const groups = [...data[ti]!.groups];
+    const [moved] = groups.splice(fromGi, 1);
+    groups.splice(targetGi, 0, moved);
+    onChange(data.map((t, i) => i !== ti ? t : { ...t, groups }));
     setDragging(null); setDragOver(null);
   }
 
-  function handleDirDragEnd() { setDragging(null); setDragOver(null); }
+  function handleGroupDragEnd() { setDragging(null); setDragOver(null); }
 
   // Tab drag (reorder tabs)
   function handleTabDragStart(ti: number) { setDragTab(ti); }
@@ -120,13 +119,10 @@ export default function DirsTable({ data, onChange, isDirty, isSaving, onReset, 
     const [moved] = tabs.splice(dragTab, 1);
     tabs.splice(targetTi, 0, moved);
     onChange(tabs);
-    // Remap expanded indices
     setExpanded(prev => {
-      const arr = [...prev];
       const next = new Set<number>();
-      for (const v of arr) {
+      for (const v of [...prev]) {
         if (v === dragTab) { next.add(targetTi); continue; }
-        // Shift indices for the move
         let nv = v;
         if (dragTab < targetTi) {
           if (v > dragTab && v <= targetTi) nv = v - 1;
@@ -147,8 +143,7 @@ export default function DirsTable({ data, onChange, isDirty, isSaving, onReset, 
   const btnPrimary = `${btnBase} bg-primary text-primary-foreground hover:bg-primary/90`;
   const btnGhost   = 'inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-xs text-muted-foreground hover:text-foreground hover:bg-accent transition-colors';
 
-  const thCls    = 'px-2 py-1.5 text-left text-xs font-medium text-muted-foreground whitespace-nowrap border-b border-border';
-  const rszThCls = `${thCls} overflow-hidden`;
+  const thCls  = 'px-2 py-1.5 text-left text-xs font-medium text-muted-foreground whitespace-nowrap border-b border-border';
   const tdCls  = 'px-2 py-1 text-xs border-b border-border align-middle';
   const inpCls = 'w-full bg-transparent border-b border-transparent hover:border-border focus:border-primary outline-none text-xs py-0.5 placeholder:text-muted-foreground/50';
 
@@ -158,7 +153,7 @@ export default function DirsTable({ data, onChange, isDirty, isSaving, onReset, 
       <div className="flex items-center gap-2 px-3 py-2 border-b border-border shrink-0">
         <input
           type="text"
-          placeholder="Filter tabs / dirs..."
+          placeholder="Filter tabs / groups…"
           value={filter}
           onChange={e => setFilter(e.target.value)}
           className="flex-1 bg-transparent border border-border rounded px-2 py-1 text-xs outline-none focus:border-primary placeholder:text-muted-foreground/50"
@@ -168,23 +163,13 @@ export default function DirsTable({ data, onChange, isDirty, isSaving, onReset, 
             Clear
           </button>
         )}
-        <button
-          onClick={() => setExpanded(new Set(data.map((_, i) => i)))}
-          disabled={isFiltering}
-          className={btnOutline}
-          title="Expand all tabs"
-        >
+        <button onClick={() => setExpanded(new Set(data.map((_, i) => i)))} disabled={isFiltering} className={btnOutline}>
           Expand
         </button>
-        <button
-          onClick={() => setExpanded(new Set())}
-          disabled={isFiltering}
-          className={btnOutline}
-          title="Collapse all tabs"
-        >
+        <button onClick={() => setExpanded(new Set())} disabled={isFiltering} className={btnOutline}>
           Collapse
         </button>
-        <button onClick={onReset} disabled={!isDirty || isSaving} className={btnOutline} title="Restore to last saved state">
+        <button onClick={onReset} disabled={!isDirty || isSaving} className={btnOutline}>
           <RotateCcw className="h-3.5 w-3.5" />
           Reset
         </button>
@@ -200,8 +185,8 @@ export default function DirsTable({ data, onChange, isDirty, isSaving, onReset, 
           <thead className="sticky top-0 z-10">
             <tr className="bg-muted/40">
               <th className={`${thCls} w-6`} />
-              <th className={rszThCls} style={{ resize: 'horizontal', minWidth: 120 }}>Tab / Dir Title</th>
-              <th className={rszThCls} style={{ resize: 'horizontal', minWidth: 80 }}>Alias</th>
+              <th className={thCls} style={{ minWidth: 120 }}>Group Title</th>
+              <th className={thCls} style={{ minWidth: 80 }}>Group ID</th>
               <th className={`${thCls} w-8`} />
             </tr>
           </thead>
@@ -214,7 +199,7 @@ export default function DirsTable({ data, onChange, isDirty, isSaving, onReset, 
               </tr>
             )}
             {data.map((tab, ti) => {
-              const { tabMatch, dirs: visibleDirs } = matchesFilter(tab, filter);
+              const { tabMatch, groups: visibleGroups } = matchesFilter(tab, filter);
               if (isFiltering && !tabMatch) return null;
               const isTabDragging   = dragTab === ti;
               const isTabDropTarget = dragOverTab === ti;
@@ -236,15 +221,10 @@ export default function DirsTable({ data, onChange, isDirty, isSaving, onReset, 
                   >
                     {!isFiltering && <GripVertical className="h-3.5 w-3.5" />}
                   </td>
-                  <td className="px-2 py-1 text-xs border-b border-border align-middle" colSpan={1}>
+                  <td className="px-2 py-1 text-xs border-b border-border align-middle" colSpan={2}>
                     <div className="flex items-center gap-1.5">
-                      <button
-                        onClick={() => toggleTab(ti)}
-                        className="shrink-0 text-muted-foreground hover:text-foreground"
-                      >
-                        {isExpanded
-                          ? <ChevronDown className="h-3.5 w-3.5" />
-                          : <ChevronRight className="h-3.5 w-3.5" />}
+                      <button onClick={() => toggleTab(ti)} className="shrink-0 text-muted-foreground hover:text-foreground">
+                        {isExpanded ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
                       </button>
                       <input
                         className="font-semibold text-xs bg-transparent outline-none border-b border-transparent hover:border-border focus:border-primary py-0.5 min-w-0 flex-1"
@@ -252,13 +232,12 @@ export default function DirsTable({ data, onChange, isDirty, isSaving, onReset, 
                         onChange={e => updateTab(ti, { tab: e.target.value })}
                         onClick={e => e.stopPropagation()}
                       />
-                      <span className="text-xs text-muted-foreground shrink-0">({tab.dirs.length})</span>
-                      <button onClick={() => addDir(ti)} className={`${btnGhost} shrink-0`} title="Add directory">
-                        <Plus className="h-3 w-3" /> Add Dir
+                      <span className="text-xs text-muted-foreground shrink-0">({tab.groups.length})</span>
+                      <button onClick={() => addGroup(ti)} className={`${btnGhost} shrink-0`} title="Add group">
+                        <Plus className="h-3 w-3" /> Add Group
                       </button>
                     </div>
                   </td>
-                  <td className={`${tdCls}`} />
                   <td className={`${tdCls} text-right`}>
                     <button onClick={() => deleteTab(ti)} className={btnGhost} title="Delete tab">
                       <X className="h-3.5 w-3.5" />
@@ -266,36 +245,44 @@ export default function DirsTable({ data, onChange, isDirty, isSaving, onReset, 
                   </td>
                 </tr>,
 
-                // Dir rows
-                ...(isExpanded ? visibleDirs : []).map((dir) => {
-                  const realDi       = tab.dirs.indexOf(dir);
-                  const isDirDragging   = dragging?.ti === ti && dragging.di === realDi;
-                  const isDirDropTarget = dragOver?.ti === ti && dragOver.di === realDi;
+                // Group rows
+                ...(isExpanded ? visibleGroups : []).map((grp) => {
+                  const realGi      = tab.groups.indexOf(grp);
+                  const isGrpDragging   = dragging?.ti === ti && dragging.gi === realGi;
+                  const isGrpDropTarget = dragOver?.ti === ti && dragOver.gi === realGi;
                   return (
                     <tr
-                      key={`dir-${ti}-${realDi}`}
-                      onDragOver={e => handleDirDragOver(e, ti, realDi)}
-                      onDrop={e => handleDirDrop(e, ti, realDi)}
-                      className={`hover:bg-muted/20 ${isDirDragging ? 'opacity-40' : ''} ${isDirDropTarget ? 'border-t-2 border-primary' : ''}`}
+                      key={`grp-${ti}-${realGi}`}
+                      onDragOver={e => handleGroupDragOver(e, ti, realGi)}
+                      onDrop={e => handleGroupDrop(e, ti, realGi)}
+                      className={`hover:bg-muted/20 ${isGrpDragging ? 'opacity-40' : ''} ${isGrpDropTarget ? 'border-t-2 border-primary' : ''}`}
                     >
                       <td
                         draggable
-                        onDragStart={() => handleDirDragStart(ti, realDi)}
-                        onDragEnd={handleDirDragEnd}
+                        onDragStart={() => handleGroupDragStart(ti, realGi)}
+                        onDragEnd={handleGroupDragEnd}
                         className={`${tdCls} w-6 pl-8 text-muted-foreground cursor-grab active:cursor-grabbing`}
                       >
                         <GripVertical className="h-3.5 w-3.5" />
                       </td>
                       <td className={`${tdCls} pl-8`}>
-                        <input className={inpCls} value={dir.title} placeholder="title"
-                          onChange={e => updateDir(ti, realDi, { title: e.target.value })} />
+                        <input
+                          className={inpCls}
+                          value={grp.groupTitle}
+                          placeholder="Group title"
+                          onChange={e => updateGroup(ti, realGi, { groupTitle: e.target.value })}
+                        />
                       </td>
                       <td className={tdCls}>
-                        <input className={inpCls} value={dir.alias} placeholder="alias"
-                          onChange={e => updateDir(ti, realDi, { alias: e.target.value })} />
+                        <input
+                          className={`${inpCls} font-mono`}
+                          value={grp.groupId}
+                          placeholder="group-id"
+                          onChange={e => updateGroup(ti, realGi, { groupId: e.target.value })}
+                        />
                       </td>
                       <td className={`${tdCls} text-right`}>
-                        <button onClick={() => deleteDir(ti, realDi)} className={btnGhost} title="Delete dir">
+                        <button onClick={() => deleteGroup(ti, realGi)} className={btnGhost} title="Delete group">
                           <X className="h-3.5 w-3.5" />
                         </button>
                       </td>
@@ -307,7 +294,6 @@ export default function DirsTable({ data, onChange, isDirty, isSaving, onReset, 
           </tbody>
         </table>
 
-        {/* Add Tab button */}
         {!isFiltering && (
           <div className="px-3 py-2">
             <button onClick={addTab} className={btnOutline}>

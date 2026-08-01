@@ -1,0 +1,328 @@
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
+import { config } from '../config.js';
+import { logger } from '../logger.js';
+import { notifyCallbacks } from './syncService.js';
+import { emit } from './liveEvents.js';
+import { getCfCredentials, getCfRegions, fetchOrgsForRegion, fetchSpacesByOrgs } from './cfLoginService.js';
+import {
+  btpLogin, btpListGlobalAccounts, btpListSubaccounts,
+  btpListEnvInstances, btpListSubscriptions, btpListServiceInstances, btpListServicePlans,
+} from './btpCliService.js';
+import { appendConfigChangelog } from './configChangelogService.js';
+
+const CONFIG_DIR        = join(config.LOCAL_STORE_DIR, 'config');
+const SUBACCOUNTS_PATH  = join(CONFIG_DIR, 'subaccounts.json');
+
+export interface SpaceEntry {
+  spaceId:   string;
+  spaceName: string;
+}
+
+export interface ServiceInstanceEntry {
+  serviceOfferingName: string;
+  servicePlanId:       string;
+  instanceName:        string;
+  url:                 string;
+  spaceId:             string;
+}
+
+export interface SubaccountEntry {
+  region:             string;
+  globalAccountGUID:  string;
+  subdomain:          string;
+  subaccountId:       string;
+  subaccountName:     string;
+  groupIds:           string;
+  alias:              string;
+  pos:                number;
+  inHomepage:         boolean;
+  manageDestinations: boolean;
+  useAOD:             boolean;
+  org?: {
+    orgId:   string;
+    orgName: string;
+    spaces:  SpaceEntry[];
+  };
+  subscriptions:    { displayName: string; url: string; customerDeveloped: boolean }[];
+  serviceInstances: ServiceInstanceEntry[];
+}
+
+export async function readSubaccounts(): Promise<SubaccountEntry[]> {
+  try {
+    const raw = await readFile(SUBACCOUNTS_PATH, 'utf-8');
+    return JSON.parse(raw) as SubaccountEntry[];
+  } catch { return []; }
+}
+
+async function writeSubaccounts(data: SubaccountEntry[]): Promise<void> {
+  await mkdir(CONFIG_DIR, { recursive: true });
+  await writeFile(SUBACCOUNTS_PATH, JSON.stringify(data, null, 2), 'utf-8');
+  notifyCallbacks();
+  const ts = Date.now();
+  emit('root',   { files: ['config/subaccounts.json'], ts });
+  emit('config', { files: ['subaccounts.json'], ts });
+  logger.info({ subaccounts: data.length }, 'subaccounts.json saved');
+}
+
+const SA_DIFF_FIELDS = [
+  'subaccountName', 'alias', 'groupIds', 'pos', 'subdomain',
+  'globalAccountGUID', 'inHomepage', 'manageDestinations', 'useAOD',
+] as const;
+
+function diffSubaccounts(before: SubaccountEntry[], after: SubaccountEntry[]): string {
+  const beforeMap = new Map<string, SubaccountEntry>();
+  const afterMap  = new Map<string, SubaccountEntry>();
+  for (const s of before) beforeMap.set(`${s.region}/${s.subaccountId}`, s);
+  for (const s of after)  afterMap.set(`${s.region}/${s.subaccountId}`,  s);
+
+  const lines: string[] = [];
+  for (const [key, s] of afterMap)  { if (!beforeMap.has(key)) lines.push(`+ ${key} (${s.subaccountName})`); }
+  for (const [key, s] of beforeMap) { if (!afterMap.has(key))  lines.push(`- ${key} (${s.subaccountName})`); }
+
+  for (const [key, bef] of beforeMap) {
+    const aft = afterMap.get(key);
+    if (!aft) continue;
+    const changes: string[] = [];
+    for (const f of SA_DIFF_FIELDS) {
+      if (String(bef[f]) !== String(aft[f]))
+        changes.push(`    ${f}: ${JSON.stringify(bef[f])} → ${JSON.stringify(aft[f])}`);
+    }
+    if (changes.length) { lines.push(`~ ${key} (${aft.subaccountName})`); lines.push(...changes); }
+  }
+  return lines.join('\n');
+}
+
+function normalizeSubaccountPositions(data: SubaccountEntry[]): SubaccountEntry[] {
+  const sorted = [...data].sort((a, b) => {
+    const aPosSet = a.pos > 0;
+    const bPosSet = b.pos > 0;
+    if (aPosSet !== bPosSet) return aPosSet ? -1 : 1;
+    if (aPosSet) return a.pos - b.pos;
+    return a.groupIds.localeCompare(b.groupIds) || a.subdomain.localeCompare(b.subdomain);
+  });
+  return sorted.map((s, idx) => ({ ...s, pos: idx + 1 }));
+}
+
+function mergeSubaccounts(existing: SubaccountEntry[], fresh: SubaccountEntry[]): SubaccountEntry[] {
+  type Editable = Pick<SubaccountEntry, 'alias' | 'groupIds' | 'pos' | 'inHomepage' | 'manageDestinations' | 'useAOD'>;
+  const editableByKey = new Map<string, Editable>();
+  for (const s of existing) {
+    editableByKey.set(`${s.region}/${s.subaccountId}`, {
+      alias:              s.alias,
+      groupIds:           s.groupIds,
+      pos:                s.pos,
+      inHomepage:         s.inHomepage         ?? false,
+      manageDestinations: s.manageDestinations ?? false,
+      useAOD:             s.useAOD             ?? false,
+    });
+  }
+
+  const seenKeys = new Set<string>();
+  const merged: SubaccountEntry[] = fresh.map((s, i) => {
+    const key = `${s.region}/${s.subaccountId}`;
+    seenKeys.add(key);
+    const prev = editableByKey.get(key);
+    return prev ? { ...s, ...prev } : { ...s, pos: i };
+  });
+
+  // Keep subaccounts from existing that did not appear in fresh (temporary access loss)
+  for (const s of existing) {
+    if (!seenKeys.has(`${s.region}/${s.subaccountId}`)) merged.push(s);
+  }
+  return merged;
+}
+
+export async function refreshSubaccounts(user = 'system'): Promise<{ data: SubaccountEntry[]; warnings: string[] }> {
+  const regions = getCfRegions();
+  if (regions.length === 0) {
+    throw Object.assign(
+      new Error('CF_REGIONS not configured — add it to env or config.json->variables (comma-separated, e.g. "eu10,us10")'),
+      { status: 400 },
+    );
+  }
+
+  const { username, password } = getCfCredentials();
+  if (!username || !password) {
+    throw Object.assign(
+      new Error('CF_USERNAME or CF_PASSWORD not configured — add them to env or config.json->variables'),
+      { status: 400 },
+    );
+  }
+
+  const warnings: string[] = [];
+
+  // ── BTP CLI: login + collect all subaccounts across all global accounts ──
+  type SaWithGa = { saRaw: import('./btpCliService.js').SaRaw; gaSubdomain: string };
+  let allSas: SaWithGa[] = [];
+  let sessionId: string | null = null;
+
+  try {
+    sessionId = await btpLogin(username, password);
+    const gas = await btpListGlobalAccounts(sessionId);
+    logger.info({ globalAccounts: gas.length }, 'BTP CLI: global accounts fetched');
+    for (const ga of gas) {
+      try {
+        const sas = await btpListSubaccounts(sessionId, ga.subdomain);
+        for (const saRaw of sas) allSas.push({ saRaw, gaSubdomain: ga.subdomain });
+        logger.info({ ga: ga.subdomain, subaccounts: sas.length }, 'BTP CLI: subaccounts fetched');
+      } catch (err) {
+        logger.warn({ ga: ga.subdomain, err }, 'BTP CLI: failed to list subaccounts for GA — skipping');
+      }
+    }
+  } catch (err) {
+    logger.warn({ err }, 'BTP CLI login / GA list failed — proceeding without BTP CLI data');
+    warnings.push(
+      'BTP CLI login failed — subaccount names, subscriptions, and services may be stale. Check CF_USERNAME / CF_PASSWORD.',
+    );
+  }
+
+  // ── CF API: orgs + spaces (runs in parallel with BTP CLI per-SA processing) ──
+  const cfOrgMapPromise = (async () => {
+    const cfOrgMap = new Map<string, { region: string; orgName: string; spaces: SpaceEntry[] }>();
+    for (const region of regions) {
+      try {
+        const cfOrgs = await fetchOrgsForRegion(region);
+        const guids  = cfOrgs.map(o => o.guid);
+        let spacesByOrg = new Map<string, Array<{ space_id: string; space_name: string }>>();
+        try {
+          spacesByOrg = await fetchSpacesByOrgs(region, guids);
+        } catch (err) {
+          logger.warn({ region, err }, 'CF: failed to fetch spaces — orgs will have empty spaces list');
+        }
+        for (const { guid, name } of cfOrgs) {
+          cfOrgMap.set(guid, {
+            region,
+            orgName: name,
+            spaces:  (spacesByOrg.get(guid) ?? []).map(s => ({ spaceId: s.space_id, spaceName: s.space_name })),
+          });
+        }
+        logger.info({ region, orgs: cfOrgs.length }, 'CF API: orgs + spaces fetched');
+      } catch (err) {
+        logger.warn({ region, err }, 'CF API: failed to fetch orgs for region — skipping');
+      }
+    }
+    return cfOrgMap;
+  })();
+
+  // ── BTP CLI per-subaccount sequential processing ──
+  type SaResult = {
+    orgInstances:   { orgId: string; orgName: string }[];
+    subscriptions:  import('./btpCliService.js').SubscriptionInfo[];
+    serviceInstRaw: import('./btpCliService.js').RawServiceInstance[];
+    plansMap:       Map<string, string>;
+  };
+  const saResults = new Map<string, SaResult>();
+
+  if (sessionId) {
+    const total = allSas.length;
+    for (let i = 0; i < allSas.length; i++) {
+      const { saRaw, gaSubdomain } = allSas[i]!;
+      emit('refresh-subaccounts', {
+        type:    'progress',
+        pct:     Math.floor(i * 100 / Math.max(total, 1)),
+        message: `Processing ${i + 1} of ${total}: ${saRaw.displayName}`,
+      });
+      try {
+        const envInstances   = await btpListEnvInstances(sessionId, gaSubdomain, saRaw.guid).catch(() => []);
+        const subscriptions  = await btpListSubscriptions(sessionId, gaSubdomain, saRaw.guid).catch(() => []);
+        const serviceInstRaw = await btpListServiceInstances(sessionId, gaSubdomain, saRaw.guid).catch(() => []);
+        const plansMap       = serviceInstRaw.length > 0
+          ? await btpListServicePlans(sessionId, gaSubdomain, saRaw.guid).catch(() => new Map<string, string>())
+          : new Map<string, string>();
+        saResults.set(saRaw.guid, { orgInstances: envInstances, subscriptions, serviceInstRaw, plansMap });
+      } catch (err) {
+        logger.warn({ sa: saRaw.guid, name: saRaw.displayName, err }, 'BTP CLI per-SA processing failed — skipping');
+        saResults.set(saRaw.guid, { orgInstances: [], subscriptions: [], serviceInstRaw: [], plansMap: new Map() });
+      }
+    }
+  }
+
+  // ── Await CF API result ──
+  const cfOrgMap = await cfOrgMapPromise;
+
+  // ── Build fresh SubaccountEntry[] ──
+  const fresh: SubaccountEntry[] = [];
+  for (const { saRaw } of allSas) {
+    const result    = saResults.get(saRaw.guid);
+    const firstOrg  = result?.orgInstances[0];
+    const cfOrg     = firstOrg ? cfOrgMap.get(firstOrg.orgId) : undefined;
+
+    const serviceInstances: ServiceInstanceEntry[] = (result?.serviceInstRaw ?? []).map(inst => ({
+      serviceOfferingName: result?.plansMap.get(inst.service_plan_id) ?? '',
+      servicePlanId:       inst.service_plan_id,
+      instanceName:        inst.name,
+      url:                 inst.dashboard_url,
+      spaceId:             inst.spaceId,
+    }));
+
+    fresh.push({
+      region:             cfOrg?.region  ?? saRaw.region,
+      globalAccountGUID:  saRaw.globalAccountGUID,
+      subdomain:          saRaw.subdomain,
+      subaccountId:       saRaw.guid,
+      subaccountName:     saRaw.displayName,
+      groupIds:           '',
+      alias:              '',
+      pos:                0,
+      inHomepage:         false,
+      manageDestinations: false,
+      useAOD:             false,
+      org: cfOrg && firstOrg ? {
+        orgId:   firstOrg.orgId,
+        orgName: cfOrg.orgName,
+        spaces:  cfOrg.spaces,
+      } : undefined,
+      subscriptions:    result?.subscriptions  ?? [],
+      serviceInstances,
+    });
+  }
+
+  // ── Merge with existing, normalize positions, persist ──
+  const existing   = await readSubaccounts();
+  const merged     = mergeSubaccounts(existing, fresh);
+  const normalized = normalizeSubaccountPositions(merged);
+  const diff       = diffSubaccounts(existing, normalized);
+  await writeSubaccounts(normalized);
+  await appendConfigChangelog('Refresh', user, 'subaccounts.json', diff);
+
+  emit('refresh-subaccounts', { type: 'progress', pct: 100, message: 'Done' });
+  logger.info({ subaccounts: normalized.length, warnings: warnings.length }, 'Subaccounts refresh complete');
+  return { data: normalized, warnings };
+}
+
+export async function saveSubaccounts(data: SubaccountEntry[], user = 'system'): Promise<void> {
+  const before = await readSubaccounts();
+  const diff   = diffSubaccounts(before, data);
+  await writeSubaccounts(data);
+  await appendConfigChangelog('Update', user, 'subaccounts.json', diff);
+}
+
+export async function exportConfig(): Promise<Record<string, unknown>> {
+  const { readdir: fsReaddir, readFile: fsReadFile } = await import('node:fs/promises');
+  const combined: Record<string, unknown> = {};
+  let files: string[] = [];
+  try { files = await fsReaddir(CONFIG_DIR); } catch { return combined; }
+  for (const f of files) {
+    if (!f.endsWith('.json')) continue;
+    try {
+      const content = await fsReadFile(join(CONFIG_DIR, f), 'utf-8');
+      combined[f.replace(/\.json$/, '')] = JSON.parse(content);
+    } catch { /* skip unreadable */ }
+  }
+  return combined;
+}
+
+export async function importConfig(data: Record<string, unknown>): Promise<void> {
+  const { writeFile: fsWriteFile } = await import('node:fs/promises');
+  await mkdir(CONFIG_DIR, { recursive: true });
+  for (const [key, value] of Object.entries(data)) {
+    if (!/^[a-zA-Z0-9][a-zA-Z0-9_-]*$/.test(key)) continue;
+    await fsWriteFile(join(CONFIG_DIR, `${key}.json`), JSON.stringify(value, null, 2), 'utf-8');
+  }
+  notifyCallbacks();
+  const ts = Date.now();
+  emit('root',   { files: Object.keys(data).map(k => `config/${k}.json`), ts });
+  emit('config', { ts });
+  logger.info({ keys: Object.keys(data).length }, 'Config imported');
+}

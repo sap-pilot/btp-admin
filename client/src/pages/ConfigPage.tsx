@@ -2,37 +2,40 @@ import { useEffect, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router';
 import { Download, PanelLeft, Upload } from 'lucide-react';
 import { useSidebar } from '@/components/AppLayout';
-import OrgsTable, { type OrgEntry } from '@/components/config/OrgsTable';
-import DirsTable, { type DirTab } from '@/components/config/DirsTable';
+import SubaccountsTable, { type SubaccountEntry, type RefreshProgress } from '@/components/config/SubaccountsTable';
+import SubaccountDetailModal from '@/components/config/SubaccountDetailModal';
+import TabsTable, { type TabEntry } from '@/components/config/TabsTable';
 
-type Tab = 'orgs' | 'dirs' | 'services' | 'systems' | 'menus' | 'links' | 'changelog';
-const VALID_TABS = new Set<Tab>(['orgs', 'dirs', 'services', 'systems', 'menus', 'links', 'changelog']);
+type Tab = 'subaccounts' | 'tabs' | 'menus' | 'changelog';
+const VALID_TABS = new Set<Tab>(['subaccounts', 'tabs', 'menus', 'changelog']);
 
 export default function ConfigPage() {
   const { tab: tabParam } = useParams<{ tab: string }>();
   const navigate          = useNavigate();
   const { toggle }        = useSidebar();
-  const activeTab: Tab    = VALID_TABS.has(tabParam as Tab) ? (tabParam as Tab) : 'orgs';
+  const activeTab: Tab    = VALID_TABS.has(tabParam as Tab) ? (tabParam as Tab) : 'subaccounts';
 
-  // Orgs state
-  const [orgsData, setOrgsData]         = useState<OrgEntry[]>([]);
-  const [originalOrgs, setOriginalOrgs] = useState<OrgEntry[]>([]);
-  const [isOrgsDirty, setIsOrgsDirty]   = useState(false);
+  // Subaccounts state
+  const [sasData, setSasData]         = useState<SubaccountEntry[]>([]);
+  const [originalSas, setOriginalSas] = useState<SubaccountEntry[]>([]);
+  const [isSasDirty, setIsSasDirty]   = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
-  const [isSavingOrgs, setIsSavingOrgs] = useState(false);
+  const [isSavingSas, setIsSavingSas] = useState(false);
+  const [refreshProgress, setRefreshProgress] = useState<RefreshProgress | null>(null);
+  const [selectedSa, setSelectedSa]   = useState<SubaccountEntry | null>(null);
   const [refreshWarnings, setRefreshWarnings] = useState<string[]>([]);
 
-  // Dirs state
-  const [dirsData, setDirsData]         = useState<DirTab[]>([]);
-  const [originalDirs, setOriginalDirs] = useState<DirTab[]>([]);
-  const [isDirsDirty, setIsDirsDirty]   = useState(false);
-  const [isSavingDirs, setIsSavingDirs] = useState(false);
+  // Tabs state
+  const [tabsData, setTabsData]         = useState<TabEntry[]>([]);
+  const [originalTabs, setOriginalTabs] = useState<TabEntry[]>([]);
+  const [isTabsDirty, setIsTabsDirty]   = useState(false);
+  const [isSavingTabs, setIsSavingTabs] = useState(false);
 
-  // Changelog state (lazy-loaded on first visit to the tab)
-  const [changelog, setChangelog]           = useState<string | null>(null);
+  // Changelog state (lazy-loaded on first visit)
+  const [changelog, setChangelog]          = useState<string | null>(null);
   const [isLoadingChangelog, setIsLoadingCl] = useState(false);
 
-  const [error, setError]       = useState('');
+  const [error, setError]           = useState('');
   const [isImporting, setIsImporting] = useState(false);
   const importRef = useRef<HTMLInputElement>(null);
 
@@ -50,125 +53,140 @@ export default function ConfigPage() {
   }, [activeTab]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
-    void fetch('/api/config/orgs')
-      .then(r => r.json() as Promise<{ ok: boolean; data: OrgEntry[] }>)
-      .then(({ data }) => { setOrgsData(data); setOriginalOrgs(data); })
-      .catch(() => setError('Failed to load orgs'));
+    void fetch('/api/config/subaccounts')
+      .then(r => r.json() as Promise<{ ok: boolean; data: SubaccountEntry[] }>)
+      .then(({ data }) => { setSasData(data); setOriginalSas(data); })
+      .catch(() => setError('Failed to load subaccounts'));
 
-    void fetch('/api/config/dirs')
-      .then(r => r.json() as Promise<{ ok: boolean; data: DirTab[] }>)
-      .then(({ data }) => { setDirsData(data); setOriginalDirs(data); })
-      .catch(() => setError('Failed to load dirs'));
+    void fetch('/api/config/tabs')
+      .then(r => r.json() as Promise<{ ok: boolean; data: TabEntry[] }>)
+      .then(({ data }) => { setTabsData(data); setOriginalTabs(data); })
+      .catch(() => setError('Failed to load tabs'));
   }, []);
 
-  // Track latest dirty/busy/tab state in a ref so the SSE handler can read it without re-subscribing
-  const configStateRef = useRef({ orgsDirty: false, dirsDirty: false, busy: false, tab: 'orgs' as Tab });
+  const configStateRef = useRef({ sasDirty: false, tabsDirty: false, busy: false, tab: 'subaccounts' as Tab });
   configStateRef.current = {
-    orgsDirty: isOrgsDirty,
-    dirsDirty: isDirsDirty,
-    busy: isRefreshing || isSavingOrgs || isSavingDirs || isImporting,
-    tab: activeTab,
+    sasDirty:  isSasDirty,
+    tabsDirty: isTabsDirty,
+    busy:      isRefreshing || isSavingSas || isSavingTabs || isImporting,
+    tab:       activeTab,
   };
 
   useEffect(() => {
     const es = new EventSource('/api/events?config=1');
-    es.addEventListener('update', () => {
-      const { orgsDirty, dirsDirty, busy, tab } = configStateRef.current;
+    es.addEventListener('update', (e) => {
+      let data: Record<string, unknown> = {};
+      try { data = JSON.parse((e as MessageEvent).data) as Record<string, unknown>; } catch { /* ignore */ }
+
+      if (data.type === 'progress') {
+        const pct = typeof data.pct === 'number' ? data.pct : 0;
+        setRefreshProgress({ pct, message: String(data.message ?? ''), error: null });
+        if (pct >= 100) setTimeout(() => setRefreshProgress(null), 2000);
+        return;
+      }
+      if (data.type === 'progress-error') {
+        setRefreshProgress(prev => prev ? { ...prev, error: String(data.message ?? 'Refresh failed') } : null);
+        return;
+      }
+
+      const { sasDirty, tabsDirty, busy, tab: curTab } = configStateRef.current;
       if (busy) return;
-      if (!orgsDirty) {
-        void fetch('/api/config/orgs')
-          .then(r => r.json() as Promise<{ ok: boolean; data: OrgEntry[] }>)
-          .then(({ ok, data }) => { if (ok) { setOrgsData(data); setOriginalOrgs(data); } })
+      if (!sasDirty) {
+        void fetch('/api/config/subaccounts')
+          .then(r => r.json() as Promise<{ ok: boolean; data: SubaccountEntry[] }>)
+          .then(({ ok, data: d }) => { if (ok) { setSasData(d); setOriginalSas(d); } })
           .catch(() => {});
       }
-      if (!dirsDirty) {
-        void fetch('/api/config/dirs')
-          .then(r => r.json() as Promise<{ ok: boolean; data: DirTab[] }>)
-          .then(({ ok, data }) => { if (ok) { setDirsData(data); setOriginalDirs(data); } })
+      if (!tabsDirty) {
+        void fetch('/api/config/tabs')
+          .then(r => r.json() as Promise<{ ok: boolean; data: TabEntry[] }>)
+          .then(({ ok, data: d }) => { if (ok) { setTabsData(d); setOriginalTabs(d); } })
           .catch(() => {});
       }
-      if (tab === 'changelog') fetchChangelog();
+      if (curTab === 'changelog') fetchChangelog();
     });
     return () => es.close();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   function goTab(t: Tab) { navigate(`/config/${t}`, { replace: true }); }
 
-  function handleOrgsChange(data: OrgEntry[]) { setOrgsData(data); setIsOrgsDirty(true); }
+  function handleSasChange(data: SubaccountEntry[]) { setSasData(data); setIsSasDirty(true); }
 
   async function handleRefresh() {
-    if (!window.confirm('Refresh will re-fetch orgs from CF API and merge with local edits. Continue?')) return;
+    if (!window.confirm('Refresh will re-fetch subaccounts from BTP CLI / CF API and merge with local edits. Continue?')) return;
     setIsRefreshing(true);
     setError('');
+    setRefreshProgress({ pct: 0, message: 'Starting refresh…', error: null });
     try {
-      const res  = await fetch('/api/config/orgs/refresh', { method: 'POST' });
-      const json = await res.json() as { ok: boolean; data?: OrgEntry[]; warnings?: string[]; error?: string };
+      const res  = await fetch('/api/config/subaccounts/refresh', { method: 'POST' });
+      const json = await res.json() as { ok: boolean; data?: SubaccountEntry[]; warnings?: string[]; error?: string };
       if (!json.ok) throw new Error(json.error ?? 'Refresh failed');
-      setOrgsData(json.data ?? []);
-      setOriginalOrgs(json.data ?? []);
-      setIsOrgsDirty(false);
+      setSasData(json.data ?? []);
+      setOriginalSas(json.data ?? []);
+      setIsSasDirty(false);
       setRefreshWarnings(json.warnings ?? []);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Refresh failed');
+      setRefreshProgress(null);
     } finally {
       setIsRefreshing(false);
     }
   }
 
-  function handleOrgsReset() {
-    if (isOrgsDirty && !window.confirm('Discard unsaved changes?')) return;
-    setOrgsData(originalOrgs);
-    setIsOrgsDirty(false);
+  function handleSasReset() {
+    if (isSasDirty && !window.confirm('Discard unsaved changes?')) return;
+    setSasData(originalSas);
+    setIsSasDirty(false);
     setError('');
     setRefreshWarnings([]);
   }
 
-  async function handleOrgsSave() {
-    setIsSavingOrgs(true);
+  async function handleSasSave() {
+    setIsSavingSas(true);
     setError('');
     try {
-      const res  = await fetch('/api/config/orgs/save', {
+      const res  = await fetch('/api/config/subaccounts/save', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ data: orgsData }),
+        body: JSON.stringify({ data: sasData }),
       });
       const json = await res.json() as { ok: boolean; error?: string };
       if (!json.ok) throw new Error(json.error ?? 'Save failed');
-      setOriginalOrgs(orgsData);
-      setIsOrgsDirty(false);
+      setOriginalSas(sasData);
+      setIsSasDirty(false);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Save failed');
     } finally {
-      setIsSavingOrgs(false);
+      setIsSavingSas(false);
     }
   }
 
-  function handleDirsChange(data: DirTab[]) { setDirsData(data); setIsDirsDirty(true); }
+  function handleTabsChange(data: TabEntry[]) { setTabsData(data); setIsTabsDirty(true); }
 
-  function handleDirsReset() {
-    if (isDirsDirty && !window.confirm('Discard unsaved changes?')) return;
-    setDirsData(originalDirs);
-    setIsDirsDirty(false);
+  function handleTabsReset() {
+    if (isTabsDirty && !window.confirm('Discard unsaved changes?')) return;
+    setTabsData(originalTabs);
+    setIsTabsDirty(false);
     setError('');
   }
 
-  async function handleDirsSave() {
-    setIsSavingDirs(true);
+  async function handleTabsSave() {
+    setIsSavingTabs(true);
     setError('');
     try {
-      const res  = await fetch('/api/config/dirs/save', {
+      const res  = await fetch('/api/config/tabs/save', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ data: dirsData }),
+        body: JSON.stringify({ data: tabsData }),
       });
       const json = await res.json() as { ok: boolean; error?: string };
       if (!json.ok) throw new Error(json.error ?? 'Save failed');
-      setOriginalDirs(dirsData);
-      setIsDirsDirty(false);
+      setOriginalTabs(tabsData);
+      setIsTabsDirty(false);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Save failed');
     } finally {
-      setIsSavingDirs(false);
+      setIsSavingTabs(false);
     }
   }
 
@@ -191,12 +209,12 @@ export default function ConfigPage() {
       });
       const json = await res.json() as { ok: boolean; error?: string };
       if (!json.ok) throw new Error(json.error ?? 'Import failed');
-      const [orgsRes, dirsRes] = await Promise.all([
-        fetch('/api/config/orgs').then(r => r.json() as Promise<{ ok: boolean; data: OrgEntry[] }>),
-        fetch('/api/config/dirs').then(r => r.json() as Promise<{ ok: boolean; data: DirTab[] }>),
+      const [sasRes, tabsRes] = await Promise.all([
+        fetch('/api/config/subaccounts').then(r => r.json() as Promise<{ ok: boolean; data: SubaccountEntry[] }>),
+        fetch('/api/config/tabs').then(r => r.json() as Promise<{ ok: boolean; data: TabEntry[] }>),
       ]);
-      setOrgsData(orgsRes.data); setOriginalOrgs(orgsRes.data); setIsOrgsDirty(false);
-      setDirsData(dirsRes.data); setOriginalDirs(dirsRes.data); setIsDirsDirty(false);
+      setSasData(sasRes.data);  setOriginalSas(sasRes.data);  setIsSasDirty(false);
+      setTabsData(tabsRes.data); setOriginalTabs(tabsRes.data); setIsTabsDirty(false);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Import failed');
     } finally {
@@ -212,8 +230,8 @@ export default function ConfigPage() {
         : 'border-transparent text-muted-foreground hover:text-foreground'
     }`;
 
-  const totalOrgs = orgsData.length;
-  const totalDirs = dirsData.reduce((n, t) => n + t.dirs.length, 0);
+  const totalSas  = sasData.length;
+  const totalGroups = tabsData.reduce((n, t) => n + t.groups.length, 0);
 
   return (
     <div className="flex flex-col h-full">
@@ -253,25 +271,16 @@ export default function ConfigPage() {
 
       {/* Tab bar */}
       <div className="flex items-center border-b border-border shrink-0 px-2">
-        <button className={tabCls('orgs')} onClick={() => goTab('orgs')}>
-          Orgs
-          {totalOrgs > 0 && <span className="ml-1.5 text-[10px] text-muted-foreground">({totalOrgs})</span>}
+        <button className={tabCls('subaccounts')} onClick={() => goTab('subaccounts')}>
+          Subaccounts
+          {totalSas > 0 && <span className="ml-1.5 text-[10px] text-muted-foreground">({totalSas})</span>}
         </button>
-        <button className={tabCls('dirs')} onClick={() => goTab('dirs')}>
-          Tabs / Dirs
-          {totalDirs > 0 && <span className="ml-1.5 text-[10px] text-muted-foreground">({totalDirs})</span>}
-        </button>
-        <button className={tabCls('services')} onClick={() => goTab('services')}>
-          Services
-        </button>
-        <button className={tabCls('systems')} onClick={() => goTab('systems')}>
-          Other Services
+        <button className={tabCls('tabs')} onClick={() => goTab('tabs')}>
+          Tabs / Groups
+          {totalGroups > 0 && <span className="ml-1.5 text-[10px] text-muted-foreground">({totalGroups})</span>}
         </button>
         <button className={tabCls('menus')} onClick={() => goTab('menus')}>
-          Menus
-        </button>
-        <button className={tabCls('links')} onClick={() => goTab('links')}>
-          Link Templates
+          Extra Menus
         </button>
         <button className={tabCls('changelog')} onClick={() => { if (changelog === null) fetchChangelog(); goTab('changelog'); }}>
           Change Log
@@ -284,7 +293,7 @@ export default function ConfigPage() {
           {error}
         </div>
       )}
-      {/* CIS warning banner */}
+      {/* Warnings banner */}
       {refreshWarnings.length > 0 && (
         <div className="shrink-0 px-4 py-2 bg-yellow-500/10 text-yellow-700 dark:text-yellow-400 text-xs border-b border-yellow-500/20">
           {refreshWarnings.map((w, i) => <p key={i}>{w}</p>)}
@@ -293,31 +302,33 @@ export default function ConfigPage() {
 
       {/* Content */}
       <div className="flex-1 overflow-hidden">
-        {activeTab === 'orgs' && (
-          <OrgsTable
-            data={orgsData}
-            onChange={handleOrgsChange}
-            isDirty={isOrgsDirty}
+        {activeTab === 'subaccounts' && (
+          <SubaccountsTable
+            data={sasData}
+            onChange={handleSasChange}
+            isDirty={isSasDirty}
             onRefresh={handleRefresh}
             isRefreshing={isRefreshing}
-            onReset={handleOrgsReset}
-            isSaving={isSavingOrgs}
-            onSave={handleOrgsSave}
+            onReset={handleSasReset}
+            isSaving={isSavingSas}
+            onSave={handleSasSave}
+            refreshProgress={refreshProgress}
+            onOpenDetail={setSelectedSa}
           />
         )}
-        {activeTab === 'dirs' && (
-          <DirsTable
-            data={dirsData}
-            onChange={handleDirsChange}
-            isDirty={isDirsDirty}
-            isSaving={isSavingDirs}
-            onReset={handleDirsReset}
-            onSave={handleDirsSave}
+        {activeTab === 'tabs' && (
+          <TabsTable
+            data={tabsData}
+            onChange={handleTabsChange}
+            isDirty={isTabsDirty}
+            isSaving={isSavingTabs}
+            onReset={handleTabsReset}
+            onSave={handleTabsSave}
           />
         )}
-        {(activeTab === 'services' || activeTab === 'systems' || activeTab === 'menus' || activeTab === 'links') && (
+        {activeTab === 'menus' && (
           <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
-            Under construction
+            Extra Menus configuration — coming soon
           </div>
         )}
         {activeTab === 'changelog' && (
@@ -343,6 +354,9 @@ export default function ConfigPage() {
           </div>
         )}
       </div>
+
+      {/* Subaccount detail modal */}
+      <SubaccountDetailModal sa={selectedSa} onClose={() => setSelectedSa(null)} />
     </div>
   );
 }
