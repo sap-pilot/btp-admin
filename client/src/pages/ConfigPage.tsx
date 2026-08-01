@@ -30,6 +30,8 @@ export default function ConfigPage() {
   const [originalTabs, setOriginalTabs] = useState<TabEntry[]>([]);
   const [isTabsDirty, setIsTabsDirty]   = useState(false);
   const [isSavingTabs, setIsSavingTabs] = useState(false);
+  const [tabsSaveStatus, setTabsSaveStatus] = useState<{ message: string; ok: boolean } | null>(null);
+  const tabsSaveTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
   // Changelog state (lazy-loaded on first visit)
   const [changelog, setChangelog]          = useState<string | null>(null);
@@ -154,7 +156,6 @@ export default function ConfigPage() {
 
   async function handleSasSave() {
     setIsSavingSas(true);
-    setError('');
     try {
       const res  = await fetch('/api/config/subaccounts/save', {
         method: 'POST',
@@ -165,8 +166,15 @@ export default function ConfigPage() {
       if (!json.ok) throw new Error(json.error ?? 'Save failed');
       setOriginalSas(sasData);
       setIsSasDirty(false);
+      clearTimeout(progressTimerRef.current);
+      setRefreshProgress({ pct: 100, message: 'Saved successfully', error: null });
+      progressTimerRef.current = setTimeout(
+        () => setRefreshProgress(prev => (prev?.error || prev?.warning ? prev : null)),
+        3000,
+      );
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Save failed');
+      const msg = err instanceof Error ? err.message : 'Save failed';
+      setRefreshProgress({ pct: 100, message: msg, error: msg });
     } finally {
       setIsSavingSas(false);
     }
@@ -179,11 +187,13 @@ export default function ConfigPage() {
     setTabsData(originalTabs);
     setIsTabsDirty(false);
     setError('');
+    clearTimeout(tabsSaveTimerRef.current);
+    setTabsSaveStatus(null);
   }
 
   async function handleTabsSave() {
+    clearTimeout(tabsSaveTimerRef.current);
     setIsSavingTabs(true);
-    setError('');
     try {
       const res  = await fetch('/api/config/tabs/save', {
         method: 'POST',
@@ -194,8 +204,10 @@ export default function ConfigPage() {
       if (!json.ok) throw new Error(json.error ?? 'Save failed');
       setOriginalTabs(tabsData);
       setIsTabsDirty(false);
+      setTabsSaveStatus({ message: 'Saved successfully', ok: true });
+      tabsSaveTimerRef.current = setTimeout(() => setTabsSaveStatus(null), 3000);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Save failed');
+      setTabsSaveStatus({ message: err instanceof Error ? err.message : 'Save failed', ok: false });
     } finally {
       setIsSavingTabs(false);
     }
@@ -329,6 +341,7 @@ export default function ConfigPage() {
             isSaving={isSavingTabs}
             onReset={handleTabsReset}
             onSave={handleTabsSave}
+            saveStatus={tabsSaveStatus}
           />
         )}
         {activeTab === 'menus' && (

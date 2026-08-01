@@ -1,5 +1,5 @@
 import { useRef, useState } from 'react';
-import { GripVertical, RefreshCw, RotateCcw, Save } from 'lucide-react';
+import { GripVertical, RefreshCw, RotateCcw, Save, X } from 'lucide-react';
 
 export interface SpaceEntry {
   spaceId:   string;
@@ -96,9 +96,10 @@ export default function SubaccountsTable({
   const [filter, setFilter]       = useState('');
   const [colWidths, setColWidths] = useState<number[]>(INIT_WIDTHS);
 
-  const resizingRef   = useRef<{ colIdx: number; startX: number; startWidth: number } | null>(null);
-  const dragIndex     = useRef<number | null>(null);
-  const dragOverIndex = useRef<number | null>(null);
+  const resizingRef        = useRef<{ colIdx: number; startX: number; startWidth: number } | null>(null);
+  const dragIndex          = useRef<number | null>(null);
+  const dragOverRef        = useRef<number | null>(null);
+  const [dropIndicator, setDropIndicator] = useState<number | null>(null);
 
   const sorted = [...data].sort((a, b) => {
     const aPosSet = a.pos > 0;
@@ -133,28 +134,40 @@ export default function SubaccountsTable({
     document.addEventListener('mouseup', onUp);
   }
 
-  function handleDragStart(idx: number) {
+  function handleDragStart(e: React.DragEvent, idx: number) {
     if (isFiltered) return;
     dragIndex.current = idx;
+    const row = (e.currentTarget as HTMLElement).closest('tr');
+    if (row) {
+      const rect = row.getBoundingClientRect();
+      e.dataTransfer.setDragImage(row, e.clientX - rect.left, e.clientY - rect.top);
+    }
   }
 
   function handleDragOver(e: React.DragEvent, idx: number) {
     e.preventDefault();
-    dragOverIndex.current = idx;
+    if (dragOverRef.current !== idx) {
+      dragOverRef.current = idx;
+      setDropIndicator(idx);
+    }
+  }
+
+  function clearDragState() {
+    dragIndex.current   = null;
+    dragOverRef.current = null;
+    setDropIndicator(null);
   }
 
   function handleDrop() {
     const from = dragIndex.current;
-    const to   = dragOverIndex.current;
+    const to   = dragOverRef.current;
+    clearDragState();
     if (from === null || to === null || from === to) return;
     const reordered = [...sorted];
     const [moved]   = reordered.splice(from, 1);
     if (!moved) return;
     reordered.splice(to, 0, moved);
-    const renumbered = reordered.map((s, i) => ({ ...s, pos: i + 1 }));
-    onChange(renumbered);
-    dragIndex.current     = null;
-    dragOverIndex.current = null;
+    onChange(reordered.map((s, i) => ({ ...s, pos: i + 1 })));
   }
 
   const btnBase    = 'inline-flex items-center gap-1.5 px-3 py-1.5 rounded text-xs font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed';
@@ -183,13 +196,24 @@ export default function SubaccountsTable({
     <div className="flex flex-col h-full">
       {/* Action bar */}
       <div className="flex items-center gap-2 px-3 py-2 border-b border-border shrink-0 bg-muted/10">
-        <input
-          type="text"
-          value={filter}
-          onChange={e => setFilter(e.target.value)}
-          placeholder="Filter subaccounts…"
-          className="flex-1 min-w-0 h-7 px-2 text-xs border border-border rounded bg-background text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring"
-        />
+        <div className="relative flex-1 min-w-0">
+          <input
+            type="text"
+            value={filter}
+            onChange={e => setFilter(e.target.value)}
+            placeholder="Filter subaccounts…"
+            className="w-full h-7 px-2 pr-6 text-xs border border-border rounded bg-background text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring"
+          />
+          {filter && (
+            <button
+              onClick={() => setFilter('')}
+              className="absolute right-1 top-1/2 -translate-y-1/2 p-0.5 rounded text-muted-foreground hover:text-foreground transition-colors"
+              aria-label="Clear filter"
+            >
+              <X className="h-3 w-3" />
+            </button>
+          )}
+        </div>
         <span className="shrink-0 text-xs text-muted-foreground">
           {isFiltered ? `${filtered.length} / ${data.length}` : data.length} subaccounts
         </span>
@@ -293,12 +317,18 @@ export default function SubaccountsTable({
                 <tr
                   key={sa.subaccountId}
                   className="hover:bg-muted/20"
-                  draggable={!isFiltered}
-                  onDragStart={() => handleDragStart(sortedIdx)}
+                  style={dropIndicator === sortedIdx && sortedIdx !== dragIndex.current
+                    ? { boxShadow: '0 -2px 0 0 hsl(var(--primary))' }
+                    : undefined}
                   onDragOver={e => handleDragOver(e, sortedIdx)}
                   onDrop={handleDrop}
                 >
-                  <td className={`${tdCls} text-muted-foreground/40`}>
+                  <td
+                    className={`${tdCls} text-muted-foreground/40`}
+                    draggable={!isFiltered}
+                    onDragStart={e => handleDragStart(e, sortedIdx)}
+                    onDragEnd={clearDragState}
+                  >
                     {!isFiltered && <GripVertical className="h-3.5 w-3.5 cursor-grab" />}
                   </td>
                   <td className={`${tdCls} font-mono text-muted-foreground truncate`}>{sa.region}</td>
@@ -322,7 +352,7 @@ export default function SubaccountsTable({
                       <span className="block font-mono text-[10px] text-muted-foreground/60 truncate mt-0.5">{sa.org.orgId}</span>
                     )}
                   </td>
-                  <td className={tdCls}>
+                  <td className={tdCls} onDragStart={e => e.stopPropagation()}>
                     <input
                       className={`w-full bg-transparent border-b outline-none py-0.5 font-mono text-[11px] placeholder:text-muted-foreground/30 focus:border-primary ${
                         sa.groupIds ? 'border-transparent hover:border-border' : 'border-amber-500/60 hover:border-amber-500'
@@ -332,7 +362,7 @@ export default function SubaccountsTable({
                       placeholder="group1,group2"
                     />
                   </td>
-                  <td className={tdCls}>
+                  <td className={tdCls} onDragStart={e => e.stopPropagation()}>
                     <input
                       className={`w-full bg-transparent border-b outline-none py-0.5 placeholder:text-muted-foreground/30 focus:border-primary ${
                         sa.alias ? 'border-transparent hover:border-border' : 'border-amber-500/60 hover:border-amber-500'

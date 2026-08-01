@@ -44,6 +44,12 @@ function diffTabs(before: TabEntry[], after: TabEntry[]): string {
   for (const [tab] of afterMap)  { if (!beforeMap.has(tab)) lines.push(`+ tab: "${tab}"`); }
   for (const [tab] of beforeMap) { if (!afterMap.has(tab))  lines.push(`- tab: "${tab}"`); }
 
+  // Tab order among tabs present in both
+  const commonBefore = before.map(t => t.tab).filter(t => afterMap.has(t));
+  const commonAfter  = after.map(t => t.tab).filter(t => beforeMap.has(t));
+  if (commonBefore.join('\0') !== commonAfter.join('\0'))
+    lines.push(`~ tab order: ${commonBefore.map(t => `"${t}"`).join(', ')} → ${commonAfter.map(t => `"${t}"`).join(', ')}`);
+
   for (const [tab, aft] of afterMap) {
     const bef = beforeMap.get(tab);
     if (!bef) continue;
@@ -58,6 +64,11 @@ function diffTabs(before: TabEntry[], after: TabEntry[]): string {
       if (bg.groupTitle !== ag.groupTitle)
         tabLines.push(`    ~ group: ${id}  title: ${JSON.stringify(bg.groupTitle)} → ${JSON.stringify(ag.groupTitle)}`);
     }
+    // Group order among groups present in both
+    const commonGrpsBefore = bef.groups.map(g => g.groupId).filter(id => aGroups.has(id));
+    const commonGrpsAfter  = aft.groups.map(g => g.groupId).filter(id => bGroups.has(id));
+    if (commonGrpsBefore.join('\0') !== commonGrpsAfter.join('\0'))
+      tabLines.push(`    ~ group order: ${commonGrpsBefore.join(', ')} → ${commonGrpsAfter.join(', ')}`);
     if (tabLines.length) { lines.push(`~ tab: "${tab}"`); lines.push(...tabLines); }
   }
 
