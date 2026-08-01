@@ -12,12 +12,13 @@ export interface TabEntry {
 }
 
 interface Props {
-  data:     TabEntry[];
-  onChange: (data: TabEntry[]) => void;
-  isDirty:  boolean;
-  isSaving: boolean;
-  onReset:  () => void;
-  onSave:   () => void;
+  data:       TabEntry[];
+  onChange:   (data: TabEntry[]) => void;
+  isDirty:    boolean;
+  isSaving:   boolean;
+  onReset:    () => void;
+  onSave:     () => void;
+  saveStatus?: { message: string; ok: boolean } | null;
 }
 
 function matchesFilter(tab: TabEntry, filter: string): { tabMatch: boolean; groups: TabGroup[] } {
@@ -28,7 +29,7 @@ function matchesFilter(tab: TabEntry, filter: string): { tabMatch: boolean; grou
   return { tabMatch: tabMatch || groups.length > 0, groups: tabMatch ? tab.groups : groups };
 }
 
-export default function TabsTable({ data, onChange, isDirty, isSaving, onReset, onSave }: Props) {
+export default function TabsTable({ data, onChange, isDirty, isSaving, onReset, onSave, saveStatus }: Props) {
   const [filter, setFilter]           = useState('');
   const [expanded, setExpanded]       = useState<Set<number>>(() => new Set(data.map((_, i) => i)));
   const [dragging, setDragging]       = useState<{ ti: number; gi: number } | null>(null);
@@ -119,10 +120,12 @@ export default function TabsTable({ data, onChange, isDirty, isSaving, onReset, 
     const [moved] = tabs.splice(dragTab, 1);
     tabs.splice(targetTi, 0, moved);
     onChange(tabs);
+    // splice past end appends, so actual final index is capped at data.length-1
+    const finalTi = dragTab < targetTi ? Math.min(targetTi, data.length - 1) : targetTi;
     setExpanded(prev => {
       const next = new Set<number>();
       for (const v of [...prev]) {
-        if (v === dragTab) { next.add(targetTi); continue; }
+        if (v === dragTab) { next.add(finalTi); continue; }
         let nv = v;
         if (dragTab < targetTi) {
           if (v > dragTab && v <= targetTi) nv = v - 1;
@@ -178,6 +181,16 @@ export default function TabsTable({ data, onChange, isDirty, isSaving, onReset, 
           {isSaving ? 'Saving…' : 'Save'}
         </button>
       </div>
+
+      {/* Save status banner — matches SubaccountsTable progress bar style */}
+      {saveStatus && (
+        <div className="shrink-0 relative h-7 border-b border-border overflow-hidden">
+          <div className={`absolute inset-y-0 left-0 w-full ${saveStatus.ok ? 'bg-green-500/50' : 'bg-destructive/50'}`} />
+          <span className={`absolute inset-0 flex items-center justify-center text-[11px] font-medium px-2 truncate ${saveStatus.ok ? 'text-foreground' : 'text-destructive'}`}>
+            {saveStatus.message}
+          </span>
+        </div>
+      )}
 
       {/* Table */}
       <div className="flex-1 overflow-auto">
@@ -289,8 +302,31 @@ export default function TabsTable({ data, onChange, isDirty, isSaving, onReset, 
                     </tr>
                   );
                 }),
+
+                // Sentinel: drop-at-end target for groups within this tab
+                ...(isExpanded && !isFiltering && dragging?.ti === ti ? [
+                  <tr
+                    key={`grp-sentinel-${ti}`}
+                    onDragOver={e => { e.preventDefault(); setDragOver({ ti, gi: tab.groups.length }); }}
+                    onDrop={e => handleGroupDrop(e, ti, tab.groups.length)}
+                    className={dragOver?.ti === ti && dragOver.gi === tab.groups.length ? 'border-t-2 border-primary' : ''}
+                  >
+                    <td colSpan={4} className="h-3" />
+                  </tr>,
+                ] : []),
               ];
             })}
+
+            {/* Sentinel: drop-at-end target for tabs */}
+            {dragTab !== null && !isFiltering && (
+              <tr
+                onDragOver={e => { e.preventDefault(); setDragOverTab(data.length); }}
+                onDrop={e => handleTabDrop(e, data.length)}
+                className={dragOverTab === data.length ? 'border-t-2 border-primary' : ''}
+              >
+                <td colSpan={4} className="h-3" />
+              </tr>
+            )}
           </tbody>
         </table>
 
