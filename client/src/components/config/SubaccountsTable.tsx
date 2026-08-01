@@ -202,8 +202,11 @@ export default function SubaccountsTable({
             value={filter}
             onChange={e => setFilter(e.target.value)}
             placeholder="Filter subaccounts…"
-            className="w-full h-7 px-2 pr-6 text-xs border border-border rounded bg-background text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring"
+            className="w-full h-7 px-2 pr-32 text-xs border border-border rounded bg-background text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring"
           />
+          <span className={`absolute top-1/2 -translate-y-1/2 text-xs text-muted-foreground/50 pointer-events-none select-none whitespace-nowrap ${filter ? 'right-6' : 'right-2'}`}>
+            {isFiltered ? `${filtered.length} / ${data.length}` : data.length} subaccounts
+          </span>
           {filter && (
             <button
               onClick={() => setFilter('')}
@@ -214,9 +217,6 @@ export default function SubaccountsTable({
             </button>
           )}
         </div>
-        <span className="shrink-0 text-xs text-muted-foreground">
-          {isFiltered ? `${filtered.length} / ${data.length}` : data.length} subaccounts
-        </span>
         <div className="flex items-center gap-1.5 shrink-0">
           <button onClick={onRefresh} disabled={isRefreshing || isSaving} className={btnOutline}>
             <RefreshCw className={`h-3.5 w-3.5 ${isRefreshing ? 'animate-spin' : ''}`} />
