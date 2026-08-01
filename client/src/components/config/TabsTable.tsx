@@ -37,7 +37,13 @@ export default function TabsTable({ data, onChange, isDirty, isSaving, onReset, 
   const [dragTab, setDragTab]         = useState<number | null>(null);
   const [dragOverTab, setDragOverTab] = useState<number | null>(null);
 
-  const isFiltering = filter.trim().length > 0;
+  const isFiltering        = filter.trim().length > 0;
+  const totalTabs          = data.length;
+  const totalGroups        = data.reduce((n, t) => n + t.groups.length, 0);
+  const filteredTabCount   = isFiltering ? data.filter(t => matchesFilter(t, filter).tabMatch).length : totalTabs;
+  const filteredGroupCount = isFiltering
+    ? data.reduce((n, t) => { const { tabMatch, groups } = matchesFilter(t, filter); return n + (tabMatch ? groups.length : 0); }, 0)
+    : totalGroups;
 
   function toggleTab(ti: number) {
     setExpanded(prev => {
@@ -154,18 +160,29 @@ export default function TabsTable({ data, onChange, isDirty, isSaving, onReset, 
     <div className="flex flex-col h-full">
       {/* Action bar */}
       <div className="flex items-center gap-2 px-3 py-2 border-b border-border shrink-0">
-        <input
-          type="text"
-          placeholder="Filter tabs / groups…"
-          value={filter}
-          onChange={e => setFilter(e.target.value)}
-          className="flex-1 bg-transparent border border-border rounded px-2 py-1 text-xs outline-none focus:border-primary placeholder:text-muted-foreground/50"
-        />
-        {filter && (
-          <button onClick={() => setFilter('')} className="text-xs text-muted-foreground hover:text-foreground shrink-0">
-            Clear
-          </button>
-        )}
+        <div className="relative flex-1 min-w-0">
+          <input
+            type="text"
+            placeholder="Filter tabs / groups…"
+            value={filter}
+            onChange={e => setFilter(e.target.value)}
+            className="w-full h-7 px-2 pr-44 text-xs bg-transparent border border-border rounded outline-none focus:border-primary placeholder:text-muted-foreground/50"
+          />
+          <span className={`absolute top-1/2 -translate-y-1/2 text-xs text-muted-foreground/50 pointer-events-none select-none whitespace-nowrap ${isFiltering ? 'right-6' : 'right-2'}`}>
+            {isFiltering
+              ? `${filteredTabCount}/${totalTabs} tabs & ${filteredGroupCount}/${totalGroups} sections`
+              : `${totalTabs} tabs & ${totalGroups} sections`}
+          </span>
+          {filter && (
+            <button
+              onClick={() => setFilter('')}
+              className="absolute right-1 top-1/2 -translate-y-1/2 p-0.5 rounded text-muted-foreground hover:text-foreground transition-colors"
+              aria-label="Clear filter"
+            >
+              <X className="h-3 w-3" />
+            </button>
+          )}
+        </div>
         <button onClick={() => setExpanded(new Set(data.map((_, i) => i)))} disabled={isFiltering} className={btnOutline}>
           Expand
         </button>

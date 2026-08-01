@@ -6,8 +6,8 @@ import SubaccountsTable, { type SubaccountEntry, type RefreshProgress } from '@/
 import SubaccountDetailModal from '@/components/config/SubaccountDetailModal';
 import TabsTable, { type TabEntry } from '@/components/config/TabsTable';
 
-type Tab = 'subaccounts' | 'tabs' | 'menus' | 'changelog';
-const VALID_TABS = new Set<Tab>(['subaccounts', 'tabs', 'menus', 'changelog']);
+type Tab = 'subaccounts' | 'tabs' | 'menus' | 'settings' | 'changelog';
+const VALID_TABS = new Set<Tab>(['subaccounts', 'tabs', 'menus', 'settings', 'changelog']);
 
 export default function ConfigPage() {
   const { tab: tabParam } = useParams<{ tab: string }>();
@@ -299,11 +299,14 @@ export default function ConfigPage() {
           {totalSas > 0 && <span className="ml-1.5 text-[10px] text-muted-foreground">({totalSas})</span>}
         </button>
         <button className={tabCls('tabs')} onClick={() => goTab('tabs')}>
-          Tabs / Groups
+          Tabs
           {totalGroups > 0 && <span className="ml-1.5 text-[10px] text-muted-foreground">({totalGroups})</span>}
         </button>
         <button className={tabCls('menus')} onClick={() => goTab('menus')}>
-          Extra Menus
+          Menu
+        </button>
+        <button className={tabCls('settings')} onClick={() => goTab('settings')}>
+          Settings
         </button>
         <button className={tabCls('changelog')} onClick={() => { if (changelog === null) fetchChangelog(); goTab('changelog'); }}>
           Change Log
@@ -346,7 +349,12 @@ export default function ConfigPage() {
         )}
         {activeTab === 'menus' && (
           <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
-            Extra Menus configuration — coming soon
+            Menu configuration — coming soon
+          </div>
+        )}
+        {activeTab === 'settings' && (
+          <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
+            Settings — coming soon
           </div>
         )}
         {activeTab === 'changelog' && (

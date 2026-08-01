@@ -204,3 +204,4 @@ resources: []
 - Do not put business logic in Express route handlers.
 - Do not add CSS frameworks or component libraries that conflict with Tailwind/shadcn.
 - Do not bypass the config module to read env vars directly.
+- Do not run git commit unless I explicitly tell you to do so in the chat.
