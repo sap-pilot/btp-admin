@@ -521,6 +521,7 @@ export default function SubaccountDestModal({ org, allNames, initialName, onClos
 
   const searchTimer  = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const listRef      = useRef<HTMLDivElement>(null);
   const isDirty      = JSON.stringify(editedProps) !== JSON.stringify(serverProps);
 
   // Load destination on primary selection change
@@ -530,6 +531,13 @@ export default function SubaccountDestModal({ org, allNames, initialName, onClos
     void loadDest(selectedName);
     if (activeTab === 'changelog') void loadChangelog(selectedName);
   }, [selectedName]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Scroll selected item into view on mount (for deep-link / search-result opens)
+  useEffect(() => {
+    if (!listRef.current) return;
+    const el = listRef.current.querySelector<HTMLElement>('[data-selected="true"]');
+    el?.scrollIntoView({ block: 'nearest' });
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Debounced search scoped to this subdomain
   useEffect(() => {
@@ -809,7 +817,7 @@ export default function SubaccountDestModal({ org, allNames, initialName, onClos
                 />
               </div>
             </div>
-            <div className="flex-1 overflow-auto py-1">
+            <div ref={listRef} className="flex-1 overflow-auto py-1">
               {filteredNames.length === 0 ? (
                 <div className="px-3 py-4 text-xs text-muted-foreground text-center">
                   {isSearching ? 'Searching…' : 'No destinations found'}
@@ -820,6 +828,7 @@ export default function SubaccountDestModal({ org, allNames, initialName, onClos
                 return (
                   <button
                     key={name}
+                    data-selected={isPrimary ? 'true' : undefined}
                     onClick={e => handleDestClick(name, idx, e)}
                     title={isSelected && !isPrimary ? `${name} — selected for export` : name}
                     className={`w-full text-left px-3 py-1.5 text-xs font-mono truncate transition-colors select-none ${

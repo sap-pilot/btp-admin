@@ -3,6 +3,7 @@ import { Outlet } from 'react-router';
 import { PanelLeft } from 'lucide-react';
 import AppSidebar from './AppSidebar';
 import { useAuth } from '@/hooks/useAuth';
+import type { SettingsData } from '@/components/config/SettingsPanel';
 
 const COOKIE = 'sidebar-collapsed';
 const MAX_AGE = 365 * 24 * 60 * 60; // 1 year
@@ -27,57 +28,47 @@ export function useSidebar(): SidebarCtx {
   return useContext(SidebarContext);
 }
 
-// ─── Homepage context ─────────────────────────────────────────────────────────
+// ─── Settings context ─────────────────────────────────────────────────────────
 
-export interface HomepageCtx {
-  homepage: Record<string, unknown> | null;
-  homepageLoading: boolean;
-  refreshHomepage: () => void;
+export interface SettingsCtx {
+  settings: SettingsData | null;
+  refreshSettings: () => void;
 }
 
-const HomepageContext = createContext<HomepageCtx>({
-  homepage: null,
-  homepageLoading: true,
-  refreshHomepage: () => {},
-});
+const SettingsContext = createContext<SettingsCtx>({ settings: null, refreshSettings: () => {} });
 
-export function useHomepage(): HomepageCtx {
-  return useContext(HomepageContext);
+export function useSettings(): SettingsCtx {
+  return useContext(SettingsContext);
 }
 
 // ─── Layout ───────────────────────────────────────────────────────────────────
 
 export default function AppLayout() {
-  const [collapsed, setCollapsed] = useState(readCookie);
-  const [homepage, setHomepage] = useState<Record<string, unknown> | null>(null);
-  const [homepageLoading, setHomepageLoading] = useState(true);
-  const [homepageKey, setHomepageKey] = useState(0);
+  const [collapsed, setCollapsed]       = useState(readCookie);
+  const [settings, setSettings]         = useState<SettingsData | null>(null);
+  const [settingsKey, setSettingsKey]   = useState(0);
   const auth = useAuth();
 
   const gated = !auth.loading && auth.enabled && !auth.loggedIn;
 
-  useEffect(() => {
-    writeCookie(collapsed);
-  }, [collapsed]);
+  useEffect(() => { writeCookie(collapsed); }, [collapsed]);
 
+  // Settings are always fetched regardless of auth state (public menus visible before login)
   useEffect(() => {
-    if (auth.loading || gated) { setHomepageLoading(false); return; }
-    setHomepageLoading(true);
-    fetch('/api/homepage')
-      .then(r => r.json() as Promise<Record<string, unknown> | null>)
-      .then(d => setHomepage(d))
-      .catch(() => null)
-      .finally(() => setHomepageLoading(false));
-  }, [homepageKey, auth.loading, gated]);
+    fetch('/api/settings')
+      .then(r => r.json() as Promise<{ ok: boolean; data: SettingsData }>)
+      .then(({ data }) => setSettings(data))
+      .catch(() => null);
+  }, [settingsKey]);
 
-  const refreshHomepage = useCallback(() => setHomepageKey(k => k + 1), []);
+  const refreshSettings = useCallback(() => setSettingsKey(k => k + 1), []);
 
   // Hold render until auth state is known to avoid flash of wrong layout
   if (auth.loading) return null;
 
   return (
     <SidebarContext.Provider value={{ collapsed, toggle: () => setCollapsed(c => !c) }}>
-      <HomepageContext.Provider value={{ homepage, homepageLoading, refreshHomepage }}>
+      <SettingsContext.Provider value={{ settings, refreshSettings }}>
         <div className="flex h-screen overflow-hidden bg-background text-foreground">
           <AppSidebar />
           <main className="flex-1 overflow-auto min-w-0">
@@ -114,7 +105,7 @@ export default function AppLayout() {
             )}
           </main>
         </div>
-      </HomepageContext.Provider>
+      </SettingsContext.Provider>
     </SidebarContext.Provider>
   );
 }

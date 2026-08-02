@@ -12,6 +12,7 @@ import type { BrowseFile } from './localStoreService.js';
 import { extractZip } from './zipBuilder.js';
 import { getSyncKey, getAllServices } from './configService.js';
 import { emit } from './liveEvents.js';
+import { refreshLastUpdated } from './lastUpdatedService.js';
 
 const gunzipAsync = promisify(gunzip);
 const INDIVIDUAL_CONCURRENCY = 10;
@@ -553,7 +554,10 @@ async function executeSync(
     if (otherRootFiles.length > 0) {
       emit('root', { files: otherRootFiles, ts });
     }
-    if (updatedFolders.has('config')) emit('config', { ts });
+    if (updatedFolders.has('config')) {
+      emit('config', { ts });
+      void refreshLastUpdated(); // re-read file mtimes set by utimes() during sync
+    }
     if (updatedFolders.has('dest'))   emit('dest',   { ts });
 
     return stats;

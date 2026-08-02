@@ -36,12 +36,11 @@ Azure Traffic Manager polls these health endpoints from multiple PoPs. When all 
 
 ### BTP Homepage
 
-- **Configurable navigation hub** at `/home` — organise BTP subaccounts into tabs and directories; one column per subaccount, one row per service; the active tab is reflected in the URL as `/home/{tab}` for bookmarking and sharing
-- **Named URL templates** — define service URL patterns once (e.g. `launchpad`, `bas`, `hana`, `int`) with `{placeholder}` substitution; subaccounts reference templates by name and supply their own values (`subdomain`, `orgId`, `spaces`, etc.)
-- **Cockpit dropdown** — the built-in `cockpit` template generates a deep per-space dropdown covering Service Marketplace, Instances & Subscriptions, Spaces, Destinations, and Users; no manual URL construction required
-- **Sidebar menus** — configurable link groups (e.g. Security, Resources) with optional `restricted` flag to hide sensitive links from unauthenticated users
-- **In-app JSON editor** — **Edit** (pencil) button in the topbar (logged-in users; admins only for saving) opens a live-preview editor with change history; edits are saved to `{LOCAL_STORE_DIR}/homepage.json` and immediately applied
-- **Config page** (`/config`) — manage subaccounts (`subaccounts.json`), tab/group assignments (`tabs.json`), and extra menus; **Refresh** fetches live subaccount metadata from the BTP CLI REST API and CF API using `CF_USERNAME`/`CF_PASSWORD`, merges with local edits, and populates CF org, spaces, subscriptions, and service instances per subaccount; a progress bar updates via SSE during the refresh (can take 30–90 s for large accounts with many subaccounts)
+- **Configurable navigation hub** at `/home` — organise BTP subaccounts into tabs and group sections; tab structure is driven by `tabs.json`, subaccount columns by `subaccounts.json`, cockpit menu by `cockpit-menu.json`, and main subscription rows + sidebar menus by `settings.json`; the active tab is reflected in the URL as `/home/{tab}` for bookmarking and sharing
+- **Cockpit dropdown** — the cockpit navigation tree is defined in `server/config/cockpit-menu.json` with `{placeholder}` substitution (`{cockpitRegion}`, `{globalAccountGUID}`, `{subaccountId}`, `{subdomain}`, `{orgId}`) and `repeatOn: "spaces"` expansion for per-space sub-menus; no manual URL construction required
+- **Main subscriptions & More** — `settings.homepage.mainSubscriptions` controls which subscription rows appear directly on the home page; subscriptions present in the subaccount but not in the list appear in a **More** dropdown per column
+- **Sidebar menus from `settings.json`** — configurable link groups (`settings.menus`) drive the sidebar nav items below the main pages; each menu entry has a text label, a Lucide icon name, and submenus with `public: true/false` to control visibility before login; `GET /api/settings` is public so menus load before authentication
+- **Config page** (`/config`) — four tabs: **Subaccounts** (manage `subaccounts.json`, run Refresh from BTP CLI + CF API, drag-reorder, SSE progress bar), **Tabs / Groups** (manage `tabs.json` with section editors for subaccountGroup / banner / table), **Settings** (manage `settings.json` — cockpit IDP/host, main subscriptions, and sidebar menus with drag-reorder and a save-status banner), and **Change Log** (audit trail for all config writes); **Import** button does a smart per-file existence check and shows a confirmation summary before overwriting; every save and import is diffed and appended to `changelog.md`
 
 ### BTP Status Page
 
@@ -255,6 +254,38 @@ The file is also editable in-app via the **Edit** (pencil) button in the topbar 
 ```
 
 See `sample/homepage.json` for a full example covering multiple global accounts, directories, and all supported service templates.
+
+### settings.json — Cockpit, Subscriptions, and Sidebar Menus
+
+`{LOCAL_STORE_DIR}/config/settings.json` (falls back to `server/config/default-settings.json`). Managed via **Config → Settings**.
+
+```json
+{
+  "homepage": {
+    "cockpit": { "idp": "sap.default", "host": "amer.cockpit.btp.cloud.sap" },
+    "mainSubscriptions": [
+      { "name": "SAP Business Application Studio", "alias": "BAS" },
+      { "name": "SAP Integration Suite", "alias": "IS" }
+    ]
+  },
+  "menus": [
+    {
+      "text": "Resources",
+      "icon": "book-open-text",
+      "submenus": [
+        { "text": "SAP BTP What's New", "url": "https://help.sap.com/whats-new/...", "public": true }
+      ]
+    }
+  ]
+}
+```
+
+| Field | Description |
+|-------|-------------|
+| `homepage.cockpit.idp` | SAP IAS identity provider alias used in cockpit deep-links |
+| `homepage.cockpit.host` | Cockpit hostname (e.g. `amer.cockpit.btp.cloud.sap`) |
+| `homepage.mainSubscriptions` | Ordered list of subscriptions shown as rows on the Home page; others appear in a **More** dropdown; `alias` is shown as the link label |
+| `menus` | Sidebar link groups; `icon` is a Lucide icon name (kebab-case); `submenus[].public: true` shows the link to unauthenticated users |
 
 ### tabs.json — Tab Sections Configuration
 

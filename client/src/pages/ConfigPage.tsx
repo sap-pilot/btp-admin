@@ -1,43 +1,53 @@
 import { useEffect, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router';
 import { Download, PanelLeft, Upload } from 'lucide-react';
-import { useSidebar } from '@/components/AppLayout';
+import { useSidebar, useSettings } from '@/components/AppLayout';
 import SubaccountsTable, { type SubaccountEntry, type RefreshProgress } from '@/components/config/SubaccountsTable';
 import SubaccountDetailModal from '@/components/config/SubaccountDetailModal';
 import TabsTable, { type TabEntry } from '@/components/config/TabsTable';
+import SettingsPanel, { type SettingsData } from '@/components/config/SettingsPanel';
 
-type Tab = 'subaccounts' | 'tabs' | 'menus' | 'settings' | 'changelog';
-const VALID_TABS = new Set<Tab>(['subaccounts', 'tabs', 'menus', 'settings', 'changelog']);
+type Tab = 'subaccounts' | 'tabs' | 'settings' | 'changelog';
+const VALID_TABS = new Set<Tab>(['subaccounts', 'tabs', 'settings', 'changelog']);
 
 export default function ConfigPage() {
   const { tab: tabParam } = useParams<{ tab: string }>();
   const navigate          = useNavigate();
   const { toggle }        = useSidebar();
+  const { refreshSettings } = useSettings();
   const activeTab: Tab    = VALID_TABS.has(tabParam as Tab) ? (tabParam as Tab) : 'subaccounts';
 
   // Subaccounts state
-  const [sasData, setSasData]         = useState<SubaccountEntry[]>([]);
-  const [originalSas, setOriginalSas] = useState<SubaccountEntry[]>([]);
-  const [isSasDirty, setIsSasDirty]   = useState(false);
-  const [isRefreshing, setIsRefreshing] = useState(false);
-  const [isSavingSas, setIsSavingSas] = useState(false);
+  const [sasData,        setSasData]       = useState<SubaccountEntry[]>([]);
+  const [originalSas,    setOriginalSas]   = useState<SubaccountEntry[]>([]);
+  const [isSasDirty,     setIsSasDirty]   = useState(false);
+  const [isRefreshing,   setIsRefreshing] = useState(false);
+  const [isSavingSas,    setIsSavingSas]  = useState(false);
   const [refreshProgress, setRefreshProgress] = useState<RefreshProgress | null>(null);
-  const [selectedSa, setSelectedSa]   = useState<SubaccountEntry | null>(null);
+  const [selectedSa,     setSelectedSa]   = useState<SubaccountEntry | null>(null);
   const progressTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
   // Tabs state
-  const [tabsData, setTabsData]         = useState<TabEntry[]>([]);
-  const [originalTabs, setOriginalTabs] = useState<TabEntry[]>([]);
-  const [isTabsDirty, setIsTabsDirty]   = useState(false);
-  const [isSavingTabs, setIsSavingTabs] = useState(false);
-  const [tabsSaveStatus, setTabsSaveStatus] = useState<{ message: string; ok: boolean } | null>(null);
-  const tabsSaveTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const [tabsData,        setTabsData]        = useState<TabEntry[]>([]);
+  const [originalTabs,    setOriginalTabs]    = useState<TabEntry[]>([]);
+  const [isTabsDirty,     setIsTabsDirty]    = useState(false);
+  const [isSavingTabs,    setIsSavingTabs]   = useState(false);
+  const [tabsSaveStatus,  setTabsSaveStatus] = useState<{ message: string; ok: boolean } | null>(null);
+  const tabsSaveTimerRef  = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
-  // Changelog state (lazy-loaded on first visit)
-  const [changelog, setChangelog]          = useState<string | null>(null);
+  // Settings state
+  const [settingsData,      setSettingsData]     = useState<SettingsData | null>(null);
+  const [originalSettings,  setOriginalSettings] = useState<SettingsData | null>(null);
+  const [isSettingsDirty,   setIsSettingsDirty]  = useState(false);
+  const [isSavingSettings,  setIsSavingSettings] = useState(false);
+  const [settingsSaveStatus, setSettingsSaveStatus] = useState<{ message: string; ok: boolean } | null>(null);
+  const settingsSaveTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+
+  // Changelog state (lazy-loaded)
+  const [changelog,        setChangelog]      = useState<string | null>(null);
   const [isLoadingChangelog, setIsLoadingCl] = useState(false);
 
-  const [error, setError]           = useState('');
+  const [error,       setError]       = useState('');
   const [isImporting, setIsImporting] = useState(false);
   const importRef = useRef<HTMLInputElement>(null);
 
@@ -48,6 +58,13 @@ export default function ConfigPage() {
       .then(text => setChangelog(text))
       .catch(() => setChangelog(''))
       .finally(() => setIsLoadingCl(false));
+  }
+
+  function fetchSettings() {
+    return fetch('/api/settings')
+      .then(r => r.json() as Promise<{ ok: boolean; data: SettingsData }>)
+      .then(({ data }) => { setSettingsData(data); setOriginalSettings(data); })
+      .catch(() => setError('Failed to load settings'));
   }
 
   useEffect(() => {
@@ -64,14 +81,20 @@ export default function ConfigPage() {
       .then(r => r.json() as Promise<{ ok: boolean; data: TabEntry[] }>)
       .then(({ data }) => { setTabsData(data); setOriginalTabs(data); })
       .catch(() => setError('Failed to load tabs'));
-  }, []);
 
-  const configStateRef = useRef({ sasDirty: false, tabsDirty: false, busy: false, tab: 'subaccounts' as Tab });
+    void fetchSettings();
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const configStateRef = useRef({
+    sasDirty: false, tabsDirty: false, settingsDirty: false,
+    busy: false, tab: 'subaccounts' as Tab,
+  });
   configStateRef.current = {
-    sasDirty:  isSasDirty,
-    tabsDirty: isTabsDirty,
-    busy:      isRefreshing || isSavingSas || isSavingTabs || isImporting,
-    tab:       activeTab,
+    sasDirty:      isSasDirty,
+    tabsDirty:     isTabsDirty,
+    settingsDirty: isSettingsDirty,
+    busy:          isRefreshing || isSavingSas || isSavingTabs || isSavingSettings || isImporting,
+    tab:           activeTab,
   };
 
   useEffect(() => {
@@ -93,7 +116,7 @@ export default function ConfigPage() {
         return;
       }
 
-      const { sasDirty, tabsDirty, busy, tab: curTab } = configStateRef.current;
+      const { sasDirty, tabsDirty, settingsDirty, busy, tab: curTab } = configStateRef.current;
       if (busy) return;
       if (!sasDirty) {
         void fetch('/api/config/subaccounts')
@@ -107,12 +130,17 @@ export default function ConfigPage() {
           .then(({ ok, data: d }) => { if (ok) { setTabsData(d); setOriginalTabs(d); } })
           .catch(() => {});
       }
+      if (!settingsDirty) {
+        void fetchSettings();
+      }
       if (curTab === 'changelog') fetchChangelog();
     });
     return () => es.close();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   function goTab(t: Tab) { navigate(`/config/${t}`, { replace: true }); }
+
+  // ── Subaccounts handlers ──────────────────────────────────────────────────────
 
   function handleSasChange(data: SubaccountEntry[]) { setSasData(data); setIsSasDirty(true); }
 
@@ -167,7 +195,7 @@ export default function ConfigPage() {
       setOriginalSas(sasData);
       setIsSasDirty(false);
       clearTimeout(progressTimerRef.current);
-      setRefreshProgress({ pct: 100, message: 'Saved successfully', error: null });
+      setRefreshProgress({ pct: 100, message: 'Saved', error: null });
       progressTimerRef.current = setTimeout(
         () => setRefreshProgress(prev => (prev?.error || prev?.warning ? prev : null)),
         3000,
@@ -179,6 +207,8 @@ export default function ConfigPage() {
       setIsSavingSas(false);
     }
   }
+
+  // ── Tabs handlers ─────────────────────────────────────────────────────────────
 
   function handleTabsChange(data: TabEntry[]) { setTabsData(data); setIsTabsDirty(true); }
 
@@ -204,7 +234,7 @@ export default function ConfigPage() {
       if (!json.ok) throw new Error(json.error ?? 'Save failed');
       setOriginalTabs(tabsData);
       setIsTabsDirty(false);
-      setTabsSaveStatus({ message: 'Saved successfully', ok: true });
+      setTabsSaveStatus({ message: 'Saved!', ok: true });
       tabsSaveTimerRef.current = setTimeout(() => setTabsSaveStatus(null), 3000);
     } catch (err) {
       setTabsSaveStatus({ message: err instanceof Error ? err.message : 'Save failed', ok: false });
@@ -213,38 +243,129 @@ export default function ConfigPage() {
     }
   }
 
+  // ── Settings handlers ─────────────────────────────────────────────────────────
+
+  function handleSettingsChange(data: SettingsData) {
+    setSettingsData(data);
+    setIsSettingsDirty(true);
+  }
+
+  function handleSettingsReset() {
+    if (isSettingsDirty && !window.confirm('Discard unsaved changes?')) return;
+    setSettingsData(originalSettings);
+    setIsSettingsDirty(false);
+  }
+
+  async function handleSettingsSave() {
+    if (!settingsData) return;
+    clearTimeout(settingsSaveTimerRef.current);
+    setIsSavingSettings(true);
+    try {
+      const res  = await fetch('/api/settings/save', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ data: settingsData }),
+      });
+      const json = await res.json() as { ok: boolean; error?: string };
+      if (!json.ok) throw new Error(json.error ?? 'Save failed');
+      setOriginalSettings(settingsData);
+      setIsSettingsDirty(false);
+      refreshSettings();
+      setSettingsSaveStatus({ message: 'New settings saved', ok: true });
+      settingsSaveTimerRef.current = setTimeout(() => setSettingsSaveStatus(null), 3000);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Save failed';
+      setSettingsSaveStatus({ message: `Settings not saved due to error: ${msg}`, ok: false });
+    } finally {
+      setIsSavingSettings(false);
+    }
+  }
+
+  // ── Import/Export ─────────────────────────────────────────────────────────────
+
   async function handleImport(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
     if (!file) return;
-    if (!window.confirm('Import will overwrite all local config files. Continue?')) {
-      e.target.value = '';
+    e.target.value = '';
+
+    // Parse the file first
+    let data: Record<string, unknown>;
+    try {
+      data = JSON.parse(await file.text()) as Record<string, unknown>;
+    } catch {
+      setError('Invalid JSON file');
       return;
     }
+
+    // Identify which recognised keys are in the import
+    const hasSubaccounts = Array.isArray(data['subaccounts']);
+    const hasTabs        = Array.isArray(data['tabs']);
+    const hasSettings    = !!data['settings'] && typeof data['settings'] === 'object' && !Array.isArray(data['settings']);
+    if (!hasSubaccounts && !hasTabs && !hasSettings) {
+      setError('Import file contains no recognised config keys (subaccounts, tabs, settings)');
+      return;
+    }
+
+    // Check which local files exist
+    let localExists: { subaccounts: boolean; tabs: boolean; settings: boolean };
+    try {
+      const r = await fetch('/api/config/local-exists');
+      const j = await r.json() as { ok: boolean; data: typeof localExists };
+      if (!j.ok) throw new Error();
+      localExists = j.data;
+    } catch {
+      setError('Failed to check local config status');
+      return;
+    }
+
+    // Build confirmation message if any local config will be overwritten
+    const willOverwrite: string[] = [];
+    if (hasSubaccounts && localExists.subaccounts) willOverwrite.push('Subaccounts');
+    if (hasTabs        && localExists.tabs)        willOverwrite.push('Tabs');
+    if (hasSettings    && localExists.settings)    willOverwrite.push('Settings');
+
+    if (willOverwrite.length > 0) {
+      // Build a summary of what's in the file
+      const lines: string[] = [`Local config exists for: ${willOverwrite.join(', ')}.`, ''];
+      if (hasSubaccounts) lines.push(`Subaccounts: ${(data['subaccounts'] as unknown[]).length} entries`);
+      if (hasTabs) {
+        const tabs = data['tabs'] as Array<{ sections?: unknown[] }>;
+        const totalSections = tabs.reduce((n, t) => n + (Array.isArray(t.sections) ? t.sections.length : 0), 0);
+        lines.push(`Tabs: ${tabs.length} tabs / ${totalSections} sections`);
+      }
+      if (hasSettings) lines.push('Settings: homepage + menus');
+      lines.push('', 'Importing will overwrite and write differences to Change Log. Continue?');
+      if (!window.confirm(lines.join('\n'))) return;
+    }
+
     setIsImporting(true);
     setError('');
     try {
-      const text = await file.text();
-      const data = JSON.parse(text) as Record<string, unknown>;
       const res  = await fetch('/api/config/import', {
-        method: 'POST',
+        method:  'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(data),
+        body:    JSON.stringify(data),
       });
       const json = await res.json() as { ok: boolean; error?: string };
       if (!json.ok) throw new Error(json.error ?? 'Import failed');
+
+      // Reload all affected data
       const [sasRes, tabsRes] = await Promise.all([
         fetch('/api/config/subaccounts').then(r => r.json() as Promise<{ ok: boolean; data: SubaccountEntry[] }>),
         fetch('/api/config/tabs').then(r => r.json() as Promise<{ ok: boolean; data: TabEntry[] }>),
       ]);
-      setSasData(sasRes.data);  setOriginalSas(sasRes.data);  setIsSasDirty(false);
-      setTabsData(tabsRes.data); setOriginalTabs(tabsRes.data); setIsTabsDirty(false);
+      if (sasRes.ok)  { setSasData(sasRes.data);   setOriginalSas(sasRes.data);   setIsSasDirty(false); }
+      if (tabsRes.ok) { setTabsData(tabsRes.data);  setOriginalTabs(tabsRes.data); setIsTabsDirty(false); }
+      void fetchSettings(); setIsSettingsDirty(false); refreshSettings();
+      if (activeTab === 'changelog') fetchChangelog();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Import failed');
     } finally {
       setIsImporting(false);
-      e.target.value = '';
     }
   }
+
+  // ── Render ────────────────────────────────────────────────────────────────────
 
   const tabCls = (t: Tab) =>
     `px-4 py-2 text-sm transition-colors border-b-2 ${
@@ -253,7 +374,7 @@ export default function ConfigPage() {
         : 'border-transparent text-muted-foreground hover:text-foreground'
     }`;
 
-  const totalSas  = sasData.length;
+  const totalSas    = sasData.length;
   const totalGroups = tabsData.reduce((n, t) => n + t.sections.length, 0);
 
   return (
@@ -302,9 +423,6 @@ export default function ConfigPage() {
           Tabs
           {totalGroups > 0 && <span className="ml-1.5 text-[10px] text-muted-foreground">({totalGroups})</span>}
         </button>
-        <button className={tabCls('menus')} onClick={() => goTab('menus')}>
-          Menu
-        </button>
         <button className={tabCls('settings')} onClick={() => goTab('settings')}>
           Settings
         </button>
@@ -313,7 +431,7 @@ export default function ConfigPage() {
         </button>
       </div>
 
-      {/* Error banner — save / import / load errors only */}
+      {/* Error banner */}
       {error && (
         <div className="shrink-0 px-4 py-2 bg-destructive/10 text-destructive text-xs border-b border-destructive/20">
           {error}
@@ -347,15 +465,19 @@ export default function ConfigPage() {
             saveStatus={tabsSaveStatus}
           />
         )}
-        {activeTab === 'menus' && (
-          <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
-            Menu configuration — coming soon
-          </div>
+        {activeTab === 'settings' && settingsData && (
+          <SettingsPanel
+            data={settingsData}
+            onChange={handleSettingsChange}
+            isDirty={isSettingsDirty}
+            isSaving={isSavingSettings}
+            onReset={handleSettingsReset}
+            onSave={() => void handleSettingsSave()}
+            saveStatus={settingsSaveStatus}
+          />
         )}
-        {activeTab === 'settings' && (
-          <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
-            Settings — coming soon
-          </div>
+        {activeTab === 'settings' && !settingsData && (
+          <div className="flex h-full items-center justify-center text-sm text-muted-foreground">Loading…</div>
         )}
         {activeTab === 'changelog' && (
           <div className="flex flex-col h-full">
@@ -392,15 +514,9 @@ function renderConfigChangelog(text: string): React.ReactNode {
     if (line.startsWith('## ')) {
       return <div key={i} className="font-bold mt-4 mb-1 text-foreground first:mt-0">{line.slice(3)}</div>;
     }
-    if (line.startsWith('+ ')) {
-      return <div key={i} className="text-green-600 dark:text-green-400">{line}</div>;
-    }
-    if (line.startsWith('- ')) {
-      return <div key={i} className="text-red-500 dark:text-red-400">{line}</div>;
-    }
-    if (line.startsWith('~ ')) {
-      return <div key={i} className="text-amber-600 dark:text-amber-400">{line}</div>;
-    }
+    if (line.startsWith('+ ')) return <div key={i} className="text-green-600 dark:text-green-400">{line}</div>;
+    if (line.startsWith('- ')) return <div key={i} className="text-red-500 dark:text-red-400">{line}</div>;
+    if (line.startsWith('~ ')) return <div key={i} className="text-amber-600 dark:text-amber-400">{line}</div>;
     if (line.startsWith('    ')) {
       const arrowIdx = line.indexOf(' → ');
       if (arrowIdx !== -1) {
@@ -414,6 +530,6 @@ function renderConfigChangelog(text: string): React.ReactNode {
       }
       return <div key={i} className="pl-4 text-muted-foreground">{line}</div>;
     }
-    return <div key={i} className="text-muted-foreground">{line || ' '}</div>;
+    return <div key={i} className="text-muted-foreground">{line || ' '}</div>;
   });
 }

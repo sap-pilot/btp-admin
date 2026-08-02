@@ -1,0 +1,140 @@
+{
+    "name": "Cockpit",
+    "url": "https://{homepage.cockpit.host}/cockpit/?idp={homepage.cockpit.idp}#/globalaccount/{globalAccountGUID}/subaccount/{subaccountId}/subaccountoverview",
+    "submenus": [
+        {
+            "name": "Service Market Place",
+            "url": "https://{cockpitRegion}.cockpit.btp.cloud.sap/cockpit/?idp={homepage.cockpit.idp}#/globalaccount/{globalAccountGUID}/subaccount/{subaccountId}/service-marketplace"
+        },
+        {
+            "name": "Instance and Subscriptions",
+            "url": "https://{cockpitRegion}.cockpit.btp.cloud.sap/cockpit/?idp={homepage.cockpit.idp}#/globalaccount/{globalAccountGUID}/subaccount/{subaccountId}/service-instances"
+        },
+        {
+            "name": "-"
+        },
+        {
+            "name": "Spaces",
+            "url": "https://{cockpitRegion}.cockpit.btp.cloud.sap/cockpit/?idp={homepage.cockpit.idp}#/globalaccount/{globalAccountGUID}/subaccount/{subaccountId}/spaces",
+            "submenus": [
+                {
+                    "name": "{spaceName}",
+                    "repeatOn": "spaces",
+                    "url": "https://{cockpitRegion}.cockpit.btp.cloud.sap/cockpit/?idp={homepage.cockpit.idp}#/globalaccount/{globalAccountGUID}/subaccount/{subaccountId}/org/{orgId}/space/{spaceId}/applications",
+                    "submenus": [
+                        {
+                            "name": "Applications",
+                            "url": "https://{cockpitRegion}.cockpit.btp.cloud.sap/cockpit/?idp={homepage.cockpit.idp}#/globalaccount/{globalAccountGUID}/subaccount/{subaccountId}/org/{orgId}/space/{spaceId}/applications"
+                        },
+                        {
+                            "name": "-"
+                        },
+                        {
+                            "name": "Space Destinations",
+                            "url": "https://{cockpitRegion}.cockpit.btp.cloud.sap/cockpit/?idp={homepage.cockpit.idp}#/globalaccount/{globalAccountGUID}/subaccount/{subaccountId}/org/{orgId}/space/{spaceId}/service/52e988db-7b8b-47fd-993b-81224bacbf61/instance/{destInstanceId}/destinations"
+                        },
+                        {
+                            "name": "-"
+                        },
+                        {
+                            "name": "Service Marketplace",
+                            "url": "https://{cockpitRegion}.cockpit.btp.cloud.sap/cockpit/?idp={homepage.cockpit.idp}#/globalaccount/{globalAccountGUID}/subaccount/{subaccountId}/org/{orgId}/space/{spaceId}/service-marketplace"
+                        },
+                        {
+                            "name": "Service Instances",
+                            "url": "https://{cockpitRegion}.cockpit.btp.cloud.sap/cockpit/?idp={homepage.cockpit.idp}#/globalaccount/{globalAccountGUID}/subaccount/{subaccountId}/org/{orgId}/space/{spaceId}/service-instances"
+                        },
+                        {
+                            "name": "-"
+                        },
+                        {
+                            "name": "SAP HANA Cloud",
+                            "url": "https://{cockpitRegion}.cockpit.btp.cloud.sap/cockpit/?idp={homepage.cockpit.idp}#/globalaccount/{globalAccountGUID}/subaccount/{subaccountId}/org/{orgId}/space/{spaceId}/hanaCloud"
+                        },
+                        {
+                            "name": "-"
+                        },
+                        {
+                            "name": "Routes",
+                            "url": "https://{cockpitRegion}.cockpit.btp.cloud.sap/cockpit/?idp={homepage.cockpit.idp}#/globalaccount/{globalAccountGUID}/subaccount/{subaccountId}/org/{orgId}/space/{spaceId}/routes"
+                        },
+                        {
+                            "name": "-"
+                        },
+                        {
+                            "name": "Security Groups",
+                            "url": "https://{cockpitRegion}.cockpit.btp.cloud.sap/cockpit/?idp={homepage.cockpit.idp}#/globalaccount/{globalAccountGUID}/subaccount/{subaccountId}/org/{orgId}/space/{spaceId}/cfsecuritygroups"
+                        },
+                        {
+                            "name": "Events",
+                            "url": "https://{cockpitRegion}.cockpit.btp.cloud.sap/cockpit/?idp={homepage.cockpit.idp}#/globalaccount/{globalAccountGUID}/subaccount/{subaccountId}/org/{orgId}/space/{spaceId}/spaceevents"
+                        },
+                        {
+                            "name": "-"
+                        },
+                        {
+                            "name": "Members",
+                            "url": "https://{cockpitRegion}.cockpit.btp.cloud.sap/cockpit/?idp={homepage.cockpit.idp}#/globalaccount/{globalAccountGUID}/subaccount/{subaccountId}/org/{orgId}/space/{spaceId}/users"
+                        }
+                    ]
+                }
+            ]
+            
+        },
+        {
+            "name": "-"
+        },
+        {
+            "name": "Org Members",
+            "url": "https://{cockpitRegion}.cockpit.btp.cloud.sap/cockpit/?idp={homepage.cockpit.idp}#/globalaccount/{globalAccountGUID}/subaccount/{subaccountId}/users"
+        },
+        {
+            "name": "-"
+        },
+        {
+            "name": "HTML5 Apps",
+            "url": "https://{cockpitRegion}.cockpit.btp.cloud.sap/cockpit/?idp={homepage.cockpit.idp}#/globalaccount/{globalAccountGUID}/subaccount/{subaccountId}/html5applications"
+        },
+        {
+            "name": "-"
+        },
+        {
+            "name": "Destinations",
+            "url": "https://{cockpitRegion}.cockpit.btp.cloud.sap/cockpit/?idp={homepage.cockpit.idp}#/globalaccount/{globalAccountGUID}/subaccount/{subaccountId}/destinations"
+        },
+        {
+            "name": "Cloud Connectors",
+            "url": "https://{cockpitRegion}.cockpit.btp.cloud.sap/cockpit/?idp={homepage.cockpit.idp}#/globalaccount/{globalAccountGUID}/subaccount/{subaccountId}/connectivity"
+        },
+        {
+            "name": "-"
+        },
+        {
+            "name": "Users",
+            "url": "https://{cockpitRegion}.cockpit.btp.cloud.sap/cockpit/?idp={homepage.cockpit.idp}#/globalaccount/{globalAccountGUID}/subaccount/{subaccountId}/usersOverview"
+        },
+        {
+            "name": "Role Collections",
+            "url": "https://{cockpitRegion}.cockpit.btp.cloud.sap/cockpit/?idp={homepage.cockpit.idp}#/globalaccount/{globalAccountGUID}/subaccount/{subaccountId}/rolecollections"
+        },
+        {
+            "name": "Roles",
+            "url": "https://{cockpitRegion}.cockpit.btp.cloud.sap/cockpit/?idp={homepage.cockpit.idp}#/globalaccount/{globalAccountGUID}/subaccount/{subaccountId}/roles"
+        },
+        {
+            "name": "Trust Configuration",
+            "url": "https://{cockpitRegion}.cockpit.btp.cloud.sap/cockpit/?idp={homepage.cockpit.idp}#/globalaccount/{globalAccountGUID}/subaccount/{subaccountId}/trustConfiguration"
+        },
+        {
+            "name": "-"
+        },
+        {
+            "name": "Entitlements",
+            "url": "https://{cockpitRegion}.cockpit.btp.cloud.sap/cockpit/?idp={homepage.cockpit.idp}#/globalaccount/{globalAccountGUID}/subaccount/{subaccountId}/entitlements"
+        },
+        {
+            "name": "Usage Analytics",
+            "url": "https://{cockpitRegion}.cockpit.btp.cloud.sap/cockpit/?idp={homepage.cockpit.idp}#/globalaccount/{globalAccountGUID}/subaccount/{subaccountId}/subaccountUsageAnalytics"
+        }
+    ]
+}

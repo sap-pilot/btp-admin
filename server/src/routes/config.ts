@@ -1,10 +1,13 @@
+import { readFileSync } from 'node:fs';
 import { Router } from 'express';
 import { requireAdmin } from '../middleware/requireAuth.js';
 import type { AuthRequest } from '../middleware/requireAuth.js';
-import { readSubaccounts, refreshSubaccounts, saveSubaccounts, exportConfig, importConfig } from '../services/subaccountsService.js';
+import { readSubaccounts, refreshSubaccounts, saveSubaccounts, exportConfig, subaccountsFileExists, importSubaccounts } from '../services/subaccountsService.js';
 import type { SubaccountEntry } from '../services/subaccountsService.js';
-import { readTabs, saveTabs } from '../services/tabsService.js';
+import { readTabs, saveTabs, tabsFileExists, importTabs } from '../services/tabsService.js';
 import type { TabEntry } from '../services/tabsService.js';
+import { settingsFileExists, importSettings } from '../services/settingsService.js';
+import { getLastUpdated } from '../services/lastUpdatedService.js';
 import { readConfigChangelog } from '../services/configChangelogService.js';
 
 const router = Router();
@@ -67,6 +70,17 @@ router.get('/export', requireAdmin, async (_req, res, next) => {
   } catch (err) { next(err); }
 });
 
+router.get('/local-exists', requireAdmin, async (_req, res, next) => {
+  try {
+    const [subaccounts, tabs, settings] = await Promise.all([
+      subaccountsFileExists(),
+      tabsFileExists(),
+      settingsFileExists(),
+    ]);
+    res.json({ ok: true, data: { subaccounts, tabs, settings } });
+  } catch (err) { next(err); }
+});
+
 router.post('/import', requireAdmin, async (req, res, next) => {
   try {
     const body = req.body as unknown;
@@ -74,9 +88,32 @@ router.post('/import', requireAdmin, async (req, res, next) => {
       res.status(400).json({ ok: false, error: 'Expected a JSON object' });
       return;
     }
-    await importConfig(body as Record<string, unknown>);
+    const data = body as Record<string, unknown>;
+    const user = reqUser(req);
+
+    if (Array.isArray(data['subaccounts'])) {
+      await importSubaccounts(data['subaccounts'] as SubaccountEntry[], user);
+    }
+    if (Array.isArray(data['tabs'])) {
+      await importTabs(data['tabs'], user);
+    }
+    if (data['settings'] && typeof data['settings'] === 'object' && !Array.isArray(data['settings'])) {
+      await importSettings(data['settings'], user);
+    }
+
     res.json({ ok: true });
   } catch (err) { next(err); }
+});
+
+router.get('/last-updated', (_req, res) => {
+  res.json({ ok: true, ts: getLastUpdated() });
+});
+
+router.get('/cockpit-menu', (_req, res) => {
+  try {
+    const raw = readFileSync('./config/cockpit-menu.json', 'utf-8');
+    res.json(JSON.parse(raw));
+  } catch { res.json(null); }
 });
 
 router.get('/changelog', requireAdmin, async (_req, res, next) => {

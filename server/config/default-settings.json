@@ -1,0 +1,46 @@
+{
+    "homepage": {
+        "cockpit":{
+            "idp": "sap.default",
+            "host": "amer.cockpit.btp.cloud.sap"
+        },
+        "mainSubscriptions": [
+            {"name":"Web access for ABAP","alias":"ABAP"},
+            {"name":"SAP Asset Performance Management","alias":"APM"},
+            {"name":"Audit Log Viewer Service","alias":"Audit Log"},
+            {"name":"SAP Business Application Studio","alias":"BAS"},
+            {"name":"Content Agent Service","alias":"Content Agent"},
+            {"name":"Custom Domain Service","alias":"Custom Domain"},
+            {"name":"Data Privacy Integration","alias":"Data Privacy"},
+            {"name":"Document Management Service","alias":"DMS"},
+            {"name":"Event Mesh"},
+            {"name":"SAP HANA Cloud","alias":"HANA Cloud"},
+            {"name":"SAP Intelligent Asset Management","alias":"IAM"},
+            {"name":"Integration Suite"},
+            {"name":"SAP IoT","alias":"IoT"},
+            {"name":"Master Data Integration (Orchestration)","alias":"MDI"},
+            {"name":"SAP Build Process Automation","alias":"SBPA"},
+            {"name":"SAP Build Work Zone, standard edition","alias":"Work Zone"},
+            {"name":"Workflow Management"}
+        ]
+    },
+    "menus": [
+        {
+            "text":"Learning Resources",
+            "icon": "book-open-text",
+            "submenus": [
+                {"text":"BTP What's New","url":"https://help.sap.com/whats-new/cf0cb2cb149647329b5d02aa96303f56?locale=en-US","public":true},
+                {"text":"SAP Discovery Center","url":"https://discovery-center.cloud.sap/","public":true},
+                {"text":"SAP Learning Hub","url":"https://learning.sap.com/browse","public":true}
+            ]
+        },
+        {
+            "text":"Support & Operation",
+            "icon": "life-buoy",
+            "submenus":[
+                {"text":"SAP Cloud Status","url":"https://www.sap.com/about/trust-center/cloud-service-status.html","public":true},
+                {"text":"Report SAP Incident","url":"https://me.sap.com/servicessupport","public":true}
+            ]
+        }
+    ]
+}
