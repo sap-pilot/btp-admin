@@ -249,8 +249,8 @@ export function filenameTimestamp(filename: string): number {
 }
 
 /**
- * Lists all response files. Service files live in `resp/{folder}/` under LOCAL_STORE_DIR;
- * root-level files (e.g. homepage.json) live directly in LOCAL_STORE_DIR.
+ * Lists all local files for sync. Service files live in `resp/{folder}/`; conf files in `conf/`;
+ * dest files in `dest/{region}/{subdomain}/`; root-level files live directly in LOCAL_STORE_DIR.
  * Returns `{ [folder]: BrowseFile[] }` where folder `""` holds root files.
  * When `since` is provided, only files whose mtime >= since are returned.
  */
@@ -259,7 +259,7 @@ export async function browseResponseFiles(since?: number): Promise<Record<string
   const storeDir = config.LOCAL_STORE_DIR;
 
   try {
-    // Root-level files (e.g. homepage.json, homepage-changelog.md)
+    // Root-level files directly in LOCAL_STORE_DIR
     const rootEntries = await readdir(storeDir, { withFileTypes: true });
     const rootFiles: BrowseFile[] = [];
     for (const e of rootEntries) {
@@ -281,8 +281,8 @@ export async function browseResponseFiles(since?: number): Promise<Record<string
   }
 
   try {
-    // config/ directory — flat; files synced to consumers alongside root and resp/ files
-    const configDir = join(storeDir, 'config');
+    // conf/ directory — flat; files synced to consumers alongside root and resp/ files
+    const configDir = join(storeDir, 'conf');
     const configEntries = await readdir(configDir, { withFileTypes: true });
     const configFiles: BrowseFile[] = [];
     for (const e of configEntries) {
@@ -297,10 +297,10 @@ export async function browseResponseFiles(since?: number): Promise<Record<string
     }
     if (configFiles.length > 0) {
       configFiles.sort((a, b) => a.name.localeCompare(b.name));
-      result['config'] = configFiles;
+      result['conf'] = configFiles;
     }
   } catch {
-    // config/ doesn't exist yet
+    // conf/ doesn't exist yet
   }
 
   try {
@@ -379,7 +379,7 @@ export async function browseResponseFiles(since?: number): Promise<Record<string
   return result;
 }
 
-/** Read a root-level file directly from LOCAL_STORE_DIR (e.g. homepage.json). */
+/** Read a root-level file directly from LOCAL_STORE_DIR. */
 export async function readRootFile(filename: string): Promise<Buffer> {
   if (!/^[a-zA-Z0-9][a-zA-Z0-9_.-]*\.(json|md)$/.test(filename)) {
     throw new Error('Invalid root filename');
@@ -387,12 +387,21 @@ export async function readRootFile(filename: string): Promise<Buffer> {
   return readFile(join(config.LOCAL_STORE_DIR, filename));
 }
 
-/** Read a file from LOCAL_STORE_DIR/config/ (e.g. orgs.json). */
+/** Read a file from LOCAL_STORE_DIR/conf/ (json or md). */
 export async function readConfigFile(filename: string): Promise<Buffer> {
-  if (!/^[a-zA-Z0-9][a-zA-Z0-9_.-]*\.json$/.test(filename)) {
-    throw new Error('Invalid config filename');
+  if (!/^[a-zA-Z0-9][a-zA-Z0-9_.-]*\.(json|md)$/.test(filename)) {
+    throw new Error('Invalid conf filename');
   }
-  return readFile(join(config.LOCAL_STORE_DIR, 'config', filename));
+  return readFile(join(config.LOCAL_STORE_DIR, 'conf', filename));
+}
+
+/** Read a file from LOCAL_STORE_DIR/dest/{relPath} (e.g. us10/subdomain/name.json). */
+export async function readDestFile(relPath: string): Promise<Buffer> {
+  const parts = relPath.split('/');
+  if (parts.length === 0 || parts.some(p => p === '..' || p === '.' || p === '')) {
+    throw new Error('Invalid dest path');
+  }
+  return readFile(join(config.LOCAL_STORE_DIR, 'dest', relPath));
 }
 
 /**

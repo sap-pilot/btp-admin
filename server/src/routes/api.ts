@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { readRawResponseFile, readRootFile, readConfigFile, readResponseFile, readScreenshotFile, readConsoleLogFile, readContentFile, browseResponseFiles, formatBrowseT, parseBrowseT } from '../services/localStoreService.js';
+import { readRawResponseFile, readRootFile, readConfigFile, readDestFile, readResponseFile, readScreenshotFile, readConsoleLogFile, readContentFile, browseResponseFiles, formatBrowseT, parseBrowseT } from '../services/localStoreService.js';
 import { buildZip } from '../services/zipBuilder.js';
 import { syncFromRemote, handleDownloadTrigger, registerCallback, type SyncStats } from '../services/syncService.js';
 import { config } from '../config.js';
@@ -20,15 +20,12 @@ router.get('/info', (_req, res) => {
 });
 
 router.get('/events', (req, res) => {
-  const svc = typeof req.query['service'] === 'string' ? req.query['service'] : null;
-  const homepageOnly = req.query['homepage'] === '1';
-  const configOnly   = req.query['config']   === '1';
-  const destOnly     = req.query['dest']     === '1';
+  const svc        = typeof req.query['service'] === 'string' ? req.query['service'] : null;
+  const configOnly = req.query['config'] === '1';
+  const destOnly   = req.query['dest']   === '1';
 
   let topics: string[];
-  if (homepageOnly) {
-    topics = ['homepage'];
-  } else if (configOnly) {
+  if (configOnly) {
     topics = ['config', 'refresh-subaccounts'];
   } else if (destOnly) {
     topics = ['dest'];
@@ -75,6 +72,12 @@ router.post('/sync', requireAuth, async (req, res, next) => {
 
 router.post('/batch-download', requireSyncAuthOrOpen, async (req, res, next) => {
   try {
+    // XSUAA session without admin role cannot use batch-download (it exposes conf/ and dest/)
+    const bdSession = (req as AuthRequest).authSession;
+    if (bdSession && !bdSession.isAdmin) {
+      res.status(403).json({ error: 'Admin role required' });
+      return;
+    }
     const { paths } = req.body as { paths?: unknown };
     if (!Array.isArray(paths) || paths.length === 0) {
       res.status(400).json({ error: 'paths must be a non-empty array' });
@@ -109,9 +112,15 @@ router.post('/batch-download', requireSyncAuthOrOpen, async (req, res, next) => 
         if (slash === -1) {
           data = await readRootFile(p);
         } else {
-          const folder = p.slice(0, slash);
-          const filename = p.slice(slash + 1);
-          data = folder === 'config' ? await readConfigFile(filename) : await readRawResponseFile(folder, filename);
+          const folder   = p.slice(0, slash);
+          const rest     = p.slice(slash + 1);
+          if (folder === 'conf') {
+            data = await readConfigFile(rest);
+          } else if (folder === 'dest') {
+            data = await readDestFile(rest);
+          } else {
+            data = await readRawResponseFile(folder, rest);
+          }
         }
         entries.push({ name: p, data });
       } catch {
@@ -136,6 +145,12 @@ router.get('/download-trigger', requireSyncAuth, (req, res) => {
 
 router.get('/browse', requireSyncAuthOrOpen, async (req, res, next) => {
   try {
+    // XSUAA session without admin role cannot browse (response includes conf/ and dest/ keys)
+    const brSession = (req as AuthRequest).authSession;
+    if (brSession && !brSession.isAdmin) {
+      res.status(403).json({ error: 'Admin role required' });
+      return;
+    }
     const rawSince = req.query['since'];
     let sinceMs: number | undefined;
     if (typeof rawSince === 'string' && rawSince) {
@@ -172,6 +187,10 @@ router.get('/browse', requireSyncAuthOrOpen, async (req, res, next) => {
 
 router.get('/download', requireSyncAuth, async (req, res, next) => {
   try {
+    // authSession present → XSUAA session used (not peer HMAC); absent → peer or open
+    const dlSession = (req as AuthRequest).authSession;
+    const isAdmin   = !dlSession || dlSession.isAdmin;
+
     const rawPath = typeof req.query['path'] === 'string' ? req.query['path'] : '';
     if (!rawPath || rawPath.includes('..') || rawPath.startsWith('/') || rawPath.startsWith('\\')) {
       res.status(400).json({ error: 'Invalid path' });
@@ -179,32 +198,45 @@ router.get('/download', requireSyncAuth, async (req, res, next) => {
     }
     const slash = rawPath.indexOf('/');
     if (slash === -1) {
-      // Root file (e.g. homepage.json) — readRootFile validates the name
+      // Root file — admin only
+      if (!isAdmin) { res.status(403).json({ error: 'Admin role required' }); return; }
       const buf = await readRootFile(rawPath);
       res.type(rawPath.endsWith('.json') ? 'application/json' : 'text/plain').send(buf);
       return;
     }
-    const parts = rawPath.split('/');
-    if (parts.length !== 2 || !parts[0] || !parts[1]) {
-      res.status(400).json({ error: 'Path must be filename or folder/filename' });
+    const folder = rawPath.slice(0, slash);
+    const rest   = rawPath.slice(slash + 1);
+    if (!folder || !rest) {
+      res.status(400).json({ error: 'Invalid path' });
       return;
     }
-    const [folder, filename] = parts;
-    if (folder === 'config') {
-      const buf = await readConfigFile(filename);
-      res.type('application/json').send(buf);
-    } else if (filename.endsWith('.png')) {
-      const buf = await readScreenshotFile(folder, filename);
-      res.type('image/png').send(buf);
-    } else if (filename.endsWith('.log')) {
-      const buf = await readConsoleLogFile(folder, filename);
-      res.type('text/plain').send(buf);
-    } else if (filename.endsWith('.html')) {
-      const buf = await readContentFile(folder, filename);
-      res.type('text/plain').send(buf);
+    if (folder === 'conf') {
+      if (!isAdmin) { res.status(403).json({ error: 'Admin role required' }); return; }
+      const buf = await readConfigFile(rest);
+      res.type(rest.endsWith('.json') ? 'application/json' : 'text/plain').send(buf);
+    } else if (folder === 'dest') {
+      if (!isAdmin) { res.status(403).json({ error: 'Admin role required' }); return; }
+      const buf = await readDestFile(rest);
+      res.type(rest.endsWith('.png') ? 'image/png' : rest.endsWith('.md') ? 'text/plain' : 'application/json').send(buf);
     } else {
-      const data = await readResponseFile(folder, filename);
-      res.json(data);
+      // resp/{service}/filename — allowed for any authenticated user; single level only
+      if (rest.includes('/')) {
+        res.status(400).json({ error: 'Invalid path' });
+        return;
+      }
+      if (rest.endsWith('.png')) {
+        const buf = await readScreenshotFile(folder, rest);
+        res.type('image/png').send(buf);
+      } else if (rest.endsWith('.log')) {
+        const buf = await readConsoleLogFile(folder, rest);
+        res.type('text/plain').send(buf);
+      } else if (rest.endsWith('.html')) {
+        const buf = await readContentFile(folder, rest);
+        res.type('text/plain').send(buf);
+      } else {
+        const data = await readResponseFile(folder, rest);
+        res.json(data);
+      }
     }
   } catch (err) {
     next(err);

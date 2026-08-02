@@ -7,7 +7,7 @@ import { emit } from './liveEvents.js';
 import { appendConfigChangelog } from './configChangelogService.js';
 import { touchLastUpdated } from './lastUpdatedService.js';
 
-const CONFIG_DIR = join(config.LOCAL_STORE_DIR, 'config');
+const CONFIG_DIR = join(config.LOCAL_STORE_DIR, 'conf');
 const TABS_PATH  = join(CONFIG_DIR, 'tabs.json');
 
 export type BannerColor = 'transparent' | 'blue' | 'green' | 'yellow' | 'red' | 'purple';
@@ -52,7 +52,7 @@ async function writeTabs(data: TabEntry[]): Promise<void> {
   touchLastUpdated();
   notifyCallbacks();
   const ts = Date.now();
-  emit('root',   { files: ['config/tabs.json'], ts });
+  emit('root',   { files: ['conf/tabs.json'], ts });
   emit('config', { files: ['tabs.json'], ts });
   logger.info({ tabs: data.length }, 'tabs.json saved');
 }

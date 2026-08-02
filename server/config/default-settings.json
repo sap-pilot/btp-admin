@@ -26,7 +26,7 @@
     },
     "menus": [
         {
-            "text":"Learning Resources",
+            "text":"Resources",
             "icon": "book-open-text",
             "submenus": [
                 {"text":"BTP What's New","url":"https://help.sap.com/whats-new/cf0cb2cb149647329b5d02aa96303f56?locale=en-US","public":true},
@@ -35,7 +35,7 @@
             ]
         },
         {
-            "text":"Support & Operation",
+            "text":"Support",
             "icon": "life-buoy",
             "submenus":[
                 {"text":"SAP Cloud Status","url":"https://www.sap.com/about/trust-center/cloud-service-status.html","public":true},

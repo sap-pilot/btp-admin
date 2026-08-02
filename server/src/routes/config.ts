@@ -91,8 +91,16 @@ router.post('/import', requireAdmin, async (req, res, next) => {
     const data = body as Record<string, unknown>;
     const user = reqUser(req);
 
-    if (Array.isArray(data['subaccounts'])) {
-      await importSubaccounts(data['subaccounts'] as SubaccountEntry[], user);
+    // subaccounts.json is stored as { subaccounts: [...], globalAccounts: [...] }
+    // so the exported value may be that object rather than a bare array
+    const rawSa = data['subaccounts'];
+    const saList = Array.isArray(rawSa)
+      ? rawSa
+      : (rawSa && typeof rawSa === 'object' && Array.isArray((rawSa as Record<string, unknown>)['subaccounts']))
+        ? (rawSa as Record<string, unknown>)['subaccounts']
+        : null;
+    if (Array.isArray(saList)) {
+      await importSubaccounts(saList as SubaccountEntry[], user);
     }
     if (Array.isArray(data['tabs'])) {
       await importTabs(data['tabs'], user);
