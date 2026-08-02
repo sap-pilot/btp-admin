@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { ChevronDown, X } from 'lucide-react';
+import { ChevronDown, ShieldBan, X } from 'lucide-react';
 import * as DialogPrimitive from '@radix-ui/react-dialog';
 import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator,
@@ -138,14 +138,21 @@ export default function SubaccountDetailModal({ sa, onClose, cockpit, cockpitMen
             <>
               {/* Header */}
               <div className="flex items-center gap-2 px-4 py-3 border-b border-border shrink-0">
-                <DialogPrimitive.Title className="text-sm font-semibold min-w-0 truncate flex-1">
-                  {sa.subaccountName}
-                </DialogPrimitive.Title>
-                {sa.subdomain && (
-                  <span className="text-xs font-normal font-mono text-muted-foreground bg-muted px-1.5 py-0.5 rounded shrink-0">
-                    {sa.subdomain}
-                  </span>
-                )}
+                <div className="flex items-center gap-2 min-w-0 flex-1">
+                  <DialogPrimitive.Title className="text-sm font-semibold min-w-0 truncate">
+                    {sa.subaccountName}
+                  </DialogPrimitive.Title>
+                  {sa.subdomain && (
+                    <span className="text-xs font-normal font-mono text-muted-foreground bg-muted px-1.5 py-0.5 rounded shrink-0">
+                      {sa.subdomain}
+                    </span>
+                  )}
+                  {sa.restricted && (
+                    <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-red-500 bg-red-500/10 border border-red-500/30 px-1.5 py-0.5 rounded shrink-0">
+                      <ShieldBan className="h-3 w-3" /> Restricted
+                    </span>
+                  )}
+                </div>
                 {cockpit && cockpitMenu && (() => {
                   const ctx    = buildCtx(sa, cockpit);
                   const url    = cockpitMenu.url ? resolveUrl(cockpitMenu.url, ctx) : undefined;

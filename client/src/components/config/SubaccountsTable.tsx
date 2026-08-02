@@ -1,5 +1,5 @@
 import { useRef, useState } from 'react';
-import { GripVertical, RefreshCw, RotateCcw, Save, X } from 'lucide-react';
+import { GripVertical, RefreshCw, RotateCcw, Save, ShieldBan, X } from 'lucide-react';
 
 export interface SpaceEntry {
   spaceId:   string;
@@ -28,6 +28,8 @@ export interface SubaccountEntry {
   inHomepage:         boolean;
   manageDestinations: boolean;
   useAOD:             boolean;
+  /** Runtime-only flag set by server when org ID or subaccount ID is in RESTRICTED_ORG_IDS. */
+  restricted?:        boolean;
   org?: {
     orgId:   string;
     orgName: string;
@@ -348,11 +350,17 @@ export default function SubaccountsTable({
                   onDrop={handleDrop}
                 >
                   <td
-                    className={`${tdCls} text-muted-foreground/40`}
+                    className={`${tdCls} text-muted-foreground/40${sa.restricted ? ' relative' : ''}`}
                     draggable={!isFiltered}
                     onDragStart={e => handleDragStart(e, sortedIdx)}
                     onDragEnd={clearDragState}
                   >
+                    {sa.restricted && (
+                      <>
+                        <span className="absolute top-0 left-0 border-t-[22px] border-t-red-500 dark:border-t-red-400 border-r-[22px] border-r-transparent pointer-events-none select-none z-10" />
+                        <ShieldBan className="absolute top-[2px] left-[1.5px] h-[9px] w-[9px] text-white pointer-events-none select-none z-10" />
+                      </>
+                    )}
                     {!isFiltered && <GripVertical className="h-3.5 w-3.5 cursor-grab" />}
                   </td>
                   <td className={`${tdCls} font-mono text-muted-foreground truncate`}>{sa.region}</td>
@@ -406,12 +414,16 @@ export default function SubaccountsTable({
                   <td className={`${tdCls} text-center`}>
                     <input type="checkbox" checked={sa.manageDestinations}
                       onChange={e => onChange(updateSa(data, sa.subaccountId, { manageDestinations: e.target.checked }))}
-                      className="cursor-pointer" />
+                      className={sa.restricted ? 'cursor-not-allowed opacity-40' : 'cursor-pointer'}
+                      disabled={sa.restricted}
+                      title={sa.restricted ? 'Disabled — subaccount is restricted' : undefined} />
                   </td>
                   <td className={`${tdCls} text-center`}>
                     <input type="checkbox" checked={sa.useAOD}
                       onChange={e => onChange(updateSa(data, sa.subaccountId, { useAOD: e.target.checked }))}
-                      className="cursor-pointer" />
+                      className={sa.restricted ? 'cursor-not-allowed opacity-40' : 'cursor-pointer'}
+                      disabled={sa.restricted}
+                      title={sa.restricted ? 'Disabled — subaccount is restricted' : undefined} />
                   </td>
                   <td className={`${tdCls} text-center`}>
                     {sa.subscriptions.length > 0

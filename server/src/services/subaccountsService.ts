@@ -6,6 +6,7 @@ import { notifyCallbacks } from './syncService.js';
 import { emit } from './liveEvents.js';
 import { touchLastUpdated } from './lastUpdatedService.js';
 import { getCfCredentials, getCfRegions, fetchOrgsForRegion, fetchSpacesByOrgs } from './cfLoginService.js';
+import { getRestrictedIds } from './configService.js';
 import {
   btpLogin, btpListGlobalAccounts, btpListSubaccounts,
   btpListEnvInstances, btpListSubscriptions, btpListServiceInstances, btpListServicePlans,
@@ -43,6 +44,8 @@ export interface SubaccountEntry {
   inHomepage:         boolean;
   manageDestinations: boolean;
   useAOD:             boolean;
+  /** Runtime-only: true when this SA's subaccount ID is in RESTRICTED_SUBACCOUNT_IDS. Never persisted. */
+  restricted?:        boolean;
   org?: {
     orgId:   string;
     orgName: string;
@@ -67,13 +70,24 @@ async function readSubaccountsFile(): Promise<{ subaccounts: SubaccountEntry[]; 
 
 export async function readSubaccounts(): Promise<SubaccountEntry[]> {
   const { subaccounts } = await readSubaccountsFile();
-  return subaccounts.map(sa => ({ ...sa, subdomain: sa.subdomain.toLowerCase() }));
+  const restricted = getRestrictedIds();
+  return subaccounts.map(sa => {
+    const base = { ...sa, subdomain: sa.subdomain.toLowerCase() };
+    const isRestricted = restricted.has(sa.subaccountId);
+    if (isRestricted) {
+      return { ...base, manageDestinations: false, useAOD: false, restricted: true };
+    }
+    return base;
+  });
 }
 
 async function writeSubaccounts(subaccounts: SubaccountEntry[], globalAccounts?: GaInfo[]): Promise<void> {
   const gas = globalAccounts ?? (await readSubaccountsFile()).globalAccounts;
+  // Strip runtime-only field before persisting
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  const toSave = subaccounts.map(({ restricted: _r, ...rest }) => rest);
   await mkdir(CONFIG_DIR, { recursive: true });
-  await writeFile(SUBACCOUNTS_PATH, JSON.stringify({ subaccounts, globalAccounts: gas }, null, 2), 'utf-8');
+  await writeFile(SUBACCOUNTS_PATH, JSON.stringify({ subaccounts: toSave, globalAccounts: gas }, null, 2), 'utf-8');
   touchLastUpdated();
   notifyCallbacks();
   const ts = Date.now();

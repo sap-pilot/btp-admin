@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { requireAuth, requireAdmin, type AuthRequest } from '../middleware/requireAuth.js';
 import {
+  isSubaccountRestricted,
   listDestinations,
   refreshDestinations,
   refreshSubaccountDestinations,
@@ -13,11 +14,16 @@ import {
 
 const router = Router();
 
+const RESTRICTED = { ok: false, error: 'Access to this subaccount is restricted' } as const;
+
 router.get('/search', requireAdmin, async (req, res, next) => {
   try {
     const q         = String(req.query['q']         ?? '').trim();
     const region    = req.query['region']    ? String(req.query['region'])    : undefined;
     const subdomain = req.query['subdomain'] ? String(req.query['subdomain']) : undefined;
+    if (region && subdomain && await isSubaccountRestricted(region, subdomain)) {
+      return void res.status(403).json(RESTRICTED);
+    }
     const data = await searchDestinations(q, region, subdomain);
     res.json({ ok: true, data });
   } catch (err) { next(err); }
@@ -42,6 +48,7 @@ router.post('/refresh', requireAdmin, async (req, res, next) => {
 router.post('/:region/:subdomain/refresh', requireAdmin, async (req, res, next) => {
   try {
     const { region, subdomain } = req.params as { region: string; subdomain: string };
+    if (await isSubaccountRestricted(region, subdomain)) return void res.status(403).json(RESTRICTED);
     const authReq  = req as AuthRequest;
     const username = authReq.authSession?.email || authReq.authSession?.firstName || 'admin';
     const result   = await refreshSubaccountDestinations(region, subdomain, username);
@@ -54,6 +61,7 @@ router.post('/:region/:subdomain/refresh', requireAdmin, async (req, res, next) 
 router.get('/:region/:subdomain/:name/changelog', requireAdmin, async (req, res, next) => {
   try {
     const { region, subdomain, name } = req.params as { region: string; subdomain: string; name: string };
+    if (await isSubaccountRestricted(region, subdomain)) return void res.status(403).json(RESTRICTED);
     const data = await getDestinationChangelog(region, subdomain, name);
     res.json({ ok: true, data });
   } catch (err) { next(err); }
@@ -62,6 +70,7 @@ router.get('/:region/:subdomain/:name/changelog', requireAdmin, async (req, res,
 router.get('/:region/:subdomain/:name/export', requireAdmin, async (req, res, next) => {
   try {
     const { region, subdomain, name } = req.params as { region: string; subdomain: string; name: string };
+    if (await isSubaccountRestricted(region, subdomain)) return void res.status(403).json(RESTRICTED);
     const data = await exportDestination(region, subdomain, name);
     if (!data) return void res.status(404).json({ ok: false, error: 'Not found' });
     res.setHeader('Content-Disposition', `attachment; filename="${region}_${subdomain}_${name}.json"`);
@@ -73,6 +82,7 @@ router.get('/:region/:subdomain/:name/export', requireAdmin, async (req, res, ne
 router.get('/:region/:subdomain/:name', requireAdmin, async (req, res, next) => {
   try {
     const { region, subdomain, name } = req.params as { region: string; subdomain: string; name: string };
+    if (await isSubaccountRestricted(region, subdomain)) return void res.status(403).json(RESTRICTED);
     const result = await getDestination(region, subdomain, name);
     if (!result) return void res.status(404).json({ ok: false, error: 'Not found' });
     res.json({ ok: true, ...result });
@@ -82,8 +92,8 @@ router.get('/:region/:subdomain/:name', requireAdmin, async (req, res, next) => 
 router.put('/:region/:subdomain/:name', requireAdmin, async (req, res, next) => {
   try {
     const { region, subdomain, name } = req.params as { region: string; subdomain: string; name: string };
+    if (await isSubaccountRestricted(region, subdomain)) return void res.status(403).json(RESTRICTED);
     const { data, username = 'admin' } = req.body as { data: Record<string, unknown>; username?: string };
-    // Prefer session username if available
     const authReq   = req as AuthRequest;
     const sessionUser = authReq.authSession?.email || authReq.authSession?.firstName || username;
     if (!data || typeof data !== 'object') return void res.status(400).json({ ok: false, error: 'data required' });
