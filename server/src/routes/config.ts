@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { Router } from 'express';
-import { requireAdmin } from '../middleware/requireAuth.js';
+import { requireAuth, requireAdmin } from '../middleware/requireAuth.js';
 import type { AuthRequest } from '../middleware/requireAuth.js';
 import { readSubaccounts, refreshSubaccounts, saveSubaccounts, exportConfig, subaccountsFileExists, importSubaccounts } from '../services/subaccountsService.js';
 import type { SubaccountEntry } from '../services/subaccountsService.js';
@@ -16,7 +16,7 @@ function reqUser(req: Parameters<typeof requireAdmin>[0]): string {
   return (req as AuthRequest).authSession?.email || 'local';
 }
 
-router.get('/subaccounts', requireAdmin, async (_req, res, next) => {
+router.get('/subaccounts', requireAuth, async (_req, res, next) => {
   try {
     const data = await readSubaccounts();
     res.json({ ok: true, data });
@@ -42,7 +42,7 @@ router.post('/subaccounts/save', requireAdmin, async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-router.get('/tabs', requireAdmin, async (_req, res, next) => {
+router.get('/tabs', requireAuth, async (_req, res, next) => {
   try {
     const data = await readTabs();
     res.json({ ok: true, data });

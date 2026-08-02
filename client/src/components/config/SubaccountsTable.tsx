@@ -45,16 +45,17 @@ export interface RefreshProgress {
 }
 
 interface Props {
-  data:            SubaccountEntry[];
-  onChange:        (data: SubaccountEntry[]) => void;
-  isDirty:         boolean;
-  onRefresh:       () => void;
-  isRefreshing:    boolean;
-  onReset:         () => void;
-  isSaving:        boolean;
-  onSave:          () => void;
-  refreshProgress: RefreshProgress | null;
-  onOpenDetail:    (sa: SubaccountEntry) => void;
+  data:              SubaccountEntry[];
+  onChange:          (data: SubaccountEntry[]) => void;
+  isDirty:           boolean;
+  onRefresh:         () => void;
+  isRefreshing:      boolean;
+  onReset:           () => void;
+  isSaving:          boolean;
+  onSave:            () => void;
+  refreshProgress:   RefreshProgress | null;
+  onDismissProgress: () => void;
+  onOpenDetail:      (sa: SubaccountEntry) => void;
 }
 
 // col idx:        0    1    2    3    4    5    6    7   8   9   10  11  12
@@ -95,6 +96,7 @@ export default function SubaccountsTable({
   isSaving,
   onSave,
   refreshProgress,
+  onDismissProgress,
   onOpenDetail,
 }: Props) {
   const [filter, setFilter]       = useState('');
@@ -251,13 +253,20 @@ export default function SubaccountsTable({
 
       {/* Progress bar */}
       {refreshProgress !== null && (
-        <div className={`shrink-0 border-b border-border ${barBg}`}>
+        <div className={`relative shrink-0 border-b border-border ${barBg}`}>
           <div className="h-1 w-full bg-transparent">
             <div className={`h-full transition-all duration-300 ${barFill}`} style={{ width: `${refreshProgress.pct}%` }} />
           </div>
-          <div className={`px-4 py-1.5 text-xs text-center ${barTextColor}`}>
+          <div className={`px-4 py-1.5 text-xs text-center pr-8 ${barTextColor}`}>
             {refreshProgress.error ?? refreshProgress.message}
           </div>
+          <button
+            onClick={onDismissProgress}
+            className="absolute top-1 right-1 p-0.5 rounded text-muted-foreground/60 hover:text-foreground hover:bg-black/10 dark:hover:bg-white/10 transition-colors"
+            title="Dismiss"
+          >
+            <X className="h-3.5 w-3.5" />
+          </button>
         </div>
       )}
 

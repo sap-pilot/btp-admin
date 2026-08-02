@@ -1,6 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router';
 import { Download, Eye, PanelLeft, Upload } from 'lucide-react';
+import {
+  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
+  AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
 import { useSidebar, useSettings } from '@/components/AppLayout';
 import SubaccountsTable, { type SubaccountEntry, type RefreshProgress } from '@/components/config/SubaccountsTable';
 import SubaccountDetailModal from '@/components/config/SubaccountDetailModal';
@@ -54,6 +58,12 @@ export default function ConfigPage() {
   const [error,       setError]       = useState('');
   const [isImporting, setIsImporting] = useState(false);
   const importRef = useRef<HTMLInputElement>(null);
+
+  // Confirmation dialogs
+  const [showRefreshDialog, setShowRefreshDialog] = useState(false);
+  const [showImportDialog,  setShowImportDialog]  = useState(false);
+  const [importDialogBody,  setImportDialogBody]  = useState('');
+  const [pendingImportData, setPendingImportData] = useState<Record<string, unknown> | null>(null);
 
   const [previewOpen,  setPreviewOpen]  = useState(false);
   const [previewWidth, setPreviewWidth] = useState(0);
@@ -161,7 +171,7 @@ export default function ConfigPage() {
   function handleSasChange(data: SubaccountEntry[]) { setSasData(data); setIsSasDirty(true); }
 
   async function handleRefresh() {
-    if (!window.confirm('Refresh will re-fetch subaccounts from BTP CLI / CF API and merge with local edits. Continue?')) return;
+    setShowRefreshDialog(false);
     clearTimeout(progressTimerRef.current);
     setIsRefreshing(true);
     setError('');
@@ -341,19 +351,26 @@ export default function ConfigPage() {
     if (hasSettings    && localExists.settings)    willOverwrite.push('Settings');
 
     if (willOverwrite.length > 0) {
-      // Build a summary of what's in the file
-      const lines: string[] = [`Local config exists for: ${willOverwrite.join(', ')}.`, ''];
-      if (hasSubaccounts) lines.push(`Subaccounts: ${(data['subaccounts'] as unknown[]).length} entries`);
+      const parts: string[] = [`Will overwrite local: ${willOverwrite.join(', ')}.`];
+      if (hasSubaccounts) parts.push(`Subaccounts: ${(data['subaccounts'] as unknown[]).length} entries`);
       if (hasTabs) {
         const tabs = data['tabs'] as Array<{ sections?: unknown[] }>;
         const totalSections = tabs.reduce((n, t) => n + (Array.isArray(t.sections) ? t.sections.length : 0), 0);
-        lines.push(`Tabs: ${tabs.length} tabs / ${totalSections} sections`);
+        parts.push(`Tabs: ${tabs.length} tabs / ${totalSections} sections`);
       }
-      if (hasSettings) lines.push('Settings: homepage + menus');
-      lines.push('', 'Importing will overwrite and write differences to Change Log. Continue?');
-      if (!window.confirm(lines.join('\n'))) return;
+      if (hasSettings) parts.push('Settings: homepage + menus');
+      setImportDialogBody(parts.join('\n'));
+      setPendingImportData(data);
+      setShowImportDialog(true);
+      return;
     }
 
+    await doImport(data);
+  }
+
+  async function doImport(data: Record<string, unknown>) {
+    setShowImportDialog(false);
+    setPendingImportData(null);
     setIsImporting(true);
     setError('');
     try {
@@ -505,12 +522,13 @@ export default function ConfigPage() {
             data={sasData}
             onChange={handleSasChange}
             isDirty={isSasDirty}
-            onRefresh={handleRefresh}
+            onRefresh={() => setShowRefreshDialog(true)}
             isRefreshing={isRefreshing}
             onReset={handleSasReset}
             isSaving={isSavingSas}
             onSave={handleSasSave}
             refreshProgress={refreshProgress}
+            onDismissProgress={() => setRefreshProgress(null)}
             onOpenDetail={setSelectedSa}
           />
         )}
@@ -584,7 +602,49 @@ export default function ConfigPage() {
       </div>
 
       {/* Subaccount detail modal */}
-      <SubaccountDetailModal sa={selectedSa} onClose={() => setSelectedSa(null)} />
+      <SubaccountDetailModal
+        sa={selectedSa}
+        onClose={() => setSelectedSa(null)}
+        cockpit={settingsData?.homepage.cockpit}
+        cockpitMenu={cockpitMenu}
+      />
+
+      {/* Subaccounts refresh confirm dialog */}
+      <AlertDialog open={showRefreshDialog}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Refresh all subaccounts?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This will re-fetch subaccount data from BTP CLI / CF API and merge with your local edits. Any new data will overwrite existing values for matching subaccounts. Are you certain?
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel onClick={() => setShowRefreshDialog(false)}>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={() => void handleRefresh()}>Yes, proceed</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* Import confirm dialog */}
+      <AlertDialog open={showImportDialog}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Overwrite local configuration?</AlertDialogTitle>
+            <AlertDialogDescription asChild>
+              <div className="space-y-1.5 text-sm">
+                {importDialogBody.split('\n').map((line, i) => (
+                  <p key={i} className="text-muted-foreground">{line}</p>
+                ))}
+                <p className="text-muted-foreground pt-1">All local config will be overwritten. Changes will be written to the Change Log. Are you sure?</p>
+              </div>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel onClick={() => { setShowImportDialog(false); setPendingImportData(null); }}>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={() => { if (pendingImportData) void doImport(pendingImportData); }}>Yes, I confirm</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

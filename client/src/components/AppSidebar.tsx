@@ -28,6 +28,7 @@ interface NavItem {
   soon?:       boolean;
   wip?:        boolean;
   restricted?: boolean;
+  adminOnly?:  boolean;
   children?:   NavChild[];
 }
 
@@ -35,7 +36,7 @@ const NAV_ITEMS: NavItem[] = [
   { label: 'Status',      href: '/status',       icon: <Activity   className="h-4 w-4 shrink-0" /> },
   { label: 'Home',        href: '/home',          icon: <Home       className="h-4 w-4 shrink-0" /> },
   { label: 'Apps',        href: '/apps',          icon: <LayoutGrid className="h-4 w-4 shrink-0" />, soon: true, restricted: true },
-  { label: 'Destinations',href: '/destinations',  icon: <Globe      className="h-4 w-4 shrink-0" />, wip: true, restricted: true },
+  { label: 'Destinations',href: '/destinations',  icon: <Globe      className="h-4 w-4 shrink-0" />, wip: true, restricted: true, adminOnly: true },
   {
     label: 'Integration', href: '/int', icon: <Network className="h-4 w-4 shrink-0" />, soon: true, restricted: true,
     children: [{ label: 'Dynamic Routing', href: '/int/dynamic-routing', soon: true }],
@@ -197,7 +198,10 @@ export default function AppSidebar() {
         {/* Static nav items — gated by auth when restricted */}
         {(!auth.enabled || auth.loggedIn) && (
           <div>
-            {NAV_ITEMS.filter(item => !item.restricted || !auth.enabled || auth.loggedIn).map(item => {
+            {NAV_ITEMS.filter(item =>
+              (!item.restricted || !auth.enabled || auth.loggedIn) &&
+              (!item.adminOnly  || !auth.enabled || auth.isAdmin)
+            ).map(item => {
               const active      = !item.disabled && !item.soon && location.pathname.startsWith(item.href);
               const disabledCls = itemBase(collapsed) + 'text-sidebar-foreground/40 cursor-not-allowed select-none';
               const cls         = item.disabled
