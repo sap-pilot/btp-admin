@@ -1,9 +1,10 @@
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { access, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { config } from '../config.js';
 import { logger } from '../logger.js';
 import { notifyCallbacks } from './syncService.js';
 import { emit } from './liveEvents.js';
+import { touchLastUpdated } from './lastUpdatedService.js';
 import { getCfCredentials, getCfRegions, fetchOrgsForRegion, fetchSpacesByOrgs } from './cfLoginService.js';
 import {
   btpLogin, btpListGlobalAccounts, btpListSubaccounts,
@@ -65,13 +66,15 @@ async function readSubaccountsFile(): Promise<{ subaccounts: SubaccountEntry[]; 
 }
 
 export async function readSubaccounts(): Promise<SubaccountEntry[]> {
-  return (await readSubaccountsFile()).subaccounts;
+  const { subaccounts } = await readSubaccountsFile();
+  return subaccounts.map(sa => ({ ...sa, subdomain: sa.subdomain.toLowerCase() }));
 }
 
 async function writeSubaccounts(subaccounts: SubaccountEntry[], globalAccounts?: GaInfo[]): Promise<void> {
   const gas = globalAccounts ?? (await readSubaccountsFile()).globalAccounts;
   await mkdir(CONFIG_DIR, { recursive: true });
   await writeFile(SUBACCOUNTS_PATH, JSON.stringify({ subaccounts, globalAccounts: gas }, null, 2), 'utf-8');
+  touchLastUpdated();
   notifyCallbacks();
   const ts = Date.now();
   emit('root',   { files: ['config/subaccounts.json'], ts });
@@ -317,6 +320,18 @@ export async function saveSubaccounts(data: SubaccountEntry[], user = 'system'):
   await appendConfigChangelog('Update', user, 'subaccounts.json', diff);
 }
 
+export async function subaccountsFileExists(): Promise<boolean> {
+  try { await access(SUBACCOUNTS_PATH); return true; } catch { return false; }
+}
+
+export async function importSubaccounts(data: SubaccountEntry[], user: string): Promise<void> {
+  const existing   = await readSubaccounts();
+  const normalized = normalizeSubaccountPositions(data);
+  const diff       = diffSubaccounts(existing, normalized);
+  await writeSubaccounts(normalized);
+  await appendConfigChangelog('Import', user, 'subaccounts.json', diff);
+}
+
 export async function exportConfig(): Promise<Record<string, unknown>> {
   const { readdir: fsReaddir, readFile: fsReadFile } = await import('node:fs/promises');
   const combined: Record<string, unknown> = {};
@@ -332,16 +347,3 @@ export async function exportConfig(): Promise<Record<string, unknown>> {
   return combined;
 }
 
-export async function importConfig(data: Record<string, unknown>): Promise<void> {
-  const { writeFile: fsWriteFile } = await import('node:fs/promises');
-  await mkdir(CONFIG_DIR, { recursive: true });
-  for (const [key, value] of Object.entries(data)) {
-    if (!/^[a-zA-Z0-9][a-zA-Z0-9_-]*$/.test(key)) continue;
-    await fsWriteFile(join(CONFIG_DIR, `${key}.json`), JSON.stringify(value, null, 2), 'utf-8');
-  }
-  notifyCallbacks();
-  const ts = Date.now();
-  emit('root',   { files: Object.keys(data).map(k => `config/${k}.json`), ts });
-  emit('config', { ts });
-  logger.info({ keys: Object.keys(data).length }, 'Config imported');
-}

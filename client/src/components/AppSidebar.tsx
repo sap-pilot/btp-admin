@@ -1,51 +1,43 @@
 import { useEffect, useRef, useState } from 'react';
 import { Link, useLocation } from 'react-router';
-import { LogIn, Sun, Moon, Activity, Home, Globe, LayoutGrid, Network, ChevronDown, RefreshCw, BookMarked, ShieldCheck, Settings } from 'lucide-react';
+import {
+  LogIn, Sun, Moon, Activity, Home, Globe, LayoutGrid, Network, ChevronDown, RefreshCw,
+  BookMarked, ShieldCheck, Settings, BookOpenText, LifeBuoy, Star, Wrench, HelpCircle,
+  FileText, ExternalLink, Layers, Package, Users, Zap, Code2, Database, Bell,
+} from 'lucide-react';
 import { useAuth } from '@/hooks/useAuth';
 import { useTheme } from '@/hooks/useTheme';
-import { useSidebar, useHomepage } from '@/components/AppLayout';
+import { useSidebar, useSettings } from '@/components/AppLayout';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import type { SiteConfig } from '@shared/types';
+import type { MenuEntry } from '@/components/config/SettingsPanel';
 
 interface NavChild {
-  label: string;
-  href: string;
+  label:     string;
+  href:      string;
   disabled?: boolean;
-  soon?: boolean;
+  soon?:     boolean;
 }
 
 interface NavItem {
-  label: string;
-  href: string;
-  icon: React.ReactNode;
-  disabled?: boolean;
-  soon?: boolean;
-  wip?: boolean;
+  label:       string;
+  href:        string;
+  icon:        React.ReactNode;
+  disabled?:   boolean;
+  soon?:       boolean;
+  wip?:        boolean;
   restricted?: boolean;
-  children?: NavChild[];
-}
-
-interface MenuItem {
-  title: string;
-  url: string;
-  target?: string;
-}
-
-interface MenuGroup {
-  title: string;
-  children: MenuItem[];
+  children?:   NavChild[];
 }
 
 const NAV_ITEMS: NavItem[] = [
-  { label: 'Status', href: '/status', icon: <Activity className="h-4 w-4 shrink-0" /> },
-  { label: 'Home', href: '/home', icon: <Home className="h-4 w-4 shrink-0" /> },
-  { label: 'Apps', href: '/apps', icon: <LayoutGrid className="h-4 w-4 shrink-0" />, soon: true, restricted: true },
-  { label: 'Destinations', href: '/destinations', icon: <Globe className="h-4 w-4 shrink-0" />, wip: true, restricted: true },
+  { label: 'Status',      href: '/status',       icon: <Activity   className="h-4 w-4 shrink-0" /> },
+  { label: 'Home',        href: '/home',          icon: <Home       className="h-4 w-4 shrink-0" /> },
+  { label: 'Apps',        href: '/apps',          icon: <LayoutGrid className="h-4 w-4 shrink-0" />, soon: true, restricted: true },
+  { label: 'Destinations',href: '/destinations',  icon: <Globe      className="h-4 w-4 shrink-0" />, wip: true, restricted: true },
   {
     label: 'Integration', href: '/int', icon: <Network className="h-4 w-4 shrink-0" />, soon: true, restricted: true,
-    children: [
-      { label: 'Dynamic Routing', href: '/int/dynamic-routing', soon: true },
-    ],
+    children: [{ label: 'Dynamic Routing', href: '/int/dynamic-routing', soon: true }],
   },
 ];
 
@@ -54,11 +46,27 @@ const itemBase = (collapsed: boolean) =>
     ? 'flex items-center justify-center py-2 mx-1 rounded-md text-sm transition-colors '
     : 'flex items-center gap-3 px-3 py-2 mx-1 rounded-md text-sm transition-colors ';
 
-function menuIcon(title: string) {
-  switch (title) {
-    case 'Security': return <ShieldCheck className="h-4 w-4 shrink-0" />;
-    case 'Resources': return <BookMarked className="h-4 w-4 shrink-0" />;
-    default: return <BookMarked className="h-4 w-4 shrink-0" />;
+type LucideComponent = React.ComponentType<{ className?: string }>;
+
+function resolveIcon(name: string): LucideComponent {
+  switch (name) {
+    case 'book-open-text': return BookOpenText;
+    case 'life-buoy':      return LifeBuoy;
+    case 'star':           return Star;
+    case 'wrench':         return Wrench;
+    case 'help-circle':    return HelpCircle;
+    case 'file-text':      return FileText;
+    case 'external-link':  return ExternalLink;
+    case 'layers':         return Layers;
+    case 'package':        return Package;
+    case 'users':          return Users;
+    case 'zap':            return Zap;
+    case 'code-2':         return Code2;
+    case 'database':       return Database;
+    case 'bell':           return Bell;
+    case 'shield-check':   return ShieldCheck;
+    case 'globe':          return Globe;
+    default:               return BookMarked;
   }
 }
 
@@ -71,28 +79,24 @@ function matchesOrigin(s: SiteConfig): boolean {
 }
 
 export default function AppSidebar() {
-  const location = useLocation();
-  const auth = useAuth();
+  const location  = useLocation();
+  const auth      = useAuth();
   const { theme, toggleTheme } = useTheme();
-  const { collapsed } = useSidebar();
-  const { homepage, refreshHomepage } = useHomepage();
-  const [sites, setSites] = useState<SiteConfig[]>([]);
-  const [appTitle, setAppTitle] = useState('BTP Admin');
-  const [syncAvailable, setSyncAvailable] = useState(false);
-  const [syncing, setSyncing] = useState(false);
-  const [syncBusy, setSyncBusy] = useState(false);
-  const [openMenus, setOpenMenus] = useState<Record<string, boolean>>({});
+  const { collapsed }          = useSidebar();
+  const { settings }           = useSettings();
+  const [sites,          setSites]          = useState<SiteConfig[]>([]);
+  const [appTitle,       setAppTitle]       = useState('BTP Admin');
+  const [syncAvailable,  setSyncAvailable]  = useState(false);
+  const [syncing,        setSyncing]        = useState(false);
+  const [syncBusy,       setSyncBusy]       = useState(false);
+  const [openMenus,      setOpenMenus]      = useState<Record<string, boolean>>({});
 
-  const menus = (homepage?.menus as MenuGroup[] | undefined) ?? [];
-
-  // On auth change: reset open menus; refresh homepage so restricted items show/hide.
-  // Skip on the very first render — AppLayout's initial fetch already covers it.
+  // Reset open menus on auth change
   const firstAuthRender = useRef(true);
   useEffect(() => {
     setOpenMenus({});
-    if (firstAuthRender.current) { firstAuthRender.current = false; return; }
-    refreshHomepage();
-  }, [auth.loggedIn, refreshHomepage]);
+    if (firstAuthRender.current) { firstAuthRender.current = false; }
+  }, [auth.loggedIn]);
 
   useEffect(() => {
     const p = location.pathname;
@@ -129,12 +133,18 @@ export default function AppSidebar() {
     }
   }
 
-  const w = collapsed ? 'w-0 md:w-14' : 'w-56';
+  // Per-menu visibility: show group if auth off, OR logged in, OR any submenu is public
+  const allMenus: MenuEntry[] = settings?.menus ?? [];
+  const visibleMenus = allMenus.filter(m =>
+    !auth.enabled || auth.loggedIn || m.submenus.some(s => s.public)
+  );
+
+  const w      = collapsed ? 'w-0 md:w-14' : 'w-56';
   const border = collapsed ? 'border-r-0 md:border-r' : 'border-r';
 
   return (
     <aside className={`${w} ${border} shrink-0 flex flex-col border-sidebar-border bg-sidebar transition-[width] duration-200 overflow-hidden`}>
-      {/* Header: logo + title + site switcher + version */}
+      {/* Header */}
       <div className={`flex items-center border-b border-sidebar-border min-h-[52px] ${collapsed ? 'justify-center' : 'pl-2 pr-3 gap-2'}`}>
         <img src="/images/favicon-32x32.png?lastModified=20260729" alt="" className="h-8 w-8 shrink-0" />
         {!collapsed && (
@@ -180,175 +190,165 @@ export default function AppSidebar() {
 
       {/* Navigation */}
       <nav className="flex-1 flex flex-col py-2 overflow-y-auto overflow-x-hidden">
-        {/* Main nav items and menu groups — hidden when auth gating is active */}
-        {(!auth.enabled || auth.loggedIn) && <>
-        <div>
-          {NAV_ITEMS.filter(item => !item.restricted || !auth.enabled || auth.loggedIn).map(item => {
-            const active = !item.disabled && !item.soon && location.pathname.startsWith(item.href);
-            const disabledCls = itemBase(collapsed) + 'text-sidebar-foreground/40 cursor-not-allowed select-none';
-            const cls = item.disabled
-              ? disabledCls
-              : active
-                ? itemBase(collapsed) + 'bg-sidebar-accent text-sidebar-accent-foreground font-medium'
-                : itemBase(collapsed) + 'text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground';
 
-            // Item with children — collapsible submenu (expanded) or icon-only (collapsed)
-            if (item.children) {
-              const isOpen = !!openMenus[item.href];
-              const childrenPanel = isOpen && (
-                <div className="ml-6 mr-1 border-l border-sidebar-border py-0.5 flex flex-col gap-0.5">
-                  {item.children.map(c => {
-                    const childCls = 'flex h-7 min-w-0 items-center rounded-md pl-5 pr-3 text-sm';
-                    if (c.disabled) {
+        {/* Static nav items — gated by auth when restricted */}
+        {(!auth.enabled || auth.loggedIn) && (
+          <div>
+            {NAV_ITEMS.filter(item => !item.restricted || !auth.enabled || auth.loggedIn).map(item => {
+              const active      = !item.disabled && !item.soon && location.pathname.startsWith(item.href);
+              const disabledCls = itemBase(collapsed) + 'text-sidebar-foreground/40 cursor-not-allowed select-none';
+              const cls         = item.disabled
+                ? disabledCls
+                : active
+                  ? itemBase(collapsed) + 'bg-sidebar-accent text-sidebar-accent-foreground font-medium'
+                  : itemBase(collapsed) + 'text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground';
+
+              if (item.children) {
+                const isOpen       = !!openMenus[item.href];
+                const childrenPanel = isOpen && (
+                  <div className="ml-6 mr-1 border-l border-sidebar-border py-0.5 flex flex-col gap-0.5">
+                    {item.children.map(c => {
+                      const childCls = 'flex h-7 min-w-0 items-center rounded-md pl-5 pr-3 text-sm';
+                      if (c.disabled) {
+                        return (
+                          <div key={c.href} className={childCls + ' text-sidebar-foreground/40 cursor-not-allowed select-none'}>
+                            <span className="truncate">{c.label}<span className="ml-1 text-[10px] opacity-60">(soon)</span></span>
+                          </div>
+                        );
+                      }
                       return (
-                        <div key={c.href} className={childCls + ' text-sidebar-foreground/40 cursor-not-allowed select-none'}>
-                          <span className="truncate">{c.label}<span className="ml-1 text-[10px] opacity-60">(soon)</span></span>
-                        </div>
+                        <Link
+                          key={c.href}
+                          to={c.href}
+                          className={childCls + ' text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground transition-colors'}
+                        >
+                          <span className="truncate">
+                            {c.label}
+                            {c.soon && <span className="ml-1 text-[10px] opacity-60">(soon)</span>}
+                          </span>
+                        </Link>
                       );
-                    }
-                    return (
-                      <Link
-                        key={c.href}
-                        to={c.href}
-                        className={childCls + ' text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground transition-colors'}
-                      >
-                        <span className="truncate">
-                          {c.label}
-                          {c.soon && <span className="ml-1 text-[10px] opacity-60">(soon)</span>}
-                        </span>
-                      </Link>
-                    );
-                  })}
-                </div>
-              );
-              if (collapsed) {
+                    })}
+                  </div>
+                );
+
+                if (collapsed) {
+                  if (item.disabled) return <div key={item.href} className={disabledCls} title={item.label}>{item.icon}</div>;
+                  return <Link key={item.href} to={item.href} className={cls} title={item.label}>{item.icon}</Link>;
+                }
+
                 if (item.disabled) {
                   return (
-                    <div key={item.href} className={disabledCls} title={item.label}>
-                      {item.icon}
+                    <div key={item.href} className="flex flex-col">
+                      <button className={cls} onClick={() => setOpenMenus(o => ({ ...o, [item.href]: !o[item.href] }))}>
+                        {item.icon}
+                        <span className="truncate flex-1 text-left">
+                          {item.label}<span className="ml-1 text-[10px] opacity-60">(soon)</span>
+                        </span>
+                        <ChevronDown className={`h-3.5 w-3.5 shrink-0 transition-transform${isOpen ? ' rotate-180' : ''}`} />
+                      </button>
+                      {childrenPanel}
                     </div>
                   );
                 }
-                return (
-                  <Link key={item.href} to={item.href} className={cls} title={item.label}>
-                    {item.icon}
-                  </Link>
-                );
-              }
-              if (item.disabled) {
+
+                const rowCls = `flex items-center rounded-md text-sm transition-colors mx-1 ${
+                  active
+                    ? 'bg-sidebar-accent text-sidebar-accent-foreground font-medium'
+                    : 'text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground'
+                }`;
                 return (
                   <div key={item.href} className="flex flex-col">
-                    <button
-                      className={cls}
-                      onClick={() => setOpenMenus(o => ({ ...o, [item.href]: !o[item.href] }))}
-                    >
-                      {item.icon}
-                      <span className="truncate flex-1 text-left">
-                        {item.label}
-                        <span className="ml-1 text-[10px] opacity-60">(soon)</span>
-                      </span>
-                      <ChevronDown className={`h-3.5 w-3.5 shrink-0 transition-transform${isOpen ? ' rotate-180' : ''}`} />
-                    </button>
+                    <div className={rowCls}>
+                      <Link to={item.href} className="flex items-center gap-3 flex-1 min-w-0 pl-3 py-2">
+                        {item.icon}
+                        <span className="truncate flex-1 text-left">
+                          {item.label}
+                          {item.soon && <span className="ml-1 text-[10px] opacity-60">(soon)</span>}
+                        </span>
+                      </Link>
+                      <button className="pr-3 py-2 shrink-0" onClick={() => setOpenMenus(o => ({ ...o, [item.href]: !o[item.href] }))}>
+                        <ChevronDown className={`h-3.5 w-3.5 shrink-0 transition-transform${isOpen ? ' rotate-180' : ''}`} />
+                      </button>
+                    </div>
                     {childrenPanel}
                   </div>
                 );
               }
-              // soon or active — split row: Link navigates, chevron toggles submenu
-              const rowCls = `flex items-center rounded-md text-sm transition-colors mx-1 ${
-                active
-                  ? 'bg-sidebar-accent text-sidebar-accent-foreground font-medium'
-                  : 'text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground'
-              }`;
-              return (
-                <div key={item.href} className="flex flex-col">
-                  <div className={rowCls}>
-                    <Link to={item.href} className="flex items-center gap-3 flex-1 min-w-0 pl-3 py-2">
-                      {item.icon}
-                      <span className="truncate flex-1 text-left">
-                        {item.label}
-                        {item.soon && <span className="ml-1 text-[10px] opacity-60">(soon)</span>}
-                      </span>
-                    </Link>
-                    <button
-                      className="pr-3 py-2 shrink-0"
-                      onClick={() => setOpenMenus(o => ({ ...o, [item.href]: !o[item.href] }))}
-                    >
-                      <ChevronDown className={`h-3.5 w-3.5 shrink-0 transition-transform${isOpen ? ' rotate-180' : ''}`} />
-                    </button>
-                  </div>
-                  {childrenPanel}
-                </div>
+
+              const inner = (
+                <>
+                  {item.icon}
+                  {!collapsed && (
+                    <span className="truncate">
+                      {item.label}
+                      {(item.disabled || item.soon) && <span className="ml-1 text-[10px] opacity-60" title="coming soon">(soon)</span>}
+                      {item.wip && <span className="ml-1 text-[10px] opacity-60" title="work in progress">(wip)</span>}
+                    </span>
+                  )}
+                </>
               );
-            }
 
-            const inner = (
-              <>
-                {item.icon}
-                {!collapsed && (
-                  <span className="truncate">
-                    {item.label}
-                    {(item.disabled || item.soon) && <span className="ml-1 text-[10px] opacity-60" title="coming soon">(soon)</span>}
-                    {item.wip && <span className="ml-1 text-[10px] opacity-60" title="work in progress">(wip)</span>}
-                  </span>
-                )}
-              </>
-            );
+              if (item.disabled) {
+                return <div key={item.href} className={cls} title={collapsed ? item.label : undefined}>{inner}</div>;
+              }
+              return (
+                <Link key={item.href} to={item.href} className={cls} title={collapsed ? item.label : undefined}>
+                  {inner}
+                </Link>
+              );
+            })}
+          </div>
+        )}
 
-            if (item.disabled) {
-              return <div key={item.href} className={cls} title={collapsed ? item.label : undefined}>{inner}</div>;
-            }
-            return (
-              <Link key={item.href} to={item.href} className={cls} title={collapsed ? item.label : undefined}>
-                {inner}
-              </Link>
-            );
-          })}
-        </div>
+        {/* Dynamic menus from settings.json — public items visible before login */}
+        {visibleMenus.map(menu => {
+          const Icon = resolveIcon(menu.icon);
+          const visibleSubmenus = menu.submenus.filter(s => !auth.enabled || auth.loggedIn || s.public);
 
-        {/* Dynamic menu groups from homepage.json */}
-        {menus.map(menu => {
           if (collapsed) {
             return (
-              <DropdownMenu key={menu.title}>
+              <DropdownMenu key={menu.text}>
                 <DropdownMenuTrigger asChild>
                   <button
                     className={itemBase(true) + 'text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground'}
-                    title={menu.title}
+                    title={menu.text}
                   >
-                    {menuIcon(menu.title)}
+                    <Icon className="h-4 w-4 shrink-0" />
                   </button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent side="right" align="end">
-                  {menu.children.map(c => (
-                    <DropdownMenuItem key={c.url} className="text-sm cursor-pointer" asChild>
-                      <a href={c.url} target={c.target ?? '_blank'} rel="noopener noreferrer">{c.title}</a>
+                  {visibleSubmenus.map(s => (
+                    <DropdownMenuItem key={s.url} className="text-sm cursor-pointer" asChild>
+                      <a href={s.url} target="_blank" rel="noopener noreferrer">{s.text}</a>
                     </DropdownMenuItem>
                   ))}
                 </DropdownMenuContent>
               </DropdownMenu>
             );
           }
+
           return (
-            <div key={menu.title} className="flex flex-col">
+            <div key={menu.text} className="flex flex-col">
               <button
-                onClick={() => setOpenMenus(o => ({ ...o, [menu.title]: !o[menu.title] }))}
+                onClick={() => setOpenMenus(o => ({ ...o, [menu.text]: !o[menu.text] }))}
                 className={itemBase(false) + 'text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground'}
               >
-                {menuIcon(menu.title)}
-                <span className="truncate flex-1 text-left">{menu.title}</span>
-                <ChevronDown className={`h-3.5 w-3.5 shrink-0 transition-transform${openMenus[menu.title] ? ' rotate-180' : ''}`} />
+                <Icon className="h-4 w-4 shrink-0" />
+                <span className="truncate flex-1 text-left">{menu.text}</span>
+                <ChevronDown className={`h-3.5 w-3.5 shrink-0 transition-transform${openMenus[menu.text] ? ' rotate-180' : ''}`} />
               </button>
-              {openMenus[menu.title] && (
+              {openMenus[menu.text] && (
                 <div className="ml-6 mr-1 border-l border-sidebar-border py-0.5 flex flex-col gap-0.5">
-                  {menu.children.map(c => (
+                  {visibleSubmenus.map(s => (
                     <a
-                      key={c.url}
-                      href={c.url}
-                      target={c.target ?? '_blank'}
+                      key={s.url}
+                      href={s.url}
+                      target="_blank"
                       rel="noopener noreferrer"
                       className="flex h-7 min-w-0 items-center rounded-md pl-5 pr-3 text-sm text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground transition-colors"
                     >
-                      <span className="truncate">{c.title}</span>
+                      <span className="truncate">{s.text}</span>
                     </a>
                   ))}
                 </div>
@@ -356,9 +356,8 @@ export default function AppSidebar() {
             </div>
           );
         })}
-        </>}
 
-        {/* Sync + Configuration + Theme toggle — float to bottom; theme toggle visible even before login */}
+        {/* Bottom items: config + sync + theme */}
         <div className="mt-auto pt-1 flex flex-col">
           {(!auth.enabled || auth.isAdmin) && (
             <Link
@@ -379,15 +378,10 @@ export default function AppSidebar() {
                   setSyncing(true);
                   setSyncBusy(false);
                   try {
-                    const res = await fetch('/api/sync', { method: 'POST' });
+                    const res  = await fetch('/api/sync', { method: 'POST' });
                     const data = await res.json() as { busy?: boolean };
-                    if (data.busy) {
-                      setSyncBusy(true);
-                      setTimeout(() => setSyncBusy(false), 6000);
-                    }
-                  } finally {
-                    setSyncing(false);
-                  }
+                    if (data.busy) { setSyncBusy(true); setTimeout(() => setSyncBusy(false), 6000); }
+                  } finally { setSyncing(false); }
                 }}
                 disabled={syncing}
                 className={itemBase(collapsed) + 'text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground disabled:opacity-40 disabled:cursor-not-allowed'}
@@ -406,14 +400,8 @@ export default function AppSidebar() {
                         setSyncBusy(false);
                         setSyncing(true);
                         try {
-                          await fetch('/api/sync', {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ force: true }),
-                          });
-                        } finally {
-                          setSyncing(false);
-                        }
+                          await fetch('/api/sync', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ force: true }) });
+                        } finally { setSyncing(false); }
                       }}
                     >Force sync?</button></>
                   )}
@@ -432,7 +420,7 @@ export default function AppSidebar() {
         </div>
       </nav>
 
-      {/* Bottom: auth */}
+      {/* Auth footer */}
       <div className="border-t border-sidebar-border">
         {auth.enabled ? (
           <div className="py-2 flex flex-col">
@@ -455,9 +443,7 @@ export default function AppSidebar() {
                     <div className="h-4 w-4 rounded-full bg-primary text-primary-foreground flex items-center justify-center text-[9px] font-bold leading-none select-none shrink-0">
                       {auth.initials || auth.firstName.slice(0, 1).toUpperCase()}
                     </div>
-                    {!collapsed && (
-                      <span className="truncate text-sm">{auth.firstName}</span>
-                    )}
+                    {!collapsed && <span className="truncate text-sm">{auth.firstName}</span>}
                   </button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent side="top" align="start" className="w-52">

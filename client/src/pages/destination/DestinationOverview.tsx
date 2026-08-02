@@ -218,7 +218,9 @@ export default function DestinationOverview() {
                       className="w-full text-left px-3 py-2 border-b border-border last:border-0 hover:bg-muted/50"
                       onClick={() => {
                         if (!sa) return;
-                        setModal({ sa, allNames: (destData[r.org_id] ?? []).map(d => d.name).sort(), initialName: r.name });
+                        const baseNames = (destData[r.org_id] ?? []).map(d => d.name).sort();
+                        const allNames  = baseNames.includes(r.name) ? baseNames : [...new Set([r.name, ...baseNames])].sort();
+                        setModal({ sa, allNames, initialName: r.name });
                         setShowResults(false);
                         setSearchQuery('');
                       }}

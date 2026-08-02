@@ -1,10 +1,11 @@
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { access, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { config } from '../config.js';
 import { logger } from '../logger.js';
 import { notifyCallbacks } from './syncService.js';
 import { emit } from './liveEvents.js';
 import { appendConfigChangelog } from './configChangelogService.js';
+import { touchLastUpdated } from './lastUpdatedService.js';
 
 const CONFIG_DIR = join(config.LOCAL_STORE_DIR, 'config');
 const TABS_PATH  = join(CONFIG_DIR, 'tabs.json');
@@ -48,6 +49,7 @@ export async function readTabs(): Promise<TabEntry[]> {
 async function writeTabs(data: TabEntry[]): Promise<void> {
   await mkdir(CONFIG_DIR, { recursive: true });
   await writeFile(TABS_PATH, JSON.stringify(data, null, 2), 'utf-8');
+  touchLastUpdated();
   notifyCallbacks();
   const ts = Date.now();
   emit('root',   { files: ['config/tabs.json'], ts });
@@ -107,16 +109,35 @@ function diffTabs(before: TabEntry[], after: TabEntry[]): string {
       if (bs.type !== as_.type) { tabLines.push(`    ~ section[${i}]: ${bs.type} → ${as_.type}`); continue; }
       if (bs.type === 'banner' && as_.type === 'banner') {
         const b = bs as Banner; const a = as_ as Banner;
-        if (b.message !== a.message) tabLines.push(`    ~ banner[${i}] message changed`);
-        if (b.backgroundColor !== a.backgroundColor) tabLines.push(`    ~ banner[${i}] color: ${b.backgroundColor} → ${a.backgroundColor}`);
+        if (b.message !== a.message)
+          tabLines.push(`    ~ banner[${i}] message: ${JSON.stringify(b.message)} → ${JSON.stringify(a.message)}`);
+        if (b.backgroundColor !== a.backgroundColor)
+          tabLines.push(`    ~ banner[${i}] color: ${b.backgroundColor} → ${a.backgroundColor}`);
       }
       if (bs.type === 'table' && as_.type === 'table') {
         const b = bs as Table; const a = as_ as Table;
         if ((b.title ?? '') !== (a.title ?? ''))
           tabLines.push(`    ~ table[${i}] title: ${JSON.stringify(b.title ?? '')} → ${JSON.stringify(a.title ?? '')}`);
-        const [bR, bC] = [b.tableContent.length, b.tableContent[0]?.length ?? 0];
-        const [aR, aC] = [a.tableContent.length, a.tableContent[0]?.length ?? 0];
-        if (bR !== aR || bC !== aC) tabLines.push(`    ~ table[${i}] size: ${bR}×${bC} → ${aR}×${aC}`);
+        const bRows = b.tableContent;
+        const aRows = a.tableContent;
+        const maxR  = Math.max(bRows.length, aRows.length);
+        for (let r = 0; r < maxR; r++) {
+          const bRow = bRows[r];
+          const aRow = aRows[r];
+          if (!bRow && aRow) {
+            tabLines.push(`    + table[${i}] row[${r}]: [${aRow.map(c => JSON.stringify(c)).join(', ')}]`);
+          } else if (bRow && !aRow) {
+            tabLines.push(`    - table[${i}] row[${r}]: [${bRow.map(c => JSON.stringify(c)).join(', ')}]`);
+          } else if (bRow && aRow) {
+            const maxC = Math.max(bRow.length, aRow.length);
+            for (let c = 0; c < maxC; c++) {
+              const bVal = bRow[c] ?? '';
+              const aVal = aRow[c] ?? '';
+              if (bVal !== aVal)
+                tabLines.push(`    ~ table[${i}][${r},${c}]: ${JSON.stringify(bVal)} → ${JSON.stringify(aVal)}`);
+            }
+          }
+        }
       }
     }
 
@@ -131,4 +152,16 @@ export async function saveTabs(data: TabEntry[], user = 'system'): Promise<void>
   const diff   = diffTabs(before, data);
   await writeTabs(data);
   await appendConfigChangelog('Update', user, 'tabs.json', diff);
+}
+
+export async function tabsFileExists(): Promise<boolean> {
+  try { await access(TABS_PATH); return true; } catch { return false; }
+}
+
+export async function importTabs(data: unknown, user: string): Promise<void> {
+  const incoming = migrateLegacy(data);
+  const before   = await readTabs();
+  const diff     = diffTabs(before, incoming);
+  await writeTabs(incoming);
+  await appendConfigChangelog('Import', user, 'tabs.json', diff);
 }

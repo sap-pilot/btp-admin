@@ -21,7 +21,7 @@ function utcTimestamp(): string {
 }
 
 export async function appendConfigChangelog(
-  action: 'Refresh' | 'Update',
+  action: 'Refresh' | 'Update' | 'Import',
   user: string,
   filename: string,
   diff: string,
