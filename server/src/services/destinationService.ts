@@ -5,6 +5,7 @@ import { homedir } from 'node:os';
 import { config } from '../config.js';
 import { logger } from '../logger.js';
 import { getOrRefreshToken, fetchWithRateLimit } from './cfLoginService.js';
+import { getRestrictedIds } from './configService.js';
 import { readSubaccounts, type SubaccountEntry } from './subaccountsService.js';
 import { notifyCallbacks } from './syncService.js';
 import { emit, emitImmediate } from './liveEvents.js';
@@ -230,6 +231,15 @@ async function fetchDestCredentials(region: string, keyGuid: string): Promise<De
 interface DiscoveredKey extends DestInstanceInfo, DestKeyRaw { credential: DestCredentials }
 
 async function discoverDestKey(region: string, orgId: string, planGuid: string): Promise<DiscoveredKey> {
+  const restrictedIds = getRestrictedIds();
+  if (restrictedIds.size > 0) {
+    const allSas = await readSubaccounts();
+    const sa = allSas.find(s => s.org?.orgId === orgId);
+    if (sa?.restricted) {
+      logger.warn({ orgId, region, subaccountId: sa.subaccountId }, 'Blocked CF service-key discovery for restricted subaccount');
+      throw new Error(`Subaccount ${sa.subaccountId} is restricted — service key discovery blocked`);
+    }
+  }
   // Oldest instances first — older instances are less likely to be redeployed and have more stable keys
   const instances = await fetchDestInstances(region, orgId, planGuid);
   if (instances.length === 0) throw new Error(`No "destination" service instance found in org ${orgId}`);
@@ -307,6 +317,17 @@ async function resolveToken(
   planGuids:     Record<string, string>,
   location:      string,
 ): Promise<TokenResult> {
+  {
+    const restrictedIds = getRestrictedIds();
+    if (restrictedIds.size > 0) {
+      const allSas = await readSubaccounts();
+      const sa = allSas.find(s => s.org?.orgId === orgId);
+      if (sa?.restricted) {
+        logger.warn({ orgId, orgName, region, location, subaccountId: sa.subaccountId }, 'Blocked CF credential resolution for restricted subaccount');
+        return { error: `Subaccount ${sa.subaccountId} is restricted — destination credential access blocked` };
+      }
+    }
+  }
   const keyInfo   = getFirstKeyInfo(keyStore, region, orgId);
   const tokenInfo = getTokenInfo(tokenStore, region, orgId);
 
@@ -692,6 +713,15 @@ export async function refreshSubaccountDestinations(region: string, subdomain: s
   return { refreshed, received, created, updated, deleted, errors: issues };
 }
 
+// ─── Public: restriction helper ──────────────────────────────────────────────
+
+/** Returns true if the subaccount identified by region+subdomain is in RESTRICTED_SUBACCOUNT_IDS. */
+export async function isSubaccountRestricted(region: string, subdomain: string): Promise<boolean> {
+  if (getRestrictedIds().size === 0) return false;
+  const sas = await readSubaccounts();
+  return sas.some(sa => sa.region === region && sa.subdomain === subdomain && sa.restricted === true);
+}
+
 // ─── Public: search ───────────────────────────────────────────────────────────
 
 export interface DestSearchResult {
@@ -709,7 +739,8 @@ export async function searchDestinations(query: string, scopeRegion?: string, sc
   const results: DestSearchResult[] = [];
   if (!existsSync(LOCAL_DEST_DIR)) return results;
 
-  const allSas   = await readSubaccounts();
+  const allSas        = await readSubaccounts();
+  const restrictedKeys = new Set(allSas.filter(sa => sa.restricted).map(sa => `${sa.region}/${sa.subdomain}`));
   const orgIndex = new Map<string, string>();
   for (const sa of allSas) {
     if (sa.manageDestinations && sa.org?.orgId) orgIndex.set(`${sa.region}/${sa.subdomain}`, sa.org.orgId);
@@ -723,6 +754,7 @@ export async function searchDestinations(query: string, scopeRegion?: string, sc
     const subdomains = await readdir(regionDir).catch(() => [] as string[]);
     for (const subdomain of subdomains) {
       if (scopeSubdomain && subdomain !== scopeSubdomain) continue;
+      if (restrictedKeys.has(`${region}/${subdomain}`)) continue;
       const subDir = join(regionDir, subdomain);
       try { if (!(await stat(subDir)).isDirectory()) continue; } catch { continue; }
       const org_id = orgIndex.get(`${region}/${subdomain}`) ?? '';

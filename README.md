@@ -592,6 +592,7 @@ The server uses [pino](https://getpino.io) with colorized pretty-print output.
 | `SYNC_PROTECTION_OFF` | — | When set to any non-empty value (e.g. `true`, `1`), `GET /api/browse` and `POST /api/batch-download` skip all authentication. Useful for key rotation or bootstrapping a backup instance. Unset after the initial sync completes. |
 | `CF_USERNAME` | — | SAP BTP user email used for CF API login and BTP CLI login (required for subaccount refresh and destination refresh) |
 | `CF_PASSWORD` | — | SAP BTP user password (same credential used for CF API and BTP CLI) |
+| `RESTRICTED_SUBACCOUNT_IDS` | — | Comma-separated list of **subaccount IDs** whose destinations and AOD features are completely blocked. Matching subaccounts always have `manageDestinations` and `useAOD` forced to `false` in every API response regardless of stored config, and are visually marked as **Restricted** in the Config → Subaccounts table, the Subaccount Detail modal, and the Home page column headers. Any attempt to resolve CF service credentials or discover service keys for a restricted subaccount is rejected server-side and logged as a warning. Can also be set in `config.json → variables`. |
 | `LOG_LEVEL` | `debug` | Pino log level: `trace`, `debug`, `info`, `warn`, `error` |
 
 ## Remote Sync

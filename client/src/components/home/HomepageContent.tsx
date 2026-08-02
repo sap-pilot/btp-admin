@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { ChevronDown } from 'lucide-react';
+import { ChevronDown, ShieldBan } from 'lucide-react';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator,
@@ -320,7 +320,13 @@ function SubaccountGroupSection({ section, subaccounts, cockpitMenu, cockpit, ma
               {cols.map(sa => {
                 const label = [section.groupId, sa.alias].filter(Boolean).join(' ');
                 return (
-                  <th key={sa.subaccountId} className="text-center text-xs font-medium px-3 py-2 min-w-[110px] border-l border-border text-muted-foreground">
+                  <th key={sa.subaccountId} className={`text-center text-xs font-medium px-3 py-2 min-w-[110px] border-l border-border text-muted-foreground${sa.restricted ? ' relative overflow-hidden' : ''}`}>
+                    {sa.restricted && (
+                      <>
+                        <span className="absolute top-0 left-0 border-t-[22px] border-t-red-500 dark:border-t-red-400 border-r-[22px] border-r-transparent pointer-events-none select-none z-10" />
+                        <ShieldBan className="absolute top-[2px] left-[1.5px] h-[9px] w-[9px] text-white pointer-events-none select-none z-10" />
+                      </>
+                    )}
                     <div className="flex flex-col items-center gap-0.5">
                       <button
                         onClick={() => onOpenDetail(sa)}

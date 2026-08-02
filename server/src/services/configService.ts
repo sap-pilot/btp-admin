@@ -89,3 +89,12 @@ export function getSyncKey(): string | null {
   if (process.env.SYNC_KEY) return process.env.SYNC_KEY;
   return getConfig().variables?.['SYNC_KEY'] ?? null;
 }
+
+/**
+ * Returns the set of restricted subaccount IDs whose destinations and AOD features are blocked.
+ * RESTRICTED_SUBACCOUNT_IDS env var (comma-separated) takes precedence over config.variables entry.
+ */
+export function getRestrictedIds(): Set<string> {
+  const raw = process.env.RESTRICTED_SUBACCOUNT_IDS ?? getConfig().variables?.['RESTRICTED_SUBACCOUNT_IDS'] ?? '';
+  return new Set(raw.split(',').map(s => s.trim()).filter(Boolean));
+}
