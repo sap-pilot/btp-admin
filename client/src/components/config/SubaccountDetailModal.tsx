@@ -1,14 +1,106 @@
 import { useState } from 'react';
-import { X } from 'lucide-react';
+import { ChevronDown, X } from 'lucide-react';
 import * as DialogPrimitive from '@radix-ui/react-dialog';
-import type { SubaccountEntry } from './SubaccountsTable';
+import {
+  DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator,
+  DropdownMenuSub, DropdownMenuSubContent, DropdownMenuSubTrigger, DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
+import type { SubaccountEntry, SpaceEntry } from './SubaccountsTable';
+import type { CockpitMenuItem } from '@/components/home/HomepageContent';
 
 interface Props {
-  sa:      SubaccountEntry | null;
-  onClose: () => void;
+  sa:          SubaccountEntry | null;
+  onClose:     () => void;
+  cockpit?:    { idp: string; host: string };
+  cockpitMenu?: CockpitMenuItem | null;
 }
 
 type ModalTab = 'info' | 'subscriptions' | 'services';
+
+// ─── Cockpit URL helpers ──────────────────────────────────────────────────────
+
+function resolve(tpl: string, ctx: Record<string, string>): string {
+  return tpl.replace(/\{([^}]+)\}/g, (_, k: string) => ctx[k] ?? '');
+}
+function cleanUrl(url: string): string {
+  const hi = url.indexOf('#');
+  const before = hi >= 0 ? url.slice(0, hi) : url;
+  const after  = hi >= 0 ? url.slice(hi)    : '';
+  const qi = before.indexOf('?');
+  if (qi < 0) return url;
+  const base   = before.slice(0, qi);
+  const params = before.slice(qi + 1).split('&').filter(p => {
+    const eq = p.indexOf('=');
+    return eq < 0 || p.slice(eq + 1) !== '';
+  });
+  return base + (params.length ? '?' + params.join('&') : '') + after;
+}
+function resolveUrl(tpl: string, ctx: Record<string, string>): string {
+  return cleanUrl(resolve(tpl, ctx));
+}
+function deriveCockpitRegion(region: string): string {
+  if (region.startsWith('us')) return 'amer';
+  if (region.startsWith('eu')) return region.split('-')[0];
+  if (region.startsWith('ap')) return 'ap21';
+  if (region.startsWith('br')) return 'br10';
+  if (region.startsWith('jp')) return 'jp10';
+  if (region.startsWith('ca')) return 'ca10';
+  if (region.startsWith('au')) return 'ap10';
+  return region;
+}
+function ensureHttps(host: string): string {
+  return /^https?:\/\//i.test(host) ? host : `https://${host}`;
+}
+
+function buildCtx(sa: SubaccountEntry, cockpit: { idp: string; host: string }): Record<string, string> {
+  return {
+    'homepage.cockpit.host': cockpit.host ? ensureHttps(cockpit.host) : '',
+    'homepage.cockpit.idp':  cockpit.idp,
+    cockpitRegion:           deriveCockpitRegion(sa.region),
+    globalAccountGUID:       sa.globalAccountGUID,
+    subaccountId:            sa.subaccountId,
+    orgId:                   sa.org?.orgId ?? '',
+    subdomain:               sa.subdomain,
+  };
+}
+
+function renderMenuItems(items: CockpitMenuItem[], ctx: Record<string, string>, spaces: SpaceEntry[]): React.ReactNode[] {
+  return items.flatMap((item, i) => {
+    if (item.name === '-') return [<DropdownMenuSeparator key={`sep-${i}`} />];
+    if (item.repeatOn === 'spaces') {
+      return spaces.flatMap(sp => {
+        const spCtx = { ...ctx, spaceId: sp.spaceId, spaceName: sp.spaceName };
+        const name  = resolve(item.name, spCtx);
+        const url   = item.url ? resolveUrl(item.url, spCtx) : undefined;
+        if (item.submenus?.length) {
+          return [(<DropdownMenuSub key={sp.spaceId}>
+            <DropdownMenuSubTrigger className="text-xs">{name}</DropdownMenuSubTrigger>
+            <DropdownMenuSubContent>
+              {url && <><DropdownMenuItem className="text-xs cursor-pointer" asChild><a href={url} target="_blank" rel="noopener noreferrer">{name}</a></DropdownMenuItem><DropdownMenuSeparator /></>}
+              {renderMenuItems(item.submenus, spCtx, spaces)}
+            </DropdownMenuSubContent>
+          </DropdownMenuSub>)];
+        }
+        return url ? [<DropdownMenuItem key={sp.spaceId} className="text-xs cursor-pointer" asChild><a href={url} target="_blank" rel="noopener noreferrer">{name}</a></DropdownMenuItem>] : [];
+      });
+    }
+    const name = resolve(item.name, ctx);
+    const url  = item.url ? resolveUrl(item.url, ctx) : undefined;
+    if (item.submenus?.length) {
+      return [(<DropdownMenuSub key={i}>
+        <DropdownMenuSubTrigger className="text-xs">{name}</DropdownMenuSubTrigger>
+        <DropdownMenuSubContent>
+          {url && <><DropdownMenuItem className="text-xs cursor-pointer" asChild><a href={url} target="_blank" rel="noopener noreferrer">{name}</a></DropdownMenuItem><DropdownMenuSeparator /></>}
+          {renderMenuItems(item.submenus, ctx, spaces)}
+        </DropdownMenuSubContent>
+      </DropdownMenuSub>)];
+    }
+    return [url
+      ? <DropdownMenuItem key={i} className="text-xs cursor-pointer" asChild><a href={url} target="_blank" rel="noopener noreferrer">{name}</a></DropdownMenuItem>
+      : <DropdownMenuItem key={i} className="text-xs" disabled>{name}</DropdownMenuItem>
+    ];
+  });
+}
 
 function Field({ label, value, mono }: { label: string; value: string; mono?: boolean }) {
   return (
@@ -22,7 +114,7 @@ function Field({ label, value, mono }: { label: string; value: string; mono?: bo
 const thCls = 'text-left px-2 py-1.5 text-[10px] font-medium text-muted-foreground border-b border-border';
 const tdCls = 'px-2 py-1.5 border-b border-border text-xs';
 
-export default function SubaccountDetailModal({ sa, onClose }: Props) {
+export default function SubaccountDetailModal({ sa, onClose, cockpit, cockpitMenu }: Props) {
   const [activeTab, setActiveTab] = useState<ModalTab>('info');
 
   const tabCls = (t: ModalTab) =>
@@ -45,15 +137,40 @@ export default function SubaccountDetailModal({ sa, onClose }: Props) {
           {!sa ? null : (
             <>
               {/* Header */}
-              <div className="flex items-center gap-3 px-4 py-3 border-b border-border shrink-0">
+              <div className="flex items-center gap-2 px-4 py-3 border-b border-border shrink-0">
                 <DialogPrimitive.Title className="text-sm font-semibold min-w-0 truncate flex-1">
                   {sa.subaccountName}
-                  {sa.subdomain && (
-                    <span className="ml-2 text-xs font-normal font-mono text-muted-foreground bg-muted px-1.5 py-0.5 rounded">
-                      {sa.subdomain}
-                    </span>
-                  )}
                 </DialogPrimitive.Title>
+                {sa.subdomain && (
+                  <span className="text-xs font-normal font-mono text-muted-foreground bg-muted px-1.5 py-0.5 rounded shrink-0">
+                    {sa.subdomain}
+                  </span>
+                )}
+                {cockpit && cockpitMenu && (() => {
+                  const ctx    = buildCtx(sa, cockpit);
+                  const url    = cockpitMenu.url ? resolveUrl(cockpitMenu.url, ctx) : undefined;
+                  const spaces = sa.org?.spaces ?? [];
+                  return (
+                    <DropdownMenu>
+                      <DropdownMenuTrigger asChild>
+                        <button className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border border-border hover:bg-accent hover:text-foreground transition-colors shrink-0 text-muted-foreground">
+                          Open Cockpit <ChevronDown className="h-3 w-3 opacity-60 shrink-0" />
+                        </button>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="end" className="max-h-[min(70vh,420px)] overflow-y-auto">
+                        {url && (
+                          <>
+                            <DropdownMenuItem className="text-xs cursor-pointer font-semibold" asChild>
+                              <a href={url} target="_blank" rel="noopener noreferrer">Open Cockpit</a>
+                            </DropdownMenuItem>
+                            {cockpitMenu.submenus?.length ? <DropdownMenuSeparator /> : null}
+                          </>
+                        )}
+                        {cockpitMenu.submenus ? renderMenuItems(cockpitMenu.submenus, ctx, spaces) : null}
+                      </DropdownMenuContent>
+                    </DropdownMenu>
+                  );
+                })()}
                 <button
                   onClick={onClose}
                   className="p-1.5 rounded hover:bg-accent text-muted-foreground hover:text-foreground transition-colors shrink-0"
@@ -123,12 +240,22 @@ export default function SubaccountDetailModal({ sa, onClose }: Props) {
                             </tr>
                           </thead>
                           <tbody>
-                            {sa.org.spaces.map(s => (
-                              <tr key={s.spaceId} className="hover:bg-muted/20">
-                                <td className={tdCls}>{s.spaceName}</td>
-                                <td className={`${tdCls} font-mono text-muted-foreground`}>{s.spaceId}</td>
-                              </tr>
-                            ))}
+                            {sa.org.spaces.map(s => {
+                              const spaceUrl = cockpit?.host
+                                ? `${ensureHttps(cockpit.host)}/#/globalaccount/${sa.globalAccountGUID}/subaccount/${sa.subaccountId}/space/${s.spaceId}`
+                                : undefined;
+                              return (
+                                <tr key={s.spaceId} className="hover:bg-muted/20">
+                                  <td className={tdCls}>
+                                    {spaceUrl
+                                      ? <a href={spaceUrl} target="_blank" rel="noopener noreferrer" className="hover:underline hover:text-primary transition-colors">{s.spaceName}</a>
+                                      : s.spaceName
+                                    }
+                                  </td>
+                                  <td className={`${tdCls} font-mono text-muted-foreground`}>{s.spaceId}</td>
+                                </tr>
+                              );
+                            })}
                           </tbody>
                         </table>
                       </div>

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import {
-  Download, Eye, EyeOff, Lock, Plus, RotateCcw, Save, Search, Send, Trash2, Upload, X,
+  Download, Eye, EyeOff, Lock, Plus, RefreshCw, RotateCcw, Save, Search, Send, Trash2, Upload, X,
 } from 'lucide-react';
 import { useAuth } from '@/hooks/useAuth';
 import type { SubaccountEntry } from '@/components/config/SubaccountsTable';
@@ -519,6 +519,9 @@ export default function SubaccountDestModal({ org, allNames, initialName, onClos
   const [changelog,          setChangelog]          = useState('');
   const [isLoadingChangelog, setIsLoadingChangelog] = useState(false);
 
+  // Per-subaccount refresh
+  const [isRefreshing, setIsRefreshing] = useState(false);
+
   const searchTimer  = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const listRef      = useRef<HTMLDivElement>(null);
@@ -734,6 +737,23 @@ export default function SubaccountDestModal({ org, allNames, initialName, onClos
     setActiveTab('properties');
   }
 
+  async function handleRefresh() {
+    setIsRefreshing(true);
+    try {
+      await fetch(`/api/destinations/${enc(org.region)}/${enc(org.subdomain)}/refresh`, { method: 'POST' });
+      // Reload destination list for this org
+      const listRes  = await fetch('/api/destinations');
+      const listJson = await listRes.json() as { ok: boolean; data: Record<string, Array<{ name: string }>> };
+      if (listJson.ok) {
+        const orgId   = org.org?.orgId ?? '';
+        const updated = (listJson.data[orgId] ?? []).map(d => d.name).sort();
+        if (updated.length > 0) setLocalAllNames(updated);
+      }
+      // Reload current destination properties if one is selected
+      if (selectedName) await loadDest(selectedName);
+    } catch { /* ignore */ } finally { setIsRefreshing(false); }
+  }
+
   const tabCls = (active: boolean) =>
     `px-4 py-2 text-xs transition-colors border-b-2 shrink-0 font-medium ${
       active ? 'border-primary text-foreground' : 'border-transparent text-muted-foreground hover:text-foreground'
@@ -790,6 +810,15 @@ export default function SubaccountDestModal({ org, allNames, initialName, onClos
                   >
                     <Download className="h-3.5 w-3.5" />
                     {exportLabel}
+                  </button>
+                  <button
+                    onClick={() => void handleRefresh()}
+                    disabled={isRefreshing || isSaving || isImporting}
+                    className={btnOutline}
+                    title="Refresh destinations for this subaccount"
+                  >
+                    <RefreshCw className={`h-3.5 w-3.5 ${isRefreshing ? 'animate-spin' : ''}`} />
+                    {isRefreshing ? 'Refreshing…' : 'Refresh'}
                   </button>
                   <div className="w-px h-4 bg-border mx-0.5" />
                 </>

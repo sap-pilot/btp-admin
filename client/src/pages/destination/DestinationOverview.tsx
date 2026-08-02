@@ -1,10 +1,14 @@
 import { useEffect, useRef, useState } from 'react';
 import { useParams, useNavigate } from 'react-router';
-import { PanelLeft, RefreshCw, Search } from 'lucide-react';
+import { PanelLeft, RefreshCw, Search, X } from 'lucide-react';
 import { useSidebar } from '@/components/AppLayout';
 import type { SubaccountEntry } from '@/components/config/SubaccountsTable';
 import type { TabEntry, TabSection } from '@/components/config/TabsTable';
 import SubaccountDestModal from './SubaccountDestModal';
+import {
+  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
+  AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -57,14 +61,24 @@ function bucketSa(dests: DestItem[]): Buckets {
   return b;
 }
 
-function fakeStatus(name: string, orgId: string): 'OK' | 'Failed' {
-  let h = 0;
-  for (const c of name + orgId) h = (h * 31 + c.charCodeAt(0)) & 0xffff;
-  return h % 10 === 0 ? 'Failed' : 'OK';
-}
-
 function csvIncludes(csv: string, id: string): boolean {
   return csv.split(',').map(s => s.trim()).includes(id);
+}
+
+function Highlight({ text, query }: { text: string; query: string }) {
+  if (!query || !text) return <>{text}</>;
+  const q = query.toLowerCase();
+  const escaped = query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const parts = text.split(new RegExp(`(${escaped})`, 'gi'));
+  return (
+    <>
+      {parts.map((part, i) =>
+        part.toLowerCase() === q
+          ? <mark key={i} className="bg-yellow-200 dark:bg-yellow-800/50 text-inherit rounded-sm not-italic px-0">{part}</mark>
+          : part
+      )}
+    </>
+  );
 }
 
 const CAT_META = {
@@ -82,22 +96,22 @@ export default function DestinationOverview() {
   }>();
   const navigate = useNavigate();
 
-  const [tabEntries, setTabEntries] = useState<TabEntry[]>([]);
-  const [saData,     setSaData]     = useState<SubaccountEntry[]>([]);
-  const [destData,   setDestData]   = useState<DestData>({});
+  const [tabEntries,   setTabEntries]   = useState<TabEntry[]>([]);
+  const [saData,       setSaData]       = useState<SubaccountEntry[]>([]);
+  const [destData,     setDestData]     = useState<DestData>({});
   const [isRefreshing, setIsRefreshing] = useState(false);
-  const [progress, setProgress] = useState<RefreshProgress | null>(null);
-  const [modal, setModal]  = useState<ModalState | null>(null);
+  const [progress,     setProgress]     = useState<RefreshProgress | null>(null);
+  const [modal,        setModal]        = useState<ModalState | null>(null);
+  const [showRefreshDialog, setShowRefreshDialog] = useState(false);
+
+  // Search
+  const [filterInput,   setFilterInput]   = useState('');
+  const [activeFilter,  setActiveFilter]  = useState('');
+  const [filterResults, setFilterResults] = useState<DestSearchResult[] | null>(null);
+  const [isSearching,   setIsSearching]   = useState(false);
 
   const deepLinkOpened   = useRef(false);
   const autoHideTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  // Search
-  const [searchQuery,   setSearchQuery]   = useState('');
-  const [searchResults, setSearchResults] = useState<DestSearchResult[]>([]);
-  const [isSearching,   setIsSearching]   = useState(false);
-  const [showResults,   setShowResults]   = useState(false);
-  const searchRef = useRef<HTMLDivElement>(null);
 
   async function loadData() {
     const [tabsRes, sasRes, destsRes] = await Promise.all([
@@ -152,31 +166,34 @@ export default function DestinationOverview() {
     setModal({ sa, allNames: names, initialName: nameParam ?? names[0] });
   }, [regionParam, subdomainParam, nameParam, saData, destData]);
 
-  // Debounced search
-  useEffect(() => {
-    const q = searchQuery.trim();
-    if (!q) { setSearchResults([]); setShowResults(false); return; }
-    const id = setTimeout(async () => {
-      setIsSearching(true);
-      try {
-        const res  = await fetch(`/api/destinations/search?q=${encodeURIComponent(q)}`);
-        const json = await res.json() as { ok: boolean; data: DestSearchResult[] };
-        if (json.ok) { setSearchResults(json.data); setShowResults(true); }
-      } catch { /* ignore */ } finally { setIsSearching(false); }
-    }, 300);
-    return () => clearTimeout(id);
-  }, [searchQuery]);
+  // ── Search ──────────────────────────────────────────────────────────────────
 
-  // Close dropdown on outside click
-  useEffect(() => {
-    function onDown(e: MouseEvent) {
-      if (searchRef.current && !searchRef.current.contains(e.target as Node)) setShowResults(false);
-    }
-    document.addEventListener('mousedown', onDown);
-    return () => document.removeEventListener('mousedown', onDown);
-  }, []);
+  async function applySearch(q: string) {
+    if (!q) { clearFilter(); return; }
+    setIsSearching(true);
+    setActiveFilter(q);
+    try {
+      const res  = await fetch(`/api/destinations/search?q=${encodeURIComponent(q)}`);
+      const json = await res.json() as { ok: boolean; data: DestSearchResult[] };
+      if (json.ok) setFilterResults(json.data);
+    } catch { /* ignore */ } finally { setIsSearching(false); }
+  }
 
-  async function handleRefresh() {
+  function clearFilter() {
+    setFilterInput('');
+    setActiveFilter('');
+    setFilterResults(null);
+  }
+
+  function handleFilterKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
+    if (e.key === 'Enter') void applySearch(filterInput.trim());
+    if (e.key === 'Escape') clearFilter();
+  }
+
+  // ── Refresh ─────────────────────────────────────────────────────────────────
+
+  async function doRefresh() {
+    setShowRefreshDialog(false);
     setIsRefreshing(true);
     if (autoHideTimerRef.current) { clearTimeout(autoHideTimerRef.current); autoHideTimerRef.current = null; }
     setProgress(null);
@@ -194,14 +211,51 @@ export default function DestinationOverview() {
     }
   }
 
-  const allDestSas = saData.filter(sa => sa.manageDestinations && !!sa.org?.orgId);
+  // ── Filter derivations ───────────────────────────────────────────────────────
 
-  // Build visible tabs: only tabs that have at least one group with visible subaccounts
+  const allDestSas = saData.filter(sa => sa.manageDestinations && !!sa.org?.orgId);
+  const isFiltered = filterResults !== null;
+
+  // orgId → Set of matched destination names
+  const matchedByOrg = new Map<string, Set<string>>();
+  if (isFiltered) {
+    for (const r of filterResults) {
+      if (!matchedByOrg.has(r.org_id)) matchedByOrg.set(r.org_id, new Set());
+      matchedByOrg.get(r.org_id)!.add(r.name);
+    }
+  }
+
+  function saVisible(sa: SubaccountEntry): boolean {
+    return !isFiltered || matchedByOrg.has(saOrgId(sa));
+  }
+
+  // null = no filter active (show all); Set = only these names
+  function matchedForSa(sa: SubaccountEntry): Set<string> | null {
+    if (!isFiltered) return null;
+    return matchedByOrg.get(saOrgId(sa)) ?? new Set();
+  }
+
+  function filterDestItems(items: DestItem[], matched: Set<string> | null): DestItem[] {
+    if (!matched) return items;
+    return items.filter(d => matched.has(d.name));
+  }
+
+  // Build visible tabs (unfiltered)
   const visibleTabs = tabEntries.filter(te =>
     te.sections.some(s => s.type === 'subaccountGroup' && allDestSas.some(sa => csvIncludes(sa.groupIds, s.groupId))),
   );
 
-  const activeTabEntry = visibleTabs.find(te => te.tab === decodeURIComponent(tabParam ?? '')) ?? visibleTabs[0];
+  // Further restrict by search results
+  const filteredTabs = isFiltered
+    ? visibleTabs.filter(te =>
+        te.sections.some(s =>
+          s.type === 'subaccountGroup' &&
+          allDestSas.some(sa => csvIncludes(sa.groupIds, s.groupId) && saVisible(sa))
+        )
+      )
+    : visibleTabs;
+
+  const activeTabEntry = filteredTabs.find(te => te.tab === decodeURIComponent(tabParam ?? '')) ?? filteredTabs[0];
 
   const tabCls = (active: boolean) =>
     `px-4 py-2 text-sm transition-colors border-b-2 shrink-0 ${
@@ -215,6 +269,8 @@ export default function DestinationOverview() {
   const tdCls      = 'px-3 py-2 text-xs border-b border-border align-middle';
   const catTdCls   = `${tdCls} sticky left-0 z-10 bg-background border-r border-border align-top w-[130px]`;
 
+  const pendingSearch = filterInput.trim() !== '' && filterInput.trim() !== activeFilter;
+
   return (
     <div className="flex flex-col h-full bg-background text-foreground">
       {/* Title bar */}
@@ -224,66 +280,57 @@ export default function DestinationOverview() {
         </button>
         <span className="text-sm font-semibold">Destination Overview</span>
 
-        {/* Search */}
-        <div ref={searchRef} className="relative ml-auto">
-          <div className="relative flex items-center">
-            <Search className="absolute left-2 h-3.5 w-3.5 text-muted-foreground pointer-events-none" />
-            <input
-              type="text"
-              value={searchQuery}
-              onChange={e => setSearchQuery(e.target.value)}
-              onFocus={() => { if (searchResults.length > 0) setShowResults(true); }}
-              placeholder="Search destinations…"
-              className="h-8 pl-7 pr-7 text-xs border border-border rounded bg-background text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring w-[220px]"
-            />
-            {isSearching && <RefreshCw className="absolute right-2 h-3 w-3 animate-spin text-muted-foreground" />}
+        {/* Search input — Enter to search */}
+        <div className="relative flex items-center ml-auto">
+          <Search className="absolute left-2 h-3.5 w-3.5 text-muted-foreground pointer-events-none" />
+          <input
+            type="text"
+            value={filterInput}
+            onChange={e => setFilterInput(e.target.value)}
+            onKeyDown={handleFilterKeyDown}
+            placeholder="Full-text destination search…"
+            className="h-8 pl-7 pr-[4.5rem] text-xs border border-border rounded bg-background text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring w-[240px]"
+          />
+          <div className="absolute right-1.5 flex items-center gap-1">
+            {isSearching && <RefreshCw className="h-3 w-3 animate-spin text-muted-foreground shrink-0" />}
+            {pendingSearch && !isSearching && (
+              <span className="text-[10px] text-muted-foreground/50 pointer-events-none whitespace-nowrap">↵</span>
+            )}
+            {(filterInput || activeFilter) && (
+              <button
+                onClick={clearFilter}
+                className="p-0.5 rounded text-muted-foreground/60 hover:text-foreground transition-colors"
+                title="Clear search"
+              >
+                <X className="h-3.5 w-3.5" />
+              </button>
+            )}
           </div>
-          {showResults && (
-            <div className="absolute top-full mt-1 right-0 w-[420px] bg-popover border border-border rounded-md shadow-lg z-50 max-h-[400px] overflow-auto">
-              {searchResults.length === 0
-                ? <div className="px-3 py-4 text-xs text-muted-foreground text-center">No destinations found</div>
-                : searchResults.map((r, i) => {
-                  const sa = allDestSas.find(s => saOrgId(s) === r.org_id);
-                  return (
-                    <button
-                      key={i}
-                      className="w-full text-left px-3 py-2 border-b border-border last:border-0 hover:bg-muted/50"
-                      onClick={() => {
-                        if (!sa) return;
-                        const baseNames = (destData[r.org_id] ?? []).map(d => d.name).sort();
-                        const allNames  = baseNames.includes(r.name) ? baseNames : [...new Set([r.name, ...baseNames])].sort();
-                        setModal({ sa, allNames, initialName: r.name });
-                        setShowResults(false);
-                        setSearchQuery('');
-                      }}
-                    >
-                      <div className="font-mono text-xs font-medium text-foreground">{r.name}</div>
-                      {r.matchField !== 'Name' && (
-                        <div className="text-[10px] text-muted-foreground mt-0.5 truncate">
-                          <span className="text-muted-foreground/60">{r.matchField}: </span>
-                          {r.matchValue.length > 80 ? `${r.matchValue.slice(0, 80)}…` : r.matchValue}
-                        </div>
-                      )}
-                      <div className="text-[10px] text-muted-foreground/50 mt-0.5">{r.region} / {r.subdomain}</div>
-                    </button>
-                  );
-                })
-              }
-            </div>
-          )}
         </div>
 
-        <button onClick={handleRefresh} disabled={isRefreshing} className={btnOutline}>
+        <button onClick={() => setShowRefreshDialog(true)} disabled={isRefreshing} className={btnOutline}>
           <RefreshCw className={`h-3.5 w-3.5 ${isRefreshing ? 'animate-spin' : ''}`} />
           {isRefreshing ? 'Refreshing…' : 'Refresh'}
         </button>
       </div>
 
+      {/* Active filter chip */}
+      {isFiltered && (
+        <div className="shrink-0 px-3 py-1.5 border-b border-border bg-muted/20 flex items-center gap-2 text-xs text-muted-foreground">
+          <span>Search results for</span>
+          <span className="font-mono bg-muted px-1.5 py-0.5 rounded text-foreground">{activeFilter}</span>
+          <span>— {filterResults!.length} destination{filterResults!.length !== 1 ? 's' : ''} matched</span>
+          <button onClick={clearFilter} className="ml-auto text-muted-foreground/60 hover:text-foreground transition-colors flex items-center gap-1">
+            <X className="h-3 w-3" /> Clear
+          </button>
+        </div>
+      )}
+
       {/* Progress bar */}
       {progress && (() => {
-        const isDone     = progress.type === 'done';
-        const hasIssues  = isDone && !!progress.issues?.length;
-        const pct        = isDone ? 100 : progress.total > 0 ? Math.round(((progress.current ?? 0) / progress.total) * 100) : 0;
+        const isDone    = progress.type === 'done';
+        const hasIssues = isDone && !!progress.issues?.length;
+        const pct       = isDone ? 100 : progress.total > 0 ? Math.round(((progress.current ?? 0) / progress.total) * 100) : 0;
 
         const barColor  = hasIssues ? 'bg-amber-500' : isDone ? 'bg-green-500' : 'bg-primary';
         const textColor = hasIssues ? 'text-amber-600 dark:text-amber-400' : isDone ? 'text-green-600 dark:text-green-400' : 'text-foreground';
@@ -297,11 +344,11 @@ export default function DestinationOverview() {
         }
 
         return (
-          <div className={`shrink-0 border-b border-border ${bgColor}`}>
+          <div className={`relative shrink-0 border-b border-border ${bgColor}`}>
             <div className="h-1 w-full bg-transparent">
               <div className={`h-full transition-all duration-300 ${barColor}`} style={{ width: `${pct}%` }} />
             </div>
-            <div className={`px-4 py-1.5 text-xs text-center ${textColor}`}>{msg}</div>
+            <div className={`px-4 py-1.5 text-xs text-center ${textColor} pr-8`}>{msg}</div>
             {hasIssues && (
               <div className="px-4 pb-2 flex flex-col gap-0.5">
                 {progress.issues!.map((issue, i) => (
@@ -309,14 +356,21 @@ export default function DestinationOverview() {
                 ))}
               </div>
             )}
+            <button
+              onClick={() => setProgress(null)}
+              className="absolute top-1 right-1 p-0.5 rounded text-muted-foreground/60 hover:text-foreground hover:bg-black/10 dark:hover:bg-white/10 transition-colors"
+              title="Dismiss"
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
           </div>
         );
       })()}
 
       {/* Tab bar */}
-      {visibleTabs.length > 0 && (
+      {filteredTabs.length > 0 && (
         <div className="flex items-center border-b border-border shrink-0 px-2 overflow-x-auto">
-          {visibleTabs.map(te => (
+          {filteredTabs.map(te => (
             <button key={te.tab} className={tabCls(te === activeTabEntry)} onClick={() => navigate(`/destinations/${encodeURIComponent(te.tab)}`)}>
               {te.tab}
             </button>
@@ -332,159 +386,215 @@ export default function DestinationOverview() {
             <p className="text-xs">Set <code className="bg-muted px-1 rounded">Manage Destinations</code> on subaccounts in Configuration, then click <strong>Refresh</strong>.</p>
           </div>
         )}
+        {visibleTabs.length > 0 && isFiltered && filteredTabs.length === 0 && (
+          <div className="flex items-center justify-center h-32 text-sm text-muted-foreground">
+            No matching destinations found for "{activeFilter}".
+          </div>
+        )}
 
         {activeTabEntry?.sections
           .filter((s): s is Extract<TabSection, { type: 'subaccountGroup' }> => s.type === 'subaccountGroup')
           .map(grp => {
-          const visibleSas = allDestSas
-            .filter(sa => csvIncludes(sa.groupIds, grp.groupId))
-            .sort((a, b) => a.pos - b.pos);
-          if (visibleSas.length === 0) return null;
+            const visibleSas = allDestSas
+              .filter(sa => csvIncludes(sa.groupIds, grp.groupId) && saVisible(sa))
+              .sort((a, b) => a.pos - b.pos);
+            if (visibleSas.length === 0) return null;
 
-          const saBuckets = visibleSas.map(sa => ({
-            sa,
-            buckets: bucketSa(destData[saOrgId(sa)] ?? []),
-          }));
+            const saBuckets = visibleSas.map(sa => {
+              const matched  = matchedForSa(sa);
+              const filtered = filterDestItems(destData[saOrgId(sa)] ?? [], matched);
+              return { sa, buckets: bucketSa(filtered), allDests: destData[saOrgId(sa)] ?? [] };
+            });
 
-          return (
-            <div key={grp.groupId} className="space-y-1.5">
-              <div className="px-1">
-                <span className="text-xs font-semibold text-foreground">{grp.title ?? grp.groupId}</span>
-                <span className="text-xs text-muted-foreground ml-2">({grp.groupId})</span>
-              </div>
+            return (
+              <div key={grp.groupId} className="space-y-1.5">
+                <div className="px-1">
+                  <span className="text-xs font-semibold text-foreground">{grp.title ?? grp.groupId}</span>
+                  <span className="text-xs text-muted-foreground ml-2">({grp.groupId})</span>
+                </div>
 
-              <div className="border border-border rounded-md overflow-hidden">
-                <div className="overflow-x-auto">
-                  <table className="w-full border-collapse text-sm" style={{ tableLayout: 'auto' }}>
-                    <thead className="sticky top-0 z-10">
-                      <tr className="bg-muted/30">
-                        <th className="sticky left-0 z-20 bg-muted/30 text-left text-xs font-medium text-muted-foreground px-3 py-2 w-[130px] border-r border-b border-border whitespace-nowrap"></th>
-                        {visibleSas.map(sa => (
-                          <th
-                            key={sa.subaccountId}
-                            className="text-center text-xs font-medium px-3 py-2 min-w-[160px] border-l border-b border-border text-muted-foreground cursor-pointer hover:bg-muted/40 transition-colors"
-                            onClick={() => setModal({ sa, allNames: (destData[saOrgId(sa)] ?? []).map(d => d.name).sort() })}
-                          >
-                            <div className="flex flex-col gap-0.5 items-center">
-                              <span>{sa.alias || sa.subaccountName}</span>
-                              {sa.subdomain && (
-                                <span className="text-[10px] font-normal font-mono text-muted-foreground/60 leading-tight">{sa.subdomain}</span>
-                              )}
-                            </div>
+                <div className="border border-border rounded-md overflow-hidden">
+                  <div className="overflow-x-auto">
+                    <table className="w-full border-collapse text-sm" style={{ tableLayout: 'auto' }}>
+                      <thead className="sticky top-0 z-10">
+                        <tr className="bg-muted/30">
+                          <th className="sticky left-0 z-20 bg-muted/30 text-left text-xs font-medium text-muted-foreground px-3 py-2 w-[130px] border-r border-b border-border whitespace-nowrap">
+                            {isFiltered ? 'Destination' : ''}
                           </th>
-                        ))}
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {(['generic', 's4', 'cep'] as const).map(cat => {
-                        const { label, pattern } = CAT_META[cat];
-
-                        if (cat === 's4') {
-                          const sortedPerSa = saBuckets.map(b => ({
-                            sa:    b.sa,
-                            names: [...b.buckets.s4].sort(),
-                          }));
-                          const maxRows = Math.max(0, ...sortedPerSa.map(b => b.names.length));
-                          if (maxRows === 0) return null;
-                          return Array.from({ length: maxRows }, (_, i) => (
-                            <tr key={`s4-${i}`} className="hover:bg-muted/20">
-                              {i === 0 && (
-                                <td rowSpan={maxRows} className={catTdCls}>
-                                  <div className="flex flex-col gap-0.5">
-                                    <span className="font-semibold">{label}</span>
-                                    <span className="text-[10px] text-muted-foreground/60">{pattern}</span>
-                                  </div>
+                          {visibleSas.map(sa => (
+                            <th
+                              key={sa.subaccountId}
+                              className="text-center text-xs font-medium px-3 py-2 min-w-[160px] border-l border-b border-border text-muted-foreground cursor-pointer hover:bg-muted/40 transition-colors"
+                              onClick={() => setModal({ sa, allNames: (destData[saOrgId(sa)] ?? []).map(d => d.name).sort() })}
+                            >
+                              <div className="flex flex-col gap-0.5 items-center">
+                                <span><Highlight text={sa.alias || sa.subaccountName} query={activeFilter} /></span>
+                                {sa.subdomain && (
+                                  <span className="text-[10px] font-normal font-mono text-muted-foreground/60 leading-tight">
+                                    <Highlight text={sa.subdomain} query={activeFilter} />
+                                  </span>
+                                )}
+                              </div>
+                            </th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {isFiltered ? (() => {
+                          // Flat search view: one row per matched destination name (union across all SAs)
+                          const allMatchedNames = [
+                            ...new Set(
+                              saBuckets.flatMap(({ sa }) => {
+                                const m = matchedByOrg.get(saOrgId(sa));
+                                return m ? [...m] : [];
+                              })
+                            ),
+                          ].sort();
+                          if (allMatchedNames.length === 0) {
+                            return (
+                              <tr>
+                                <td colSpan={visibleSas.length + 1} className={`${tdCls} text-center text-muted-foreground`}>
+                                  No matching destinations
                                 </td>
-                              )}
-                              {sortedPerSa.map(({ sa, names }) => {
-                                const name = names[i];
-                                if (!name) return (
-                                  <td key={sa.subaccountId} className={`${tdCls} text-left`}>
-                                    <span className="text-muted-foreground/30 text-[11px]">—</span>
-                                  </td>
-                                );
-                                const orgId  = saOrgId(sa);
-                                const status = fakeStatus(name, orgId);
+                              </tr>
+                            );
+                          }
+                          return allMatchedNames.map(name => (
+                            <tr key={name} className="hover:bg-muted/20">
+                              <td className={`${catTdCls} font-mono text-[11px] text-foreground`}>
+                                <Highlight text={name} query={activeFilter} />
+                              </td>
+                              {saBuckets.map(({ sa, allDests }) => {
+                                const matched = matchedByOrg.get(saOrgId(sa));
+                                const present = matched?.has(name) ?? false;
                                 return (
                                   <td key={sa.subaccountId} className={`${tdCls} text-left`}>
-                                    <button
-                                      className={`font-mono text-[11px] hover:underline text-left ${status === 'OK' ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}`}
-                                      onClick={() => setModal({ sa, allNames: (destData[orgId] ?? []).map(d => d.name).sort(), initialName: name })}
-                                    >
-                                      {name}
-                                    </button>
+                                    {present
+                                      ? (
+                                        <button
+                                          className="font-mono text-[11px] hover:underline text-left text-foreground"
+                                          onClick={() => setModal({ sa, allNames: allDests.map(d => d.name).sort(), initialName: name })}
+                                        >
+                                          <Highlight text={name} query={activeFilter} />
+                                        </button>
+                                      )
+                                      : <span className="text-muted-foreground/30 text-[11px]">—</span>
+                                    }
                                   </td>
                                 );
                               })}
                             </tr>
                           ));
-                        }
+                        })() : (
+                          <>
+                            {(['generic', 's4', 'cep'] as const).map(cat => {
+                              const { label, pattern } = CAT_META[cat];
 
-                        const allNames = [...new Set(saBuckets.flatMap(b => [...b.buckets[cat]]))].sort();
-                        if (allNames.length === 0) return null;
-                        return allNames.map((name, i) => (
-                          <tr key={`${cat}-${name}`} className="hover:bg-muted/20">
-                            {i === 0 && (
-                              <td rowSpan={allNames.length} className={catTdCls}>
+                              if (cat === 's4') {
+                                const sortedPerSa = saBuckets.map(b => ({
+                                  sa:       b.sa,
+                                  names:    [...b.buckets.s4].sort(),
+                                  allDests: b.allDests,
+                                }));
+                                const maxRows = Math.max(0, ...sortedPerSa.map(b => b.names.length));
+                                if (maxRows === 0) return null;
+                                return Array.from({ length: maxRows }, (_, i) => (
+                                  <tr key={`s4-${i}`} className="hover:bg-muted/20">
+                                    {i === 0 && (
+                                      <td rowSpan={maxRows} className={catTdCls}>
+                                        <div className="flex flex-col gap-0.5">
+                                          <span className="font-semibold">{label}</span>
+                                          <span className="text-[10px] text-muted-foreground/60">{pattern}</span>
+                                        </div>
+                                      </td>
+                                    )}
+                                    {sortedPerSa.map(({ sa, names, allDests }) => {
+                                      const name = names[i];
+                                      return (
+                                        <td key={sa.subaccountId} className={`${tdCls} text-left`}>
+                                          {name
+                                            ? (
+                                              <button
+                                                className="font-mono text-[11px] hover:underline text-left text-foreground"
+                                                onClick={() => setModal({ sa, allNames: allDests.map(d => d.name).sort(), initialName: name })}
+                                              >
+                                                <Highlight text={name} query={activeFilter} />
+                                              </button>
+                                            )
+                                            : <span className="text-muted-foreground/30 text-[11px]">—</span>
+                                          }
+                                        </td>
+                                      );
+                                    })}
+                                  </tr>
+                                ));
+                              }
+
+                              const allNames = [...new Set(saBuckets.flatMap(b => [...b.buckets[cat]]))].sort();
+                              if (allNames.length === 0) return null;
+                              return allNames.map((name, i) => (
+                                <tr key={`${cat}-${name}`} className="hover:bg-muted/20">
+                                  {i === 0 && (
+                                    <td rowSpan={allNames.length} className={catTdCls}>
+                                      <div className="flex flex-col gap-0.5">
+                                        <span className="font-semibold">{label}</span>
+                                        <span className="text-[10px] text-muted-foreground/60">{pattern}</span>
+                                      </div>
+                                    </td>
+                                  )}
+                                  {saBuckets.map(({ sa, buckets, allDests }) => {
+                                    const present = buckets[cat].includes(name);
+                                    return (
+                                      <td key={sa.subaccountId} className={`${tdCls} text-left`}>
+                                        {present
+                                          ? <button className="text-foreground font-mono text-[11px] hover:underline text-left" onClick={() => setModal({ sa, allNames: allDests.map(d => d.name).sort(), initialName: name })}><Highlight text={name} query={activeFilter} /></button>
+                                          : <span className="text-muted-foreground/30 text-[11px]">—</span>
+                                        }
+                                      </td>
+                                    );
+                                  })}
+                                </tr>
+                              ));
+                            })}
+
+                            {/* OTHERS row */}
+                            <tr className="hover:bg-muted/20">
+                              <td className={catTdCls}>
                                 <div className="flex flex-col gap-0.5">
-                                  <span className="font-semibold">{label}</span>
-                                  <span className="text-[10px] text-muted-foreground/60">{pattern}</span>
+                                  <span className="font-semibold">OTHERS</span>
+                                  <span className="text-[10px] text-muted-foreground/60">all other destinations</span>
                                 </div>
                               </td>
-                            )}
-                            {saBuckets.map(({ sa, buckets }) => {
-                              const present = buckets[cat].includes(name);
-                              const orgId   = saOrgId(sa);
-                              const status  = present ? fakeStatus(name, orgId) : null;
-                              return (
-                                <td key={sa.subaccountId} className={`${tdCls} text-left`}>
-                                  {status === 'OK'     && <button className="text-green-600 dark:text-green-400 font-mono text-[11px] hover:underline text-left" onClick={() => setModal({ sa, allNames: (destData[orgId] ?? []).map(d => d.name).sort(), initialName: name })}>{name}</button>}
-                                  {status === 'Failed' && <button className="text-red-600   dark:text-red-400   font-mono text-[11px] hover:underline text-left" onClick={() => setModal({ sa, allNames: (destData[orgId] ?? []).map(d => d.name).sort(), initialName: name })}>{name}</button>}
-                                  {!status             && <span className="text-muted-foreground/30 text-[11px]">—</span>}
-                                </td>
-                              );
-                            })}
-                          </tr>
-                        ));
-                      })}
-
-                      {/* OTHERS row */}
-                      <tr className="hover:bg-muted/20">
-                        <td className={catTdCls}>
-                          <div className="flex flex-col gap-0.5">
-                            <span className="font-semibold">OTHERS</span>
-                            <span className="text-[10px] text-muted-foreground/60">all other destinations</span>
-                          </div>
-                        </td>
-                        {saBuckets.map(({ sa, buckets }) => {
-                          const orgId      = saOrgId(sa);
-                          const others     = buckets.others;
-                          const allSaNames = (destData[orgId] ?? []).map(d => d.name).sort();
-                          return (
-                            <td key={sa.subaccountId} className={`${tdCls} text-left`}>
-                              {others.length > 0
-                                ? (
-                                  <button
-                                    onClick={() => setModal({ sa, allNames: allSaNames, initialName: others[0] })}
-                                    className="w-full flex items-center justify-between px-2 py-1 rounded bg-muted/60 text-muted-foreground hover:bg-accent hover:text-accent-foreground text-[11px] font-medium transition-colors"
-                                  >
-                                    <span>{others.length} destinations</span>
-                                    <span className="opacity-60">→</span>
-                                  </button>
-                                )
-                                : <span className="text-muted-foreground/30 text-[11px]">—</span>
-                              }
-                            </td>
-                          );
-                        })}
-                      </tr>
-                    </tbody>
-                  </table>
+                              {saBuckets.map(({ sa, buckets, allDests }) => {
+                                const others     = buckets.others;
+                                const allSaNames = allDests.map(d => d.name).sort();
+                                return (
+                                  <td key={sa.subaccountId} className={`${tdCls} text-left`}>
+                                    {others.length > 0
+                                      ? (
+                                        <button
+                                          onClick={() => setModal({ sa, allNames: allSaNames, initialName: others[0] })}
+                                          className="w-full flex items-center justify-between px-2 py-1 rounded bg-muted/60 text-muted-foreground hover:bg-accent hover:text-accent-foreground text-[11px] font-medium transition-colors"
+                                        >
+                                          <span>{others.length} destinations</span>
+                                          <span className="opacity-60">→</span>
+                                        </button>
+                                      )
+                                      : <span className="text-muted-foreground/30 text-[11px]">—</span>
+                                    }
+                                  </td>
+                                );
+                              })}
+                            </tr>
+                          </>
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
                 </div>
               </div>
-            </div>
-          );
-        })}
+            );
+          })}
       </div>
 
       {modal && (
@@ -499,6 +609,26 @@ export default function DestinationOverview() {
           }}
         />
       )}
+
+      {/* Refresh confirmation dialog */}
+      <AlertDialog open={showRefreshDialog}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Refresh all destination data?</AlertDialogTitle>
+            <AlertDialogDescription asChild>
+              <div className="space-y-2 text-sm">
+                <p>Refreshing all subaccounts destinations may take quite a while.</p>
+                <p>For a faster result, click on a subaccount name to open its destination panel and refresh there instead.</p>
+                <p>Do you still want to refresh all subaccounts?</p>
+              </div>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel onClick={() => setShowRefreshDialog(false)}>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={() => void doRefresh()}>Yes, proceed</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

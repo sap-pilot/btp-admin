@@ -204,6 +204,7 @@ export default function ConfigModal({ open, onClose }: Props) {
                 isSaving={isSavingSas}
                 onSave={handleSasSave}
                 refreshProgress={null}
+                onDismissProgress={() => {}}
                 onOpenDetail={setSelectedSa}
               />
             )}

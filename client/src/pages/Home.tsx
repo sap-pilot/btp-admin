@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router';
-import { PanelLeft } from 'lucide-react';
+import { PanelLeft, Search, X } from 'lucide-react';
 import { useSidebar, useSettings } from '@/components/AppLayout';
-import HomepageContent, { type HomepageData, type CockpitMenuItem } from '@/components/home/HomepageContent';
+import HomepageContent, { matchesSaFilter, type HomepageData, type CockpitMenuItem } from '@/components/home/HomepageContent';
 import type { TabEntry } from '@/components/config/TabsTable';
 import type { SubaccountEntry } from '@/components/config/SubaccountsTable';
 
@@ -17,6 +17,7 @@ export default function Home() {
   const [cockpitMenu, setCockpitMenu] = useState<CockpitMenuItem | null>(null);
   const [lastUpdated, setLastUpdated] = useState<number | null>(null);
   const [loading,     setLoading]     = useState(true);
+  const [filterQuery, setFilterQuery] = useState('');
 
   const loadingRef = useRef(true);
 
@@ -58,9 +59,43 @@ export default function Home() {
   const cockpit           = settings?.homepage.cockpit ?? { idp: '', host: '' };
   const mainSubscriptions = settings?.homepage.mainSubscriptions ?? [];
 
+  // Filter tabs to only those with at least one matching subaccount when query is active
+  const visibleTabs = filterQuery
+    ? tabs.filter(tab =>
+        tab.sections.some(s => {
+          if (s.type !== 'subaccountGroup') return false;
+          const gid = (s as { groupId: string }).groupId;
+          return subaccounts.some(
+            sa => sa.inHomepage
+              && sa.groupIds.split(',').map(g => g.trim()).some(g => g === gid)
+              && matchesSaFilter(sa, filterQuery, mainSubscriptions),
+          );
+        })
+      )
+    : tabs;
+
+  // If current active tab is filtered out, display the first visible tab instead
+  const displayTab = visibleTabs.some(t => t.tab === activeTab)
+    ? activeTab
+    : (visibleTabs[0]?.tab ?? activeTab);
+
   const homepage: HomepageData | null = tabs.length
-    ? { tabs, subaccounts, cockpit, cockpitMenu, mainSubscriptions }
+    ? { tabs: visibleTabs, subaccounts, cockpit, cockpitMenu, mainSubscriptions }
     : null;
+
+  // Count matching subaccounts across ALL tabs (unique by SA)
+  const allGroupIds = new Set(
+    tabs.flatMap(t =>
+      t.sections
+        .filter(s => s.type === 'subaccountGroup')
+        .map(s => (s as { groupId: string }).groupId),
+    ),
+  );
+  const allTabSas = subaccounts.filter(
+    sa => sa.inHomepage && [...allGroupIds].some(gid => sa.groupIds.split(',').map(g => g.trim()).includes(gid)),
+  );
+  const totalY = allTabSas.length;
+  const matchX = filterQuery ? allTabSas.filter(sa => matchesSaFilter(sa, filterQuery, mainSubscriptions)).length : totalY;
 
   return (
     <div className="flex flex-col h-full bg-background text-foreground">
@@ -73,11 +108,39 @@ export default function Home() {
           <PanelLeft className="h-4 w-4" />
         </button>
         <span className="text-sm font-medium">Home</span>
-        {lastUpdated != null && (
-          <span className="ml-auto text-[11px] text-muted-foreground/60">
-            Last updated at {new Date(lastUpdated).toLocaleString()}
-          </span>
-        )}
+        <div className="ml-auto flex items-center gap-3">
+          {lastUpdated != null && (
+            <span className="text-[11px] text-muted-foreground/60 shrink-0">
+              Last updated at {new Date(lastUpdated).toLocaleString()}
+            </span>
+          )}
+          {totalY > 0 && (
+            <div className="relative flex items-center">
+              <Search className="absolute left-2 h-3 w-3 text-muted-foreground/60 pointer-events-none" />
+              <input
+                type="text"
+                value={filterQuery}
+                onChange={e => setFilterQuery(e.target.value)}
+                placeholder="Filter subaccounts…"
+                className="h-7 pl-6 pr-[4.5rem] text-xs border border-border rounded bg-background text-foreground placeholder:text-muted-foreground/50 focus:outline-none focus:ring-1 focus:ring-ring w-[200px]"
+              />
+              <div className="absolute right-1.5 flex items-center gap-0.5">
+                {filterQuery && (
+                  <button
+                    onClick={() => setFilterQuery('')}
+                    className="p-0.5 rounded hover:bg-accent text-muted-foreground/60 hover:text-foreground transition-colors"
+                    title="Clear filter"
+                  >
+                    <X className="h-3 w-3" />
+                  </button>
+                )}
+                <span className="text-[10px] text-muted-foreground/60 pointer-events-none whitespace-nowrap">
+                  ({matchX}/{totalY})
+                </span>
+              </div>
+            </div>
+          )}
+        </div>
       </div>
 
       <div className="flex-1 overflow-auto">
@@ -93,8 +156,9 @@ export default function Home() {
         {!loading && homepage && (
           <HomepageContent
             data={homepage}
-            activeTab={activeTab}
+            activeTab={displayTab}
             onTabChange={tab => navigate('/home/' + encodeURIComponent(tab), { replace: true })}
+            filterQuery={filterQuery}
           />
         )}
       </div>

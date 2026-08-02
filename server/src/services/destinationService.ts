@@ -603,6 +603,95 @@ export async function refreshDestinations(username = 'system'): Promise<RefreshR
   return { refreshed, received, created, updated, deleted, errors: issues };
 }
 
+export async function refreshSubaccountDestinations(region: string, subdomain: string, username = 'system'): Promise<RefreshResult> {
+  const allSas = await readSubaccounts();
+  const sa     = allSas.find(s => s.region === region && s.subdomain === subdomain && s.manageDestinations);
+  if (!sa) return { refreshed: 0, received: 0, created: 0, updated: 0, deleted: 0, errors: [`No managed-destination subaccount found for ${region}/${subdomain}`] };
+
+  const total    = 1;
+  const location = `${sa.region}/${sa.subdomain}`;
+  const saLabel  = sa.alias || sa.subaccountName || sa.subdomain;
+  const issues: string[] = [];
+  let received = 0, created = 0, updated = 0, deleted = 0;
+
+  const { orgs: keyStore, planGuids } = await loadKeyStore();
+  const tokenStore = await loadTokenStore();
+  const cfLoginFailed = new Set<string>();
+
+  emit('refresh-destinations', { type: 'progress', current: 1, total, name: saLabel, received: 0 });
+
+  if (!sa.org?.orgId) {
+    const msg = `${location}: no org — cannot access destination service`;
+    emitImmediate('refresh-destinations', { type: 'done', refreshed: 0, total, received: 0, created: 0, updated: 0, deleted: 0, issues: [msg] });
+    return { refreshed: 0, received: 0, created: 0, updated: 0, deleted: 0, errors: [msg] };
+  }
+
+  const orgId   = sa.org.orgId;
+  const orgName = sa.org.orgName ?? '';
+
+  const saRegion = sa.region;
+  function issueRef(): string {
+    const ki = getFirstKeyInfo(keyStore, saRegion, orgId);
+    return ki ? ` -> ${ki.instanceName}[${ki.instanceId}]` : '';
+  }
+
+  try {
+    const tokenResult = await resolveToken(saRegion, orgId, orgName, keyStore, tokenStore, cfLoginFailed, planGuids, location);
+    if ('error' in tokenResult) {
+      issues.push(`${location}${issueRef()}: ${tokenResult.error}`);
+    } else {
+      const destinations = await fetchSubaccountDestinations(tokenResult.credential, tokenResult.accessToken);
+      const destDir = join(LOCAL_DEST_DIR, sa.region, sa.subdomain);
+      await mkdir(destDir, { recursive: true });
+
+      const apiNames = new Set<string>();
+      for (const dest of destinations) {
+        const d    = dest as Record<string, unknown>;
+        const name = String(d['Name'] ?? d['name'] ?? '');
+        if (!name) continue;
+        apiNames.add(name);
+        const result = await persistDestination(destDir, name, d, username);
+        if (result === 'created') created++;
+        else if (result === 'updated') updated++;
+      }
+      received += apiNames.size;
+
+      const entries = await readdir(destDir).catch(() => [] as string[]);
+      for (const fname of entries) {
+        if (!fname.endsWith('.json') || fname.endsWith('.deleted.json')) continue;
+        const destName      = fname.slice(0, -5);
+        if (apiNames.has(destName)) continue;
+        const changelogPath = join(destDir, `${destName}.changelog.md`);
+        const dateStr       = new Date().toISOString().replace('T', ' ').slice(0, 19) + ' UTC';
+        const entry         = `## Deleted by refresh at ${dateStr}\n\n`;
+        const prev          = existsSync(changelogPath) ? await readFile(changelogPath, 'utf-8') : '';
+        await writeFile(changelogPath, entry + prev, 'utf-8');
+        await rename(join(destDir, fname), join(destDir, `${destName}.deleted.json`));
+        deleted++;
+      }
+
+      logger.info({ location, count: apiNames.size }, `Destinations refreshed for ${location}`);
+    }
+  } catch (err) {
+    const msg = String(err);
+    logger.error({ location, err }, `Destination refresh failed for ${location}: ${msg}`);
+    issues.push(`${location}${issueRef()}: ${msg}`);
+  }
+
+  await saveKeyStore(keyStore, planGuids);
+  await saveTokenStore(tokenStore);
+
+  const refreshed = issues.length === 0 ? 1 : 0;
+  emitImmediate('refresh-destinations', { type: 'done', refreshed, total, received, created, updated, deleted, issues });
+
+  if (refreshed > 0 || deleted > 0) {
+    notifyCallbacks();
+    emit('dest', { ts: Date.now() });
+  }
+
+  return { refreshed, received, created, updated, deleted, errors: issues };
+}
+
 // ─── Public: search ───────────────────────────────────────────────────────────
 
 export interface DestSearchResult {

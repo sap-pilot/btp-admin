@@ -3,6 +3,7 @@ import { requireAuth, requireAdmin, type AuthRequest } from '../middleware/requi
 import {
   listDestinations,
   refreshDestinations,
+  refreshSubaccountDestinations,
   searchDestinations,
   getDestination,
   exportDestination,
@@ -12,7 +13,7 @@ import {
 
 const router = Router();
 
-router.get('/search', requireAuth, async (req, res, next) => {
+router.get('/search', requireAdmin, async (req, res, next) => {
   try {
     const q         = String(req.query['q']         ?? '').trim();
     const region    = req.query['region']    ? String(req.query['region'])    : undefined;
@@ -22,7 +23,7 @@ router.get('/search', requireAuth, async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-router.get('/', requireAuth, async (_req, res, next) => {
+router.get('/', requireAdmin, async (_req, res, next) => {
   try {
     const data = await listDestinations();
     res.json({ ok: true, data });
@@ -38,9 +39,19 @@ router.post('/refresh', requireAdmin, async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
+router.post('/:region/:subdomain/refresh', requireAdmin, async (req, res, next) => {
+  try {
+    const { region, subdomain } = req.params as { region: string; subdomain: string };
+    const authReq  = req as AuthRequest;
+    const username = authReq.authSession?.email || authReq.authSession?.firstName || 'admin';
+    const result   = await refreshSubaccountDestinations(region, subdomain, username);
+    res.json({ ok: true, result });
+  } catch (err) { next(err); }
+});
+
 // ── Single-destination endpoints ──────────────────────────────────────────────
 
-router.get('/:region/:subdomain/:name/changelog', requireAuth, async (req, res, next) => {
+router.get('/:region/:subdomain/:name/changelog', requireAdmin, async (req, res, next) => {
   try {
     const { region, subdomain, name } = req.params as { region: string; subdomain: string; name: string };
     const data = await getDestinationChangelog(region, subdomain, name);
@@ -48,7 +59,7 @@ router.get('/:region/:subdomain/:name/changelog', requireAuth, async (req, res, 
   } catch (err) { next(err); }
 });
 
-router.get('/:region/:subdomain/:name/export', requireAuth, async (req, res, next) => {
+router.get('/:region/:subdomain/:name/export', requireAdmin, async (req, res, next) => {
   try {
     const { region, subdomain, name } = req.params as { region: string; subdomain: string; name: string };
     const data = await exportDestination(region, subdomain, name);
@@ -59,7 +70,7 @@ router.get('/:region/:subdomain/:name/export', requireAuth, async (req, res, nex
   } catch (err) { next(err); }
 });
 
-router.get('/:region/:subdomain/:name', requireAuth, async (req, res, next) => {
+router.get('/:region/:subdomain/:name', requireAdmin, async (req, res, next) => {
   try {
     const { region, subdomain, name } = req.params as { region: string; subdomain: string; name: string };
     const result = await getDestination(region, subdomain, name);

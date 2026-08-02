@@ -37,7 +37,7 @@ export default function UserSettingsModal({ open, onClose, initialSection = 'the
 
   return (
     <Dialog open={open} onOpenChange={o => { if (!o) onClose(); }}>
-      <DialogContent className="max-w-3xl w-full p-0 gap-0 overflow-hidden flex flex-col h-[58vh] max-h-[58vh]">
+      <DialogContent className="max-w-3xl w-full p-0 gap-0 overflow-hidden flex flex-col h-[58vh] max-h-[58vh] max-[680px]:h-[100dvh] max-[680px]:max-h-[100dvh] max-[680px]:rounded-none max-[680px]:inset-0 max-[680px]:translate-x-0 max-[680px]:translate-y-0 max-[680px]:w-screen max-[680px]:max-w-none">
         <DialogTitle className="sr-only">User Settings</DialogTitle>
 
         {/* Tab bar — pr-10 keeps tabs clear of the X close button */}
