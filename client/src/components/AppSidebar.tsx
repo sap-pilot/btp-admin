@@ -8,7 +8,8 @@ import {
 import { useAuth } from '@/hooks/useAuth';
 import { useTheme } from '@/hooks/useTheme';
 import { useSidebar, useSettings } from '@/components/AppLayout';
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
+import UserSettingsModal from '@/components/UserSettingsModal';
 import type { SiteConfig } from '@shared/types';
 import type { MenuEntry } from '@/components/config/SettingsPanel';
 
@@ -84,6 +85,8 @@ export default function AppSidebar() {
   const { theme, toggleTheme } = useTheme();
   const { collapsed }          = useSidebar();
   const { settings }           = useSettings();
+  const [userSettingsOpen,    setUserSettingsOpen]    = useState(false);
+  const [userSettingsSection, setUserSettingsSection] = useState<'account' | 'themes'>('themes');
   const [sites,          setSites]          = useState<SiteConfig[]>([]);
   const [appTitle,       setAppTitle]       = useState('BTP Admin');
   const [syncAvailable,  setSyncAvailable]  = useState(false);
@@ -409,16 +412,41 @@ export default function AppSidebar() {
               )}
             </>
           )}
-          <button
-            onClick={toggleTheme}
-            className={itemBase(collapsed) + 'text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground'}
-            title="Toggle Theme"
-          >
-            {theme === 'dark' ? <Moon className="h-4 w-4 shrink-0" /> : <Sun className="h-4 w-4 shrink-0" />}
-            {!collapsed && <span className="truncate">Toggle Theme</span>}
-          </button>
+          {collapsed ? (
+            <button
+              onClick={toggleTheme}
+              className={itemBase(collapsed) + 'text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground'}
+              title="Toggle dark/light mode"
+            >
+              {theme === 'dark' ? <Moon className="h-4 w-4 shrink-0" /> : <Sun className="h-4 w-4 shrink-0" />}
+            </button>
+          ) : (
+            <div className="flex items-center mx-1 rounded-md text-sm transition-colors text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground">
+              <button
+                onClick={toggleTheme}
+                className="flex items-center gap-3 pl-3 py-2 flex-1 min-w-0"
+                title="Toggle dark/light mode"
+              >
+                {theme === 'dark' ? <Moon className="h-4 w-4 shrink-0" /> : <Sun className="h-4 w-4 shrink-0" />}
+                <span className="truncate">Themes</span>
+              </button>
+              <button
+                onClick={() => { setUserSettingsSection('themes'); setUserSettingsOpen(true); }}
+                title="Browse themes"
+                className="pr-3 py-2 shrink-0"
+              >
+                <span className="h-3.5 w-3.5 shrink-0 flex items-center justify-center text-[13px] leading-none">›</span>
+              </button>
+            </div>
+          )}
         </div>
       </nav>
+
+      <UserSettingsModal
+        open={userSettingsOpen}
+        onClose={() => setUserSettingsOpen(false)}
+        initialSection={userSettingsSection}
+      />
 
       {/* Auth footer */}
       <div className="border-t border-sidebar-border">
@@ -451,6 +479,13 @@ export default function AppSidebar() {
                     <p className="text-xs font-medium">{auth.firstName}</p>
                     {auth.email && <p className="text-[10px] text-muted-foreground">{auth.email}</p>}
                   </div>
+                  <DropdownMenuItem
+                    className="text-xs cursor-pointer"
+                    onSelect={() => { setUserSettingsSection('account'); setUserSettingsOpen(true); }}
+                  >
+                    User Settings
+                  </DropdownMenuItem>
+                  <DropdownMenuSeparator />
                   <DropdownMenuItem className="text-xs cursor-pointer" onSelect={auth.logout}>
                     Log out
                   </DropdownMenuItem>

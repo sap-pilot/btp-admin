@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { useNavigate, useParams } from 'react-router';
+import { useNavigate, useParams, useSearchParams } from 'react-router';
 import { Download, Eye, PanelLeft, Upload } from 'lucide-react';
 import { useSidebar, useSettings } from '@/components/AppLayout';
 import SubaccountsTable, { type SubaccountEntry, type RefreshProgress } from '@/components/config/SubaccountsTable';
@@ -15,9 +15,11 @@ const VALID_TABS = new Set<Tab>(['subaccounts', 'tabs', 'settings', 'changelog']
 export default function ConfigPage() {
   const { tab: tabParam } = useParams<{ tab: string }>();
   const navigate          = useNavigate();
+  const [searchParams]    = useSearchParams();
   const { toggle }        = useSidebar();
   const { refreshSettings } = useSettings();
   const activeTab: Tab    = VALID_TABS.has(tabParam as Tab) ? (tabParam as Tab) : 'subaccounts';
+  const initialSection    = searchParams.get('section') ?? undefined;
 
   // Subaccounts state
   const [sasData,        setSasData]       = useState<SubaccountEntry[]>([]);
@@ -532,6 +534,7 @@ export default function ConfigPage() {
             onReset={handleSettingsReset}
             onSave={() => void handleSettingsSave()}
             saveStatus={settingsSaveStatus}
+            initialSection={initialSection}
           />
         )}
         {activeTab === 'settings' && !settingsData && (
