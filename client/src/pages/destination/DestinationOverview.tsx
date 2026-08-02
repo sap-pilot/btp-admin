@@ -11,6 +11,16 @@ import SubaccountDestModal from './SubaccountDestModal';
 interface DestItem { name: string; status: 'OK' }
 type DestData = Record<string, DestItem[]>;
 
+interface RefreshProgress {
+  type:      'progress' | 'done';
+  current?:  number;
+  total:     number;
+  name?:     string;
+  received:  number;
+  refreshed?: number;
+  errors?:   string[];
+}
+
 interface Buckets { generic: string[]; s4: string[]; cep: string[]; others: string[] }
 
 interface ModalState { sa: SubaccountEntry; allNames: string[]; initialName?: string }
@@ -72,10 +82,11 @@ export default function DestinationOverview() {
   const [saData,     setSaData]     = useState<SubaccountEntry[]>([]);
   const [destData,   setDestData]   = useState<DestData>({});
   const [isRefreshing, setIsRefreshing] = useState(false);
-  const [error, setError]  = useState('');
+  const [progress, setProgress] = useState<RefreshProgress | null>(null);
   const [modal, setModal]  = useState<ModalState | null>(null);
 
-  const deepLinkOpened = useRef(false);
+  const deepLinkOpened   = useRef(false);
+  const autoHideTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Search
   const [searchQuery,   setSearchQuery]   = useState('');
@@ -98,17 +109,32 @@ export default function DestinationOverview() {
     if (dests.ok) setDestData(dests.data);
   }
 
-  useEffect(() => { void loadData().catch(() => setError('Failed to load data')); }, []);
+  useEffect(() => { void loadData().catch(() => {}); }, []);
 
   useEffect(() => {
     const es = new EventSource('/api/events?dest=1');
-    es.addEventListener('update', () => {
-      void fetch('/api/destinations')
-        .then(r => r.json() as Promise<{ ok: boolean; data: DestData }>)
-        .then(({ ok, data }) => { if (ok) setDestData(data); })
-        .catch(() => {});
+    es.addEventListener('update', (e: MessageEvent) => {
+      try {
+        const data = JSON.parse(e.data as string) as Record<string, unknown>;
+        if (data['type'] === 'progress' || data['type'] === 'done') {
+          const p = data as unknown as RefreshProgress;
+          if (autoHideTimerRef.current) { clearTimeout(autoHideTimerRef.current); autoHideTimerRef.current = null; }
+          setProgress(p);
+          if (p.type === 'done' && (!p.errors || p.errors.length === 0)) {
+            autoHideTimerRef.current = setTimeout(() => setProgress(null), 5000);
+          }
+        } else {
+          void fetch('/api/destinations')
+            .then(r => r.json() as Promise<{ ok: boolean; data: DestData }>)
+            .then(({ ok, data: d }) => { if (ok) setDestData(d); })
+            .catch(() => {});
+        }
+      } catch { /* ignore */ }
     });
-    return () => es.close();
+    return () => {
+      es.close();
+      if (autoHideTimerRef.current) clearTimeout(autoHideTimerRef.current);
+    };
   }, []);
 
   // Open modal from deep-link URL: /destinations/:region/:subdomain/:name
@@ -148,15 +174,17 @@ export default function DestinationOverview() {
 
   async function handleRefresh() {
     setIsRefreshing(true);
-    setError('');
+    if (autoHideTimerRef.current) { clearTimeout(autoHideTimerRef.current); autoHideTimerRef.current = null; }
+    setProgress(null);
     try {
       const res  = await fetch('/api/destinations/refresh', { method: 'POST' });
       const json = await res.json() as { ok: boolean; result?: { refreshed: number; errors: string[] }; error?: string };
-      if (!json.ok) throw new Error(json.error ?? 'Refresh failed');
-      if (json.result?.errors.length) setError(json.result.errors.join('; '));
+      if (!json.ok) {
+        setProgress({ type: 'done', total: 0, received: 0, errors: [json.error ?? 'Refresh failed'] });
+      }
       await loadData();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Refresh failed');
+      setProgress({ type: 'done', total: 0, received: 0, errors: [err instanceof Error ? err.message : 'Refresh failed'] });
     } finally {
       setIsRefreshing(false);
     }
@@ -247,12 +275,34 @@ export default function DestinationOverview() {
         </button>
       </div>
 
-      {/* Error banner */}
-      {error && (
-        <div className="shrink-0 px-4 py-2 bg-destructive/10 text-destructive text-xs border-b border-destructive/20">
-          {error}
-        </div>
-      )}
+      {/* Progress bar */}
+      {progress && (() => {
+        const isDone    = progress.type === 'done';
+        const hasErrors = isDone && !!progress.errors?.length;
+        const pct       = isDone ? 100 : progress.total > 0 ? Math.round(((progress.current ?? 0) / progress.total) * 100) : 0;
+
+        const barColor  = hasErrors ? 'bg-destructive' : isDone ? 'bg-green-500' : 'bg-primary';
+        const textColor = hasErrors ? 'text-destructive' : isDone ? 'text-green-600 dark:text-green-400' : 'text-foreground';
+        const bgColor   = hasErrors ? 'bg-destructive/8' : isDone ? 'bg-green-500/8' : 'bg-muted/40';
+
+        let msg: string;
+        if (progress.type === 'progress') {
+          msg = `Processing ${progress.current ?? 0} of ${progress.total} subaccounts: ${progress.name ?? ''}${progress.received > 0 ? `, received ${progress.received} destinations` : ''}`;
+        } else if (hasErrors) {
+          msg = `Refresh failed: ${progress.errors!.join('; ')}`;
+        } else {
+          msg = `Refreshed ${progress.refreshed ?? progress.total} of ${progress.total} subaccounts, received ${progress.received} destinations total`;
+        }
+
+        return (
+          <div className={`shrink-0 border-b border-border ${bgColor}`}>
+            <div className="h-1 w-full bg-transparent">
+              <div className={`h-full transition-all duration-300 ${barColor}`} style={{ width: `${pct}%` }} />
+            </div>
+            <div className={`px-4 py-1.5 text-xs text-center ${textColor}`}>{msg}</div>
+          </div>
+        );
+      })()}
 
       {/* Tab bar */}
       {visibleTabs.length > 0 && (

@@ -59,3 +59,16 @@ export function emit(topic: string, data: Record<string, unknown>): void {
     flushTimer.unref();
   }
 }
+
+// Send immediately to all matching subscribers, bypassing the debounce.
+// Also discards any pending debounced emit for the same topic so the
+// immediate payload isn't followed by a stale earlier one.
+export function emitImmediate(topic: string, data: Record<string, unknown>): void {
+  if (subscribers.size === 0) return;
+  pendingByTopic.delete(topic);
+  const payload = `event: update\ndata: ${JSON.stringify(data)}\n\n`;
+  for (const sub of [...subscribers]) {
+    if (!sub.topics.has(topic)) continue;
+    try { sub.res.write(payload); } catch { subscribers.delete(sub); }
+  }
+}

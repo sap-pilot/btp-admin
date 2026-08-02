@@ -28,7 +28,7 @@ router.get('/events', (req, res) => {
   if (configOnly) {
     topics = ['config', 'refresh-subaccounts'];
   } else if (destOnly) {
-    topics = ['dest'];
+    topics = ['dest', 'refresh-destinations'];
   } else {
     topics = ['global'];
     if (svc) topics.push(`service:${svc}`);

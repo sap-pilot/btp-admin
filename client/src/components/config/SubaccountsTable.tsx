@@ -75,9 +75,13 @@ function matchesFilter(sa: SubaccountEntry, filter: string): boolean {
     sa.subaccountName.toLowerCase().includes(f) ||
     sa.subaccountId.toLowerCase().includes(f) ||
     sa.globalAccountName.toLowerCase().includes(f) ||
+    sa.globalAccountGUID.toLowerCase().includes(f) ||
+    sa.globalAccountSubdomain.toLowerCase().includes(f) ||
     sa.groupIds.toLowerCase().includes(f) ||
     sa.alias.toLowerCase().includes(f) ||
-    (sa.org?.orgName.toLowerCase().includes(f) ?? false)
+    (sa.org?.orgId.toLowerCase().includes(f) ?? false) ||
+    (sa.org?.orgName.toLowerCase().includes(f) ?? false) ||
+    (sa.org?.spaces.some(sp => sp.spaceId.toLowerCase().includes(f) || sp.spaceName.toLowerCase().includes(f)) ?? false)
   );
 }
 
@@ -180,17 +184,29 @@ export default function SubaccountsTable({
 
   const totalW = colWidths.reduce((a, b) => a + b, 0);
 
-  const barColor = refreshProgress?.error
-    ? 'bg-destructive/50'
+  const barFill = refreshProgress?.error
+    ? 'bg-destructive'
     : refreshProgress?.warning
-      ? 'bg-yellow-500/40'
-      : 'bg-green-500/50';
+      ? 'bg-yellow-500'
+      : refreshProgress && refreshProgress.pct >= 100
+        ? 'bg-green-500'
+        : 'bg-primary';
+
+  const barBg = refreshProgress?.error
+    ? 'bg-destructive/8'
+    : refreshProgress?.warning
+      ? 'bg-yellow-500/8'
+      : refreshProgress && refreshProgress.pct >= 100
+        ? 'bg-green-500/8'
+        : 'bg-muted/40';
 
   const barTextColor = refreshProgress?.error
     ? 'text-destructive'
     : refreshProgress?.warning
       ? 'text-yellow-700 dark:text-yellow-300'
-      : 'text-foreground';
+      : refreshProgress && refreshProgress.pct >= 100
+        ? 'text-green-600 dark:text-green-400'
+        : 'text-foreground';
 
   return (
     <div className="flex flex-col h-full">
@@ -235,14 +251,13 @@ export default function SubaccountsTable({
 
       {/* Progress bar */}
       {refreshProgress !== null && (
-        <div className="shrink-0 relative h-7 border-b border-border overflow-hidden">
-          <div
-            className={`absolute inset-y-0 left-0 transition-all duration-500 ${barColor}`}
-            style={{ width: `${refreshProgress.pct}%` }}
-          />
-          <span className={`absolute inset-0 flex items-center justify-center text-[11px] font-medium px-2 truncate ${barTextColor}`}>
+        <div className={`shrink-0 border-b border-border ${barBg}`}>
+          <div className="h-1 w-full bg-transparent">
+            <div className={`h-full transition-all duration-300 ${barFill}`} style={{ width: `${refreshProgress.pct}%` }} />
+          </div>
+          <div className={`px-4 py-1.5 text-xs text-center ${barTextColor}`}>
             {refreshProgress.error ?? refreshProgress.message}
-          </span>
+          </div>
         </div>
       )}
 
