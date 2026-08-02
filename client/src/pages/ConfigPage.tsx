@@ -1,11 +1,13 @@
 import { useEffect, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router';
-import { Download, PanelLeft, Upload } from 'lucide-react';
+import { Download, Eye, PanelLeft, Upload } from 'lucide-react';
 import { useSidebar, useSettings } from '@/components/AppLayout';
 import SubaccountsTable, { type SubaccountEntry, type RefreshProgress } from '@/components/config/SubaccountsTable';
 import SubaccountDetailModal from '@/components/config/SubaccountDetailModal';
 import TabsTable, { type TabEntry } from '@/components/config/TabsTable';
 import SettingsPanel, { type SettingsData } from '@/components/config/SettingsPanel';
+import HomePreviewPanel from '@/components/config/HomePreviewPanel';
+import type { CockpitMenuItem } from '@/components/home/HomepageContent';
 
 type Tab = 'subaccounts' | 'tabs' | 'settings' | 'changelog';
 const VALID_TABS = new Set<Tab>(['subaccounts', 'tabs', 'settings', 'changelog']);
@@ -51,6 +53,13 @@ export default function ConfigPage() {
   const [isImporting, setIsImporting] = useState(false);
   const importRef = useRef<HTMLInputElement>(null);
 
+  const [previewOpen,  setPreviewOpen]  = useState(false);
+  const [previewWidth, setPreviewWidth] = useState(0);
+  const [isDragging,   setIsDragging]   = useState(false);
+  const [cockpitMenu,  setCockpitMenu]  = useState<CockpitMenuItem | null>(null);
+  const dragRef  = useRef<{ startX: number; startW: number } | null>(null);
+  const bodyRef  = useRef<HTMLDivElement>(null);
+
   function fetchChangelog() {
     setIsLoadingCl(true);
     void fetch('/api/config/changelog')
@@ -81,6 +90,11 @@ export default function ConfigPage() {
       .then(r => r.json() as Promise<{ ok: boolean; data: TabEntry[] }>)
       .then(({ data }) => { setTabsData(data); setOriginalTabs(data); })
       .catch(() => setError('Failed to load tabs'));
+
+    void fetch('/api/config/cockpit-menu')
+      .then(r => r.json() as Promise<CockpitMenuItem | null>)
+      .then(menu => setCockpitMenu(menu))
+      .catch(() => {});
 
     void fetchSettings();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
@@ -365,6 +379,38 @@ export default function ConfigPage() {
     }
   }
 
+  // ── Preview drag ─────────────────────────────────────────────────────────────
+
+  function handlePreviewToggle() {
+    if (!previewOpen && previewWidth === 0) {
+      setPreviewWidth(Math.round((bodyRef.current?.offsetWidth ?? 840) / 2));
+    }
+    setPreviewOpen(o => !o);
+  }
+
+  function handleDragStart(e: React.MouseEvent) {
+    e.preventDefault();
+    const containerW = bodyRef.current?.offsetWidth ?? 1200;
+    dragRef.current = { startX: e.clientX, startW: previewWidth };
+    setIsDragging(true);
+
+    function onMove(me: MouseEvent) {
+      if (!dragRef.current) return;
+      const next = Math.max(120, Math.min(containerW - 5, dragRef.current.startW + (dragRef.current.startX - me.clientX)));
+      setPreviewWidth(next);
+    }
+
+    function onUp() {
+      dragRef.current = null;
+      setIsDragging(false);
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+    }
+
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+  }
+
   // ── Render ────────────────────────────────────────────────────────────────────
 
   const tabCls = (t: Tab) =>
@@ -408,10 +454,22 @@ export default function ConfigPage() {
                 <Download className="h-3.5 w-3.5" />
                 Export
               </a>
+              <button
+                onClick={handlePreviewToggle}
+                className={`${btn} ${previewOpen ? 'bg-primary/10 border-primary/40 text-primary hover:bg-primary/15 hover:text-primary' : ''}`}
+                title="Toggle home page preview panel"
+              >
+                <Eye className="h-3.5 w-3.5" />
+                Preview
+              </button>
             </>);
           })()}
         </div>
       </div>
+
+      {/* Body: config left + preview right */}
+      <div ref={bodyRef} className={`flex flex-1 min-h-0${isDragging ? ' select-none' : ''}`}>
+      <div className="flex flex-col flex-1 min-w-0 min-h-0">
 
       {/* Tab bar */}
       <div className="flex items-center border-b border-border shrink-0 px-2">
@@ -501,6 +559,25 @@ export default function ConfigPage() {
             </div>
           </div>
         )}
+      </div>
+
+      </div>
+      {previewOpen && (
+        <>
+          <div
+            className={`w-[5px] shrink-0 cursor-col-resize transition-colors ${isDragging ? 'bg-primary/25' : 'hover:bg-primary/20'}`}
+            onMouseDown={handleDragStart}
+          />
+          <div style={{ width: previewWidth }} className="shrink-0 flex flex-col min-h-0 overflow-hidden">
+            <HomePreviewPanel
+              tabs={tabsData}
+              subaccounts={sasData}
+              settings={settingsData}
+              cockpitMenu={cockpitMenu}
+            />
+          </div>
+        </>
+      )}
       </div>
 
       {/* Subaccount detail modal */}
