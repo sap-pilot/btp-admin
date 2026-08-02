@@ -26,13 +26,14 @@ const NAV_ITEMS: { id: NavItem; label: string }[] = [
 // ─── Props ────────────────────────────────────────────────────────────────────
 
 interface Props {
-  data:        SettingsData;
-  onChange:    (data: SettingsData) => void;
-  isDirty:     boolean;
-  isSaving:    boolean;
-  onReset:     () => void;
-  onSave:      () => void;
-  saveStatus?: { message: string; ok: boolean } | null;
+  data:           SettingsData;
+  onChange:       (data: SettingsData) => void;
+  isDirty:        boolean;
+  isSaving:       boolean;
+  onReset:        () => void;
+  onSave:         () => void;
+  saveStatus?:    { message: string; ok: boolean } | null;
+  initialSection?: string;
 }
 
 // ─── Shared style tokens ──────────────────────────────────────────────────────
@@ -44,9 +45,10 @@ const inpCls     = 'w-full text-xs bg-transparent border border-border rounded p
 
 // ─── Main component ───────────────────────────────────────────────────────────
 
-export default function SettingsPanel({ data, onChange, isDirty, isSaving, onReset, onSave, saveStatus }: Props) {
+export default function SettingsPanel({ data, onChange, isDirty, isSaving, onReset, onSave, saveStatus, initialSection }: Props) {
   const [search, setSearch]     = useState('');
-  const [activeNav, setActiveNav] = useState<NavItem>('homepage');
+  const validInitial = (['homepage', 'menus'] as string[]).includes(initialSection ?? '') ? initialSection as NavItem : 'homepage';
+  const [activeNav, setActiveNav] = useState<NavItem>(validInitial);
 
   const q = search.trim().toLowerCase();
   const visibleItems = NAV_ITEMS.filter(n => !q || n.label.toLowerCase().includes(q));

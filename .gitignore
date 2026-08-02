@@ -25,3 +25,4 @@ localStore/
 server/pw-browsers/
 .env
 *.local
+.claude/
