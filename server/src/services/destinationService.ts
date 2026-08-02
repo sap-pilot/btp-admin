@@ -7,7 +7,7 @@ import { logger } from '../logger.js';
 import { getOrRefreshToken, fetchWithRateLimit } from './cfLoginService.js';
 import { readSubaccounts, type SubaccountEntry } from './subaccountsService.js';
 import { notifyCallbacks } from './syncService.js';
-import { emit } from './liveEvents.js';
+import { emit, emitImmediate } from './liveEvents.js';
 
 const BA_DIR         = join(homedir(), '.ba');
 const KEYS_PATH      = join(BA_DIR, 'destination-keys.json');
@@ -226,13 +226,18 @@ export async function refreshDestinations(): Promise<{ refreshed: number; errors
 
   if (targetSas.length === 0) {
     logger.info('No subaccounts with manageDestinations=true — nothing to refresh');
+    emitImmediate('refresh-destinations', { type: 'done', refreshed: 0, total: 0, received: 0, errors: [] });
     return { refreshed: 0, errors: [] };
   }
 
+  const total    = targetSas.length;
   const keyStore   = await loadKeyStore();
   const tokenStore = await loadTokenStore();
   const errors: string[] = [];
-  let refreshed = 0;
+  let refreshed     = 0;
+  let totalReceived = 0;
+
+  emit('refresh-destinations', { type: 'progress', current: 0, total, name: 'Initializing…', received: 0 });
 
   // Step 1: discover missing keys
   for (const sa of targetSas) {
@@ -261,10 +266,15 @@ export async function refreshDestinations(): Promise<{ refreshed: number; errors
   await saveKeyStore(keyStore);
 
   // Step 2: fetch destinations for each subaccount that has a key
-  for (const sa of targetSas) {
-    const orgId    = sa.org.orgId;
+  for (let idx = 0; idx < targetSas.length; idx++) {
+    const sa     = targetSas[idx]!;
+    const orgId  = sa.org.orgId;
+    const saName = sa.alias || sa.subaccountName || sa.subdomain;
     const keyEntry = keyStore[orgId];
     if (!keyEntry) continue;
+
+    emit('refresh-destinations', { type: 'progress', current: idx + 1, total, name: saName, received: totalReceived });
+
     try {
       const accessToken  = await getDestToken(keyEntry, tokenStore);
       const destinations = await fetchSubaccountDestinations(keyEntry, accessToken);
@@ -294,6 +304,7 @@ export async function refreshDestinations(): Promise<{ refreshed: number; errors
       }
 
       logger.info({ org: orgId, region: sa.region, count: apiNames.size }, 'Destinations refreshed');
+      totalReceived += apiNames.size;
       refreshed++;
     } catch (err) {
       const msg = `Destination refresh failed for ${orgId}: ${String(err)}`;
@@ -302,6 +313,8 @@ export async function refreshDestinations(): Promise<{ refreshed: number; errors
     }
   }
   await saveTokenStore(tokenStore);
+
+  emitImmediate('refresh-destinations', { type: 'done', refreshed, total, received: totalReceived, errors });
 
   if (refreshed > 0) {
     notifyCallbacks();
