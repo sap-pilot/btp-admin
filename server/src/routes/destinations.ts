@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { requireAuth, requireAdmin, type AuthRequest } from '../middleware/requireAuth.js';
+import { logger } from '../logger.js';
 import {
   isSubaccountRestricted,
   listDestinations,
@@ -24,7 +25,14 @@ router.get('/search', requireAdmin, async (req, res, next) => {
     if (region && subdomain && await isSubaccountRestricted(region, subdomain)) {
       return void res.status(403).json(RESTRICTED);
     }
-    const data = await searchDestinations(q, region, subdomain);
+    const authReq = req as AuthRequest;
+    const user    = authReq.authSession?.email || authReq.authSession?.firstName || 'anonymous';
+    const t0      = Date.now();
+    const data    = await searchDestinations(q, region, subdomain);
+    logger.info(
+      { user, query: q, results: data.length, ms: Date.now() - t0, ...(region ? { region } : {}), ...(subdomain ? { subdomain } : {}) },
+      'Destination search',
+    );
     res.json({ ok: true, data });
   } catch (err) { next(err); }
 });
