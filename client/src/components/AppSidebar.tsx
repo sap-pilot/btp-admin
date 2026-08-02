@@ -33,8 +33,8 @@ interface NavItem {
 }
 
 const NAV_ITEMS: NavItem[] = [
-  { label: 'Status',      href: '/status',       icon: <Activity   className="h-4 w-4 shrink-0" /> },
   { label: 'Home',        href: '/home',          icon: <Home       className="h-4 w-4 shrink-0" /> },
+  { label: 'Status',      href: '/status',       icon: <Activity   className="h-4 w-4 shrink-0" /> },
   { label: 'Apps',        href: '/apps',          icon: <LayoutGrid className="h-4 w-4 shrink-0" />, soon: true, restricted: true },
   { label: 'Destinations',href: '/destinations',  icon: <Globe      className="h-4 w-4 shrink-0" />, wip: true, restricted: true, adminOnly: true },
   {

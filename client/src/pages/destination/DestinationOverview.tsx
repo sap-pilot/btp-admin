@@ -1,10 +1,12 @@
 import { useEffect, useRef, useState } from 'react';
 import { useParams, useNavigate } from 'react-router';
-import { PanelLeft, RefreshCw, Search, X } from 'lucide-react';
+import { ChevronDown, GitCompare, PanelLeft, RefreshCw, Search, X } from 'lucide-react';
 import { useSidebar } from '@/components/AppLayout';
 import type { SubaccountEntry } from '@/components/config/SubaccountsTable';
 import type { TabEntry, TabSection } from '@/components/config/TabsTable';
 import SubaccountDestModal from './SubaccountDestModal';
+import type { SelectedDest } from './SubaccountDestModal';
+import CompareModal from './CompareModal';
 import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
@@ -110,6 +112,12 @@ export default function DestinationOverview() {
   const [filterResults, setFilterResults] = useState<DestSearchResult[] | null>(null);
   const [isSearching,   setIsSearching]   = useState(false);
 
+  // Compare
+  const [selectedDests,      setSelectedDests]      = useState<SelectedDest[]>([]);
+  const [showCompareModal,   setShowCompareModal]   = useState(false);
+  const [showCompareDropdown, setShowCompareDropdown] = useState(false);
+  const compareDropdownRef = useRef<HTMLDivElement>(null);
+
   const deepLinkOpened   = useRef(false);
   const autoHideTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -165,6 +173,27 @@ export default function DestinationOverview() {
     const names = (destData[saOrgId(sa)] ?? []).map(d => d.name).sort();
     setModal({ sa, allNames: names, initialName: nameParam ?? names[0] });
   }, [regionParam, subdomainParam, nameParam, saData, destData]);
+
+  // Close compare dropdown on outside click
+  useEffect(() => {
+    if (!showCompareDropdown) return;
+    function onDown(e: MouseEvent) {
+      if (compareDropdownRef.current && !compareDropdownRef.current.contains(e.target as Node)) {
+        setShowCompareDropdown(false);
+      }
+    }
+    document.addEventListener('mousedown', onDown);
+    return () => document.removeEventListener('mousedown', onDown);
+  }, [showCompareDropdown]);
+
+  function toggleCompare(d: SelectedDest) {
+    setSelectedDests(prev => {
+      const exists = prev.some(x => x.region === d.region && x.subdomain === d.subdomain && x.name === d.name);
+      return exists
+        ? prev.filter(x => !(x.region === d.region && x.subdomain === d.subdomain && x.name === d.name))
+        : [...prev, d];
+    });
+  }
 
   // ── Search ──────────────────────────────────────────────────────────────────
 
@@ -280,15 +309,73 @@ export default function DestinationOverview() {
         </button>
         <span className="text-sm font-semibold">Destination Overview</span>
 
+        {/* Compare button + dropdown */}
+        <div className="relative ml-auto" ref={compareDropdownRef}>
+          <div className="flex items-center border border-border rounded overflow-hidden">
+            <button
+              onClick={() => { if (selectedDests.length > 0) setShowCompareModal(true); }}
+              disabled={selectedDests.length === 0}
+              title={selectedDests.length === 0
+                ? 'Choose destinations, select them for comparison and click this to compare them side by side'
+                : `Compare ${selectedDests.length} selected destination${selectedDests.length !== 1 ? 's' : ''}`}
+              className={`${btnOutline} rounded-none border-0 gap-1.5 border-r border-border`}
+            >
+              <GitCompare className="h-3.5 w-3.5" />
+              Compare {selectedDests.length > 0 && `(${selectedDests.length})`}
+            </button>
+            <button
+              onClick={() => setShowCompareDropdown(v => !v)}
+              title="Show selected destinations"
+              className={`${btnOutline} rounded-none border-0 px-1.5`}
+            >
+              <ChevronDown className="h-3.5 w-3.5" />
+            </button>
+          </div>
+          {showCompareDropdown && (
+            <div className="absolute right-0 top-full mt-1 z-50 bg-background border border-border rounded shadow-lg min-w-[280px]">
+              {selectedDests.length === 0 ? (
+                <div className="px-3 py-3 text-xs text-muted-foreground">
+                  No destinations selected. Open a destination and click <strong>Select for Compare</strong>.
+                </div>
+              ) : (
+                selectedDests.map(d => (
+                  <div key={`${d.region}/${d.subdomain}/${d.name}`} className="flex items-center gap-2 px-3 py-1.5 text-xs hover:bg-muted/40">
+                    <span className="flex-1 font-mono truncate">
+                      <span className="text-muted-foreground">{d.region} → {d.subdomain} → </span>{d.name}
+                    </span>
+                    <button
+                      onClick={() => toggleCompare(d)}
+                      className="shrink-0 text-muted-foreground/50 hover:text-destructive transition-colors"
+                      title="Remove"
+                    >
+                      <X className="h-3 w-3" />
+                    </button>
+                  </div>
+                ))
+              )}
+              {selectedDests.length > 0 && (
+                <div className="border-t border-border">
+                  <button
+                    onClick={() => { setSelectedDests([]); setShowCompareDropdown(false); }}
+                    className="w-full px-3 py-1.5 text-xs text-muted-foreground hover:bg-muted/40 text-left transition-colors"
+                  >
+                    Clear all
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+
         {/* Search input — Enter to search */}
-        <div className="relative flex items-center ml-auto">
+        <div className="relative flex items-center">
           <Search className="absolute left-2 h-3.5 w-3.5 text-muted-foreground pointer-events-none" />
           <input
             type="text"
             value={filterInput}
             onChange={e => setFilterInput(e.target.value)}
             onKeyDown={handleFilterKeyDown}
-            placeholder="Full-text destination search…"
+            placeholder="Full-text search …"
             className="h-8 pl-7 pr-[4.5rem] text-xs border border-border rounded bg-background text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring w-[240px]"
           />
           <div className="absolute right-1.5 flex items-center gap-1">
@@ -607,6 +694,15 @@ export default function DestinationOverview() {
             const base = activeTabEntry ? `/destinations/${encodeURIComponent(activeTabEntry.tab)}` : '/destinations';
             navigate(base, { replace: true });
           }}
+          selectedDests={selectedDests}
+          onToggleCompare={toggleCompare}
+        />
+      )}
+
+      {showCompareModal && selectedDests.length > 0 && (
+        <CompareModal
+          selected={selectedDests}
+          onClose={() => setShowCompareModal(false)}
         />
       )}
 

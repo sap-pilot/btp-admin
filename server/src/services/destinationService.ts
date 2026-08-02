@@ -461,7 +461,7 @@ function diffDestination(prev: Record<string, unknown>, next: Record<string, unk
   for (const k of keys) {
     const pv = JSON.stringify(prev[k] ?? null);
     const nv = JSON.stringify(next[k] ?? null);
-    if (pv !== nv) lines.push(`- ${k}: ${pv} → ${nv}`);
+    if (pv !== nv) lines.push(isSensitiveField(k) ? `- ${k}: [redacted] → [redacted]` : `- ${k}: ${pv} → ${nv}`);
   }
   return lines.join('\n');
 }
@@ -782,6 +782,62 @@ export async function searchDestinations(query: string, scopeRegion?: string, sc
   return results;
 }
 
+// ─── Destination API write (PUT with POST fallback) ──────────────────────────
+
+async function pushToDestinationApi(
+  region:    string,
+  subdomain: string,
+  name:      string,
+  data:      Record<string, unknown>,
+): Promise<void> {
+  const allSas = await readSubaccounts();
+  const sa     = allSas.find(s => s.region === region && s.subdomain === subdomain);
+  if (!sa?.org?.orgId) {
+    throw new Error(`No CF org found for ${region}/${subdomain} — cannot push to Destination API`);
+  }
+
+  const orgId    = sa.org.orgId;
+  const orgName  = sa.org.orgName ?? '';
+  const location = `${region}/${subdomain}/${name}`;
+
+  const { orgs: keyStore, planGuids } = await loadKeyStore();
+  const tokenStore   = await loadTokenStore();
+  const cfLoginFailed = new Set<string>();
+
+  const tokenResult = await resolveToken(region, orgId, orgName, keyStore, tokenStore, cfLoginFailed, planGuids, location);
+  await saveKeyStore(keyStore, planGuids);
+  await saveTokenStore(tokenStore);
+
+  if ('error' in tokenResult) {
+    throw new Error(`Cannot authenticate to Destination API for ${region}/${subdomain}: ${tokenResult.error}`);
+  }
+
+  const { accessToken, credential } = tokenResult;
+  const baseUrl = `${credential.uri}/destination-configuration/v1/subaccountDestinations`;
+  const headers  = { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' };
+  const body     = JSON.stringify(data);
+
+  // Try PUT (update) first; fall back to POST (create) if destination doesn't exist yet
+  const putRes = await fetchWithRateLimit(() => fetch(baseUrl, { method: 'PUT', headers, body }), baseUrl);
+  if (putRes.ok) {
+    logger.debug({ location }, 'Destination pushed to API via PUT');
+    return;
+  }
+
+  if (putRes.status === 404) {
+    const postRes = await fetchWithRateLimit(() => fetch(baseUrl, { method: 'POST', headers, body }), baseUrl);
+    if (postRes.ok) {
+      logger.debug({ location }, 'Destination created in API via POST');
+      return;
+    }
+    const errText = await postRes.text().catch(() => '');
+    throw new Error(`Destination API POST failed with HTTP ${postRes.status}: ${errText.slice(0, 300)}`);
+  }
+
+  const errText = await putRes.text().catch(() => '');
+  throw new Error(`Destination API PUT failed with HTTP ${putRes.status}: ${errText.slice(0, 300)}`);
+}
+
 // ─── Public: single-destination CRUD ─────────────────────────────────────────
 
 const REDACTED_SENTINEL = '***';
@@ -838,6 +894,9 @@ export async function saveDestinationEntry(
     merged[k] = (v === REDACTED_SENTINEL && isSensitiveField(k) && k in existing) ? existing[k] : v;
   }
 
+  // Push to Destination API first; propagate error if it fails
+  await pushToDestinationApi(region, subdomain, name, merged);
+
   const diffLines: string[] = [];
   const allKeys = [...new Set([...Object.keys(existing), ...Object.keys(merged)])].sort();
   for (const k of allKeys) {
@@ -849,9 +908,12 @@ export async function saveDestinationEntry(
 
   if (diffLines.length > 0) {
     const dateStr = new Date().toISOString().replace('T', ' ').slice(0, 19) + ' UTC';
-    const entry   = `## ${name} # ${username} - ${dateStr}\n${diffLines.join('\n')}\n\n`;
+    const entry   = `## Manual update done by <${username}> at ${dateStr}\n${diffLines.join('\n')}\n\n`;
     const prev    = existsSync(changelogPath) ? await readFile(changelogPath, 'utf-8') : '';
     await writeFile(changelogPath, entry + prev, 'utf-8');
+    logger.info({ user: username, destination: `${region}.${subdomain}/${name}`, changes: diffLines }, 'Destination updated');
+  } else {
+    logger.info({ user: username, destination: `${region}.${subdomain}/${name}` }, 'Destination saved (no changes)');
   }
 
   await mkdir(join(LOCAL_DEST_DIR, region, subdomain), { recursive: true });

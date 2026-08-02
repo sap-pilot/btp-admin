@@ -1,9 +1,15 @@
 import { useEffect, useRef, useState } from 'react';
 import {
-  Download, Eye, EyeOff, Lock, Plus, RefreshCw, RotateCcw, Save, Search, Send, Trash2, Upload, X,
+  Download, Eye, EyeOff, GitCompare, Lock, Plus, RefreshCw, RotateCcw, Save, Search, Send, Trash2, Upload, X,
 } from 'lucide-react';
 import { useAuth } from '@/hooks/useAuth';
 import type { SubaccountEntry } from '@/components/config/SubaccountsTable';
+
+export interface SelectedDest {
+  region:    string;
+  subdomain: string;
+  name:      string;
+}
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -19,10 +25,12 @@ type Tab        = 'properties' | 'changelog' | 'test';
 type HttpMethod = 'GET' | 'POST' | 'PUT' | 'DELETE' | 'PATCH';
 
 export interface SubaccountDestModalProps {
-  org:          SubaccountEntry;
-  allNames:     string[];
-  initialName?: string;
-  onClose:      () => void;
+  org:               SubaccountEntry;
+  allNames:          string[];
+  initialName?:      string;
+  onClose:           () => void;
+  selectedDests?:    SelectedDest[];
+  onToggleCompare?:  (d: SelectedDest) => void;
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -165,24 +173,29 @@ function DestPropsTable({ props, onUpdate, onDelete, onAdd }: DestPropsTableProp
 
 // ─── PropertiesTab ────────────────────────────────────────────────────────────
 
+interface SaveBanner { type: 'success' | 'error'; message: string }
+
 interface PropsTabProps {
-  name:      string;
-  props:     DestProp[];
-  dirty:     boolean;
-  saving:    boolean;
-  importing: boolean;
-  loading:   boolean;
-  error:     string;
-  onUpdate:  (idx: number, patch: Partial<DestProp>) => void;
-  onDelete:  (idx: number) => void;
-  onAdd:     () => void;
-  onSave:    () => void;
-  onReset:   () => void;
+  name:             string;
+  props:            DestProp[];
+  dirty:            boolean;
+  saving:           boolean;
+  importing:        boolean;
+  loading:          boolean;
+  banner:           SaveBanner | null;
+  compareSelected?: boolean;
+  onUpdate:         (idx: number, patch: Partial<DestProp>) => void;
+  onDelete:         (idx: number) => void;
+  onAdd:            () => void;
+  onSave:           () => void;
+  onReset:          () => void;
+  onClearBanner:    () => void;
+  onToggleCompare?: () => void;
 }
 
 function PropertiesTab({
-  name, props, dirty, saving, importing, loading, error,
-  onUpdate, onDelete, onAdd, onSave, onReset,
+  name, props, dirty, saving, importing, loading, banner, compareSelected,
+  onUpdate, onDelete, onAdd, onSave, onReset, onClearBanner, onToggleCompare,
 }: PropsTabProps) {
   const btnBase    = 'inline-flex items-center gap-1.5 px-3 py-1.5 rounded text-xs font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed';
   const btnOutline = `${btnBase} border border-border hover:bg-accent hover:text-accent-foreground`;
@@ -190,12 +203,25 @@ function PropertiesTab({
 
   return (
     <div className="flex flex-col h-full">
-      {/* Toolbar: name | Reset | Save */}
+      {/* Toolbar: name | Compare | Reset | Save */}
       <div className="flex items-center gap-2 px-4 py-3 border-b border-border shrink-0">
         <h2 className="text-sm font-mono font-semibold text-foreground truncate min-w-0 flex-1">
           {name || <span className="font-normal text-xs text-muted-foreground">Select or create a destination</span>}
         </h2>
         <div className="flex items-center gap-1.5 shrink-0">
+          {onToggleCompare && (
+            <button
+              onClick={onToggleCompare}
+              disabled={!name}
+              className={compareSelected
+                ? `${btnBase} border border-primary bg-primary/10 text-primary`
+                : btnOutline}
+              title={compareSelected ? 'Remove from comparison basket' : 'Add to comparison basket'}
+            >
+              <GitCompare className="h-3.5 w-3.5" />
+              {compareSelected ? 'In Compare' : 'Select for Compare'}
+            </button>
+          )}
           <button onClick={onReset} disabled={!dirty || saving || importing} className={btnOutline}>
             <RotateCcw className="h-3.5 w-3.5" />
             Reset
@@ -207,9 +233,18 @@ function PropertiesTab({
         </div>
       </div>
 
-      {error && (
-        <div className="px-4 py-1.5 text-xs text-destructive border-b border-destructive/20 bg-destructive/5 shrink-0">
-          {error}
+      {banner && (
+        <div className={`px-4 py-1.5 text-xs flex items-center gap-2 border-b shrink-0 ${
+          banner.type === 'success'
+            ? 'bg-green-500/10 border-green-500/20 text-green-600 dark:text-green-400'
+            : 'bg-destructive/5 border-destructive/20 text-destructive'
+        }`}>
+          <span className="flex-1">{banner.message}</span>
+          {banner.type === 'error' && (
+            <button onClick={onClearBanner} className="shrink-0 text-destructive/60 hover:text-destructive">
+              <X className="h-3 w-3" />
+            </button>
+          )}
         </div>
       )}
 
@@ -281,12 +316,41 @@ function CreateTab({ name, props, saving, error, onNameChange, onUpdate, onDelet
 
 // ─── ChangelogTab ─────────────────────────────────────────────────────────────
 
+function renderDestChangelog(text: string): React.ReactNode {
+  return text.split('\n').map((line, i) => {
+    if (line.startsWith('## ')) {
+      return <div key={i} className="font-bold mt-4 mb-1 text-foreground first:mt-0">{line.slice(3)}</div>;
+    }
+    if (line.startsWith('- ')) {
+      const body     = line.slice(2);
+      const colonIdx = body.indexOf(': ');
+      if (colonIdx !== -1) {
+        const key      = body.slice(0, colonIdx);
+        const rest     = body.slice(colonIdx + 2);
+        const arrowIdx = rest.indexOf(' → ');
+        if (arrowIdx !== -1) {
+          return (
+            <div key={i} className="pl-1">
+              <span className="text-muted-foreground">- {key}: </span>
+              <span className="text-red-500 dark:text-red-400">{rest.slice(0, arrowIdx)}</span>
+              <span className="text-muted-foreground"> → </span>
+              <span className="text-green-600 dark:text-green-400">{rest.slice(arrowIdx + 3)}</span>
+            </div>
+          );
+        }
+      }
+      return <div key={i} className="text-muted-foreground pl-1">{line}</div>;
+    }
+    return <div key={i} className="text-muted-foreground">{line || ' '}</div>;
+  });
+}
+
 function ChangelogTab({ changelog, loading }: { changelog: string; loading: boolean }) {
   if (loading) return <div className="flex items-center justify-center h-full text-xs text-muted-foreground">Loading…</div>;
   if (!changelog) return <div className="flex items-center justify-center h-full text-xs text-muted-foreground">No change history yet.</div>;
   return (
     <div className="h-full overflow-auto p-4">
-      <pre className="text-xs font-mono whitespace-pre-wrap text-foreground leading-relaxed">{changelog}</pre>
+      <div className="font-mono text-xs leading-relaxed">{renderDestChangelog(changelog)}</div>
     </div>
   );
 }
@@ -482,7 +546,7 @@ function TestTab() {
 
 // ─── Main modal ───────────────────────────────────────────────────────────────
 
-export default function SubaccountDestModal({ org, allNames, initialName, onClose }: SubaccountDestModalProps) {
+export default function SubaccountDestModal({ org, allNames, initialName, onClose, selectedDests, onToggleCompare }: SubaccountDestModalProps) {
   const auth     = useAuth();
   const username = auth.email || auth.firstName || 'admin';
 
@@ -506,7 +570,6 @@ export default function SubaccountDestModal({ org, allNames, initialName, onClos
   const [isLoading,   setIsLoading]   = useState(false);
   const [isSaving,    setIsSaving]    = useState(false);
   const [isImporting, setIsImporting] = useState(false);
-  const [saveError,   setSaveError]   = useState('');
 
   // Create mode (new destination from scratch)
   const [isCreating,    setIsCreating]    = useState(false);
@@ -522,6 +585,10 @@ export default function SubaccountDestModal({ org, allNames, initialName, onClos
   // Per-subaccount refresh
   const [isRefreshing, setIsRefreshing] = useState(false);
 
+  // Save banner
+  const [saveBanner,     setSaveBanner]     = useState<SaveBanner | null>(null);
+  const bannerTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   const searchTimer  = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const listRef      = useRef<HTMLDivElement>(null);
@@ -530,7 +597,7 @@ export default function SubaccountDestModal({ org, allNames, initialName, onClos
   // Load destination on primary selection change
   useEffect(() => {
     if (!selectedName) return;
-    setSaveError('');
+    
     void loadDest(selectedName);
     if (activeTab === 'changelog') void loadChangelog(selectedName);
   }, [selectedName]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -571,11 +638,14 @@ export default function SubaccountDestModal({ org, allNames, initialName, onClos
     );
   }, [selectedName, org.region, org.subdomain]);
 
-  // Close on Escape
+  // Close on Escape; cleanup banner timer on unmount
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
     document.addEventListener('keydown', onKey);
-    return () => document.removeEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('keydown', onKey);
+      if (bannerTimerRef.current) clearTimeout(bannerTimerRef.current);
+    };
   }, [onClose]);
 
   async function loadDest(name: string) {
@@ -632,12 +702,14 @@ export default function SubaccountDestModal({ org, allNames, initialName, onClos
       selectDest(name);
     }
     setIsCreating(false);
-    setSaveError('');
+    
   }
 
   async function handleSave() {
     if (!selectedName || !isDirty) return;
-    setIsSaving(true); setSaveError('');
+    setIsSaving(true); 
+    if (bannerTimerRef.current) { clearTimeout(bannerTimerRef.current); bannerTimerRef.current = null; }
+    setSaveBanner(null);
     try {
       const res  = await fetch(`/api/destinations/${enc(org.region)}/${enc(org.subdomain)}/${enc(selectedName)}`, {
         method:  'PUT',
@@ -648,8 +720,10 @@ export default function SubaccountDestModal({ org, allNames, initialName, onClos
       if (!json.ok) throw new Error(json.error ?? 'Save failed');
       await loadDest(selectedName);
       if (activeTab === 'changelog') await loadChangelog(selectedName);
+      setSaveBanner({ type: 'success', message: `${org.region} → ${org.subdomain} → ${selectedName} saved` });
+      bannerTimerRef.current = setTimeout(() => setSaveBanner(null), 3000);
     } catch (err) {
-      setSaveError(err instanceof Error ? err.message : 'Save failed');
+      setSaveBanner({ type: 'error', message: err instanceof Error ? err.message : 'Save failed' });
     } finally { setIsSaving(false); }
   }
 
@@ -684,7 +758,7 @@ export default function SubaccountDestModal({ org, allNames, initialName, onClos
     const file = e.target.files?.[0];
     if (!file) return;
     e.target.value = '';
-    setIsImporting(true); setSaveError('');
+    setIsImporting(true); 
     try {
       const text   = await file.text();
       const parsed = JSON.parse(text) as Record<string, unknown> | Record<string, unknown>[];
@@ -705,7 +779,7 @@ export default function SubaccountDestModal({ org, allNames, initialName, onClos
       }
       if (lastName) { selectDest(lastName); setActiveTab('properties'); setIsCreating(false); }
     } catch (err) {
-      setSaveError(err instanceof Error ? err.message : 'Import failed');
+      setSaveBanner({ type: 'error', message: err instanceof Error ? err.message : 'Import failed' });
     } finally { setIsImporting(false); }
   }
 
@@ -767,11 +841,17 @@ export default function SubaccountDestModal({ org, allNames, initialName, onClos
       <div className="bg-background border border-border rounded-lg shadow-xl flex flex-col w-full h-full max-w-[1800px] max-h-[calc(100vh-1.5rem)]">
         {/* Modal header */}
         <div className="flex items-center gap-3 px-4 py-3 border-b border-border shrink-0">
-          <span className="text-sm font-semibold min-w-0 truncate">
-            Subaccount Destinations
-            <span className="text-muted-foreground font-normal ml-2 text-xs">
-              {org.alias || org.subaccountName} · {org.subdomain} · {org.region}
-            </span>
+          <span className="text-sm font-semibold min-w-0 flex items-center gap-1 truncate">
+            <span className="text-muted-foreground font-normal">{org.region}</span>
+            <span className="text-muted-foreground font-normal">›</span>
+            <span>{org.alias || org.subaccountName}</span>
+            <span className="text-muted-foreground font-normal text-xs font-mono">({org.subdomain})</span>
+            {selectedName && !isCreating && (
+              <>
+                <span className="text-muted-foreground font-normal">›</span>
+                <span>{selectedName}</span>
+              </>
+            )}
           </span>
           <div className="ml-auto flex items-center gap-1.5 shrink-0">
             {(() => {
@@ -911,12 +991,19 @@ export default function SubaccountDestModal({ org, allNames, initialName, onClos
                   saving={isSaving}
                   importing={isImporting}
                   loading={isLoading}
-                  error={saveError}
+                  banner={saveBanner}
+                  compareSelected={selectedDests?.some(
+                    d => d.region === org.region && d.subdomain === org.subdomain && d.name === selectedName,
+                  )}
                   onUpdate={(idx, patch) => setEditedProps(prev => prev.map((p, i) => i === idx ? { ...p, ...patch } : p))}
                   onDelete={idx => setEditedProps(prev => prev.filter((_, i) => i !== idx))}
                   onAdd={() => setEditedProps(prev => [...prev, { key: '', value: '', isSensitive: false, revealed: false }])}
                   onSave={handleSave}
-                  onReset={() => { setEditedProps(structuredClone(serverProps)); setSaveError(''); }}
+                  onReset={() => { setEditedProps(structuredClone(serverProps)); setSaveBanner(null); }}
+                  onClearBanner={() => setSaveBanner(null)}
+                  onToggleCompare={onToggleCompare
+                    ? () => onToggleCompare({ region: org.region, subdomain: org.subdomain, name: selectedName })
+                    : undefined}
                 />
               )}
               {activeTab === 'changelog' && (
