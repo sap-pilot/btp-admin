@@ -1,13 +1,13 @@
 # Changelog
 
-## [v1.2.0] - 2026-08-01
+## [v1.2.0] - 2026-08-02
 
 ### Added
 
 **Themes**
 - **Custom theme system** — 23 base themes (VS Code, Material, Claude + 13 new: Art Deco, Caffeine, Corporate, Darkmatter, Ghibli Studio, Graphite, Marvel, Nature, Perpetuity, Spotify, Sunset Horizon, Twitter, Vercel) plus 17 accent color overlays; all colors in OKLCH format; full light and dark palette per theme applied as CSS vars on `:root`; `useTheme` hook persists base + accent selection in localStorage and applies vars at module load time — no flash on reload
 - **Sidebar Themes split-button** — "Toggle Theme" renamed to "Themes"; left half toggles light/dark mode, right half (›) opens the User Settings modal at the Themes section
-- **User Settings modal** — accessible via sidebar › button or the user dropdown (before Log out); two sections: **User Account** (name, email, role) and **Themes** (Light/Dark segmented toggle, base theme grid with 4-column layout, accent color circles; changes apply immediately); 7 near-identical shadcn base themes hidden from display (Stone, Zinc, Mauve, Olive, Mist, Taupe, Vercel) — retained in `themes.ts` for localStorage safety
+- **User Settings modal** — accessible via sidebar › button or the user dropdown (before Log out); horizontal tab bar layout (**User Account** tab: name, email, role; **Themes** tab: Light/Dark segmented toggle, base theme grid with 4-column layout, accent color circles; changes apply immediately); 7 near-identical shadcn base themes hidden from display (Stone, Zinc, Mauve, Olive, Mist, Taupe, Vercel) — retained in `themes.ts` for localStorage safety
 - **Themes removed from Config → Settings** — Themes section moved to User Settings modal; `server/config/default-settings.json` no longer includes a `themes` array (list is hardcoded in `themes.ts`)
 
 **Settings & Home Page**
@@ -26,29 +26,30 @@
 
 **Destinations**
 - **Destination Overview page** (`/destinations`) — cross-subaccount destination matrix; tabs/groups from `tabs.json`; only `manageDestinations=true` orgs shown as columns; category rows: Generic, S/4, CEP, OTHERS; count badge per category per org
-- **Destination service discovery** — Refresh queries CF v3 API for `destination` service instance/key; credentials cached in `~/.ba/destination-keys.json`; OAuth2 `client_credentials` tokens cached in `~/.ba/destination-tokens.json` (auto-refreshed on expiry)
-- **Destination data sync** — fetches `/destination-configuration/v1/subaccountDestinations` per org; writes to `{LOCAL_STORE_DIR}/dest/{region}/{subdomain}/{name}.json`; field-level diff prepended to `{name}.changelog.md` on change; absent destinations renamed `{name}.deleted.json`
+- **Destination service discovery and credential caching** — the `destination/lite` service plan guid is fetched once per region from the CF v3 API and cached in `~/.ba/destination-keys.json` as `{region}_destination_service_plan_guid`; up to 10 service instances are then fetched by plan guid and their credential bindings batch-fetched in a single call; auth fields (`clientid`, `clientsecret`, token URL) resolved from `credentials` or `credentials.uaa` in the binding details response; credentials stored as `{ [region]: { [orgId]: { orgName, destinationInstances: [{ instanceId, instanceName, serviceKeys: [{ keyId, keyName, credential }] }] } } }`; OAuth2 tokens resolved via a four-stage chain — (1) valid cached token + credential, (2) `refresh_token` grant, (3) `client_credentials` with stored key (if rejected, key is automatically re-discovered and retried), (4) full CF API discovery for first use — and cached as `{ [region]: { [orgId]: { instanceId, instanceName, token: { access_token, expires_at, refresh_token?, token_url } } } }` in `~/.ba/destination-tokens.json`; CF login failures tracked per region — a failing region's remaining orgs are skipped and reported as issues
+- **Destination data sync** — fetches `/destination-configuration/v1/subaccountDestinations` per org (filtered to `manageDestinations=true`, sorted by region); writes to `{LOCAL_STORE_DIR}/dest/{region}/{subdomain}/{name}.json`; field-level diff prepended to `{name}.changelog.md` (heading: `## Refreshed by <{user}> at {datetime} UTC`; `POST /api/destinations/refresh` reads the session email/name for authorship); absent destinations renamed to `{name}.deleted.json` with a `## Deleted by refresh at {datetime} UTC` entry
+- **Destination Overview SSE progress bar** — done message: `Refreshed X of Y subaccounts, received XX destinations, created XX, updated XX and deleted XX destinations`; issues shown as amber rows; progress bar stays visible when issues are present, auto-hides after 5 s when the list is empty; `emitImmediate` bypasses debounce for the terminal event on the `refresh-destinations` topic
 - **`/api/destinations` routes** — `GET /api/destinations` (auth-required, lightweight overview); `POST /api/destinations/refresh` (admin-only); single-destination: `GET`, `PUT` (with diff/changelog), export, changelog, and `GET /search`
 - **Destination deep-link URL** — selecting a destination updates URL to `/destinations/{region}/{subdomain}/{name}` via `history.replaceState`; navigating there reopens the modal pre-selected; close navigates back
 - **Subaccount Destinations modal** — opens from OTHERS button, org name header, destination cell, or search result; left panel: sorted list with Ctrl/Shift+click multi-select + debounced search; Properties tab toolbar: Create (new destination form), Import (single or array JSON), Export (single file or bulk `multi_destinations.json`), Reset, Save; sensitive fields masked with lock/eye-reveal (`sensitiveFields` array from server); server-side diff/changelog on every save; Change History tab; Test Destination tab (Send disabled)
 - **Destination search → modal pre-select** — clicking a search result on the Destination Overview title bar opens the modal with the destination pre-selected
-- **Destination Overview SSE progress bar** — blue fill during refresh, green on success (auto-hides after 5 s), red on error; uses `emitImmediate` to bypass debounce for the terminal event on the `refresh-destinations` topic
 
 **Subaccounts & Config**
 - **CF login service** — reads `CF_USERNAME`, `CF_PASSWORD`, `CF_ORIGIN`, `CF_REGIONS` from env/`config.json → variables`; logs in to CF UAA per region; tokens in `~/.ba/cf_login_tokens.json`; auto-refreshed; CF_REGIONS absent → silently skipped; login failures non-fatal (WARN logged)
 - **`subaccounts.json`** (replaces `orgs.json`) — schema: `[{ region, globalAccountGUID, subdomain, subaccountId, subaccountName, groupIds, alias, pos, inHomepage, manageDestinations, useAOD, org?: {orgId, orgName, spaces: [{spaceId, spaceName}]}, subscriptions, serviceInstances }]`; user-editable fields preserved across Refresh (merge by `region + subaccountId`)
 - **BTP CLI subaccount refresh** — discovers subaccounts, CF orgs, subscriptions, and service instances; CF spaces fetched in a single bulk call (`GET /v3/spaces?organization_guids=…`); Retry-After back-off (up to 3 retries); `CF_REGIONS` / credentials missing → structured `400` error surfaced in UI
 - **SSE progress bar for subaccount refresh** — `{ type:'progress', pct, message }` events on `refresh-subaccounts` topic; Config Subaccounts tab shows bar during refresh, auto-hides 2 s after 100%
-- **Subaccounts table** — flat drag-reorder table; columns: Region (RO), Subdomain (RO), Subaccount Name (→ detail modal), Group IDs, Alias, Home/Dest/AOD checkboxes, Sub/Svc count badges; default sort by `groupIds` then `subdomain`; filter matches all fields
+- **Subaccounts table** — flat drag-reorder table; columns: Region (RO), Subdomain (link → Subaccount Detail Modal), Subaccount Name (plain text), Group IDs, Alias, Home/Dest/AOD checkboxes, Sub/Svc count badges; default sort by `groupIds` then `subdomain`; filter matches all fields
 - **Subaccount detail modal** — identity fields, CF org + spaces table, subscriptions (URL + Customer Dev flag), service instances (Space Name resolved from org spaces)
 - **Tabs / Groups table** — two-level collapsible (tabs + group rows); drag-and-drop within and across tabs
-- **Config Change Log** — every Refresh and Save prepends a diff entry to `conf/changelog.md`; Change Log tab fetches `/api/config/changelog` and auto-refreshes on SSE `config` events
+- **Config History tab** — every Refresh and Save prepends a diff entry to `conf/changelog.md`; History tab fetches `/api/config/changelog` and auto-refreshes on SSE `config` events
 - **Config Import / Export** — Export downloads `combined-config.json` with all `conf/` JSON files; Import splits back and triggers SSE; `GET /api/config/export` + `POST /api/config/import` (admin-only)
 - **Configuration modal** — admin-only sidebar button; near-full-screen with Subaccounts / Orgs and Tabs / Groups tabs
 - **SSE push for config + dest updates** — `config` topic: emitted on conf writes and sync downloads; `dest` topic: emitted on destination saves and refresh; Config page + Home page subscribe to `config`; Destination Overview subscribes to `dest`
 - **Config page live preview** — Preview toggle opens a side-by-side home page panel driven by in-memory draft state; draggable separator (min 240 / max 900 px, default 420 px)
 - **`conf/` and `dest/` sync** — browse, download, and batch-download handle the `conf/` and `dest/` prefixes; destination saves and refresh call `notifyCallbacks()` so consumers sync immediately
 - **DEBUG logging for CF + Destination API calls** — every outbound HTTP request logs method, url, status, cl, ms; CF API / UAA / v3 / Destination OAuth / Destination API calls each labelled distinctly
+- **`scripts/dev-proxy.cjs`** — preload script for routing Node.js native `fetch` through mitmproxy or any HTTP proxy (dev only); requires `undici` devDependency; set `export HTTPS_PROXY`, `NODE_EXTRA_CA_CERTS`, and `NODE_OPTIONS=--require $(pwd)/scripts/dev-proxy.cjs` before `npm run dev`; documented in README under Debugging / Troubleshooting
 
 ### Fixed
 - **Subaccounts not imported** — `POST /api/config/import` now unwraps `{ subaccounts, globalAccounts }` before calling `importSubaccounts`

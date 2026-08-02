@@ -1,5 +1,5 @@
-import { mkdir, readdir, readFile, rename, stat, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
+import { mkdir, readdir, readFile, rename, stat, writeFile } from 'node:fs/promises';
 import { join, sep } from 'node:path';
 import { homedir } from 'node:os';
 import { config } from '../config.js';
@@ -19,7 +19,7 @@ function isSensitiveField(key: string): boolean {
   return k.includes('secret') || k.includes('password') || k.includes('credential');
 }
 
-// ─── Types ───────────────────────────────────────────────────────────────────
+// ─── Types ────────────────────────────────────────────────────────────────────
 
 interface DestCredentials {
   uri:          string;
@@ -29,32 +29,75 @@ interface DestCredentials {
   [k: string]: unknown;
 }
 
-export interface DestKeyEntry {
-  org_id:      string;
-  region:      string;
-  subdomain:   string;
-  credentials: DestCredentials;
+interface ServiceKey {
+  keyId:      string;
+  keyName:    string;
+  credential: DestCredentials;
 }
 
-interface DestTokenEntry {
-  org_id:       string;
-  access_token: string;
-  expires_at:   number;
+interface DestKeyInstance {
+  instanceId:   string;
+  instanceName: string;
+  serviceKeys:  ServiceKey[];
 }
 
-type KeyStore   = Record<string, DestKeyEntry>;
-type TokenStore = Record<string, DestTokenEntry>;
+interface OrgKeyEntry {
+  orgName:              string;
+  destinationInstances: DestKeyInstance[];
+}
+
+// { [region]: { [orgId]: OrgKeyEntry } }
+type KeyStore = Record<string, Record<string, OrgKeyEntry>>;
+
+export interface DestToken {
+  access_token:   string;
+  expires_at:     number;
+  refresh_token?: string;
+  token_url:      string;
+}
+
+interface DestTokenInstance {
+  instanceId:   string;
+  instanceName: string;
+  token:        DestToken;
+}
+
+interface OrgTokenEntry {
+  orgName:              string;
+  destinationInstances: DestTokenInstance[];
+}
+
+// { [region]: { [orgId]: OrgTokenEntry } }
+type TokenStore = Record<string, Record<string, OrgTokenEntry>>;
 
 // ─── Persistence helpers ──────────────────────────────────────────────────────
 
-async function loadKeyStore(): Promise<KeyStore> {
-  try { return JSON.parse(await readFile(KEYS_PATH, 'utf-8')) as KeyStore; }
-  catch { return {}; }
+const PLAN_GUID_SUFFIX = '_destination_service_plan_guid';
+
+async function loadKeyStore(): Promise<{ orgs: KeyStore; planGuids: Record<string, string> }> {
+  try {
+    const raw  = JSON.parse(await readFile(KEYS_PATH, 'utf-8')) as Record<string, unknown>;
+    const orgs: KeyStore = {};
+    const planGuids: Record<string, string> = {};
+    for (const [k, v] of Object.entries(raw)) {
+      if (k.endsWith(PLAN_GUID_SUFFIX) && typeof v === 'string') {
+        planGuids[k.slice(0, -PLAN_GUID_SUFFIX.length)] = v;
+      } else if (v && typeof v === 'object' && !Array.isArray(v)) {
+        orgs[k] = v as Record<string, OrgKeyEntry>;
+      }
+    }
+    return { orgs, planGuids };
+  } catch {
+    return { orgs: {}, planGuids: {} };
+  }
 }
 
-async function saveKeyStore(store: KeyStore): Promise<void> {
+async function saveKeyStore(orgs: KeyStore, planGuids: Record<string, string>): Promise<void> {
   await mkdir(BA_DIR, { recursive: true });
-  await writeFile(KEYS_PATH, JSON.stringify(store, null, 2), 'utf-8');
+  const out: Record<string, unknown> = {};
+  for (const [region, guid] of Object.entries(planGuids)) out[`${region}${PLAN_GUID_SUFFIX}`] = guid;
+  for (const [region, orgMap] of Object.entries(orgs))     out[region] = orgMap;
+  await writeFile(KEYS_PATH, JSON.stringify(out, null, 2), 'utf-8');
 }
 
 async function loadTokenStore(): Promise<TokenStore> {
@@ -67,21 +110,55 @@ async function saveTokenStore(store: TokenStore): Promise<void> {
   await writeFile(TOKENS_PATH, JSON.stringify(store, null, 2), 'utf-8');
 }
 
+// ─── Key/token store accessors ────────────────────────────────────────────────
+
+interface FirstKeyInfo {
+  credential:   DestCredentials;
+  instanceId:   string;
+  instanceName: string;
+  keyId:        string;
+  keyName:      string;
+}
+
+function getFirstKeyInfo(store: KeyStore, region: string, orgId: string): FirstKeyInfo | null {
+  const inst = store[region]?.[orgId]?.destinationInstances[0];
+  if (!inst) return null;
+  const key = inst.serviceKeys[0];
+  if (!key) return null;
+  return { credential: key.credential, instanceId: inst.instanceId, instanceName: inst.instanceName, keyId: key.keyId, keyName: key.keyName };
+}
+
+interface TokenInfo {
+  token:        DestToken;
+  instanceId:   string;
+  instanceName: string;
+}
+
+function getTokenInfo(store: TokenStore, region: string, orgId: string): TokenInfo | null {
+  const inst = store[region]?.[orgId]?.destinationInstances[0];
+  return inst ? { token: inst.token, instanceId: inst.instanceId, instanceName: inst.instanceName } : null;
+}
+
+function setKeyEntry(store: KeyStore, region: string, orgId: string, orgName: string, instanceId: string, instanceName: string, keyId: string, keyName: string, credential: DestCredentials): void {
+  if (!store[region]) store[region] = {};
+  store[region]![orgId] = { orgName, destinationInstances: [{ instanceId, instanceName, serviceKeys: [{ keyId, keyName, credential }] }] };
+}
+
+function setTokenEntry(store: TokenStore, region: string, orgId: string, orgName: string, instanceId: string, instanceName: string, token: DestToken): void {
+  if (!store[region]) store[region] = {};
+  store[region]![orgId] = { orgName, destinationInstances: [{ instanceId, instanceName, token }] };
+}
+
 // ─── CF v3 API helpers ────────────────────────────────────────────────────────
 
 async function cfGet(region: string, path: string): Promise<unknown> {
   const token      = await getOrRefreshToken(region);
   const url        = `${token.api_url}${path}`;
   const reqHeaders = { Authorization: `${token.token_type} ${token.access_token}` };
-  if (logger.isLevelEnabled('trace')) {
-    logger.trace({ method: 'GET', url, reqHeaders }, 'CF v3 API request');
-  }
+  if (logger.isLevelEnabled('trace')) logger.trace({ method: 'GET', url, reqHeaders }, 'CF v3 API request');
   const t0  = Date.now();
-  const res = await fetchWithRateLimit(
-    () => fetch(url, { headers: reqHeaders }),
-    url,
-  );
-  const ms = Date.now() - t0;
+  const res = await fetchWithRateLimit(() => fetch(url, { headers: reqHeaders }), url);
+  const ms  = Date.now() - t0;
   let resText: string | undefined;
   if (logger.isLevelEnabled('trace')) {
     resText = await res.text().catch(() => '');
@@ -92,90 +169,264 @@ async function cfGet(region: string, path: string): Promise<unknown> {
   return resText !== undefined ? JSON.parse(resText) : res.json();
 }
 
-async function fetchDestInstanceGuid(region: string, orgGuid: string): Promise<string | null> {
-  const data = await cfGet(region,
-    `/v3/service_instances?organization_guids=${orgGuid}&names=destination&per_page=10`,
-  ) as { resources?: Array<{ guid: string }> };
-  return data.resources?.[0]?.guid ?? null;
+interface DestInstanceInfo { instanceId: string; instanceName: string }
+interface DestKeyRaw       { keyId: string; keyName: string }
+
+async function fetchDestServicePlanGuid(region: string): Promise<string> {
+  const data = await cfGet(region, '/v3/service_plans?service_offering_names=destination&names=lite&per_page=1') as {
+    resources?: Array<{ guid: string }>;
+  };
+  const guid = data.resources?.[0]?.guid;
+  if (!guid) throw new Error('Destination service plan (destination/lite) not found in region');
+  return guid;
 }
 
-async function fetchDestKeyGuid(region: string, instanceGuid: string): Promise<string | null> {
+async function fetchDestInstances(region: string, orgGuid: string, planGuid: string): Promise<DestInstanceInfo[]> {
   const data = await cfGet(region,
-    `/v3/service_credential_bindings?service_instance_guids=${instanceGuid}&type=key&per_page=10`,
-  ) as { resources?: Array<{ guid: string }> };
-  return data.resources?.[0]?.guid ?? null;
+    `/v3/service_instances?organization_guids=${orgGuid}&service_plan_guids=${planGuid}&per_page=10`,
+  ) as { resources?: Array<{ guid: string; name: string }> };
+  return (data.resources ?? []).map(r => ({ instanceId: r.guid, instanceName: r.name }));
+}
+
+interface DestKeyWithInstance extends DestKeyRaw { instanceId: string }
+
+async function fetchDestKeysForInstances(region: string, instanceIds: string[]): Promise<DestKeyWithInstance[]> {
+  if (instanceIds.length === 0) return [];
+  const data = await cfGet(region,
+    `/v3/service_credential_bindings?service_instance_guids=${instanceIds.join(',')}&type=key&per_page=10`,
+  ) as {
+    resources?: Array<{
+      guid: string;
+      name: string;
+      relationships?: { service_instance?: { data?: { guid?: string } } };
+    }>;
+  };
+  return (data.resources ?? []).map(r => ({
+    keyId:      r.guid,
+    keyName:    r.name,
+    instanceId: r.relationships?.service_instance?.data?.guid ?? '',
+  }));
 }
 
 async function fetchDestCredentials(region: string, keyGuid: string): Promise<DestCredentials> {
-  const data = await cfGet(region, `/v3/service_credential_bindings/${keyGuid}/details`) as {
-    credentials?: DestCredentials;
+  const raw = await cfGet(region, `/v3/service_credential_bindings/${keyGuid}/details`) as {
+    credentials?: Record<string, unknown>;
   };
-  const creds = data.credentials;
-  if (!creds?.uri || !creds?.clientid || !creds?.clientsecret || !creds?.url) {
-    throw new Error(`Incomplete destination service credentials for key ${keyGuid}`);
+  const c   = raw.credentials ?? {};
+  const uaa = (c.uaa as Record<string, unknown> | undefined) ?? {};
+
+  // clientid / clientsecret / url (token URL) may be at root or nested under credentials.uaa
+  const uri          = (c.uri          ?? uaa.uri)          as string | undefined;
+  const clientid     = (c.clientid     ?? uaa.clientid)     as string | undefined;
+  const clientsecret = (c.clientsecret ?? uaa.clientsecret) as string | undefined;
+  const url          = (c.url          ?? uaa.url)          as string | undefined;
+
+  if (!uri || !clientid || !clientsecret || !url) {
+    throw new Error(`Incomplete destination credentials for key ${keyGuid}`);
   }
-  return creds;
+  return { ...c, uri, clientid, clientsecret, url };
 }
 
-// ─── Destination service OAuth ────────────────────────────────────────────────
+interface DiscoveredKey extends DestInstanceInfo, DestKeyRaw { credential: DestCredentials }
 
-async function getDestToken(entry: DestKeyEntry, store: TokenStore): Promise<string> {
-  const cached = store[entry.org_id];
-  if (cached && cached.expires_at - Date.now() > 60_000) return cached.access_token;
+async function discoverDestKey(region: string, orgId: string, planGuid: string): Promise<DiscoveredKey> {
+  // Oldest instances first — older instances are less likely to be redeployed and have more stable keys
+  const instances = await fetchDestInstances(region, orgId, planGuid);
+  if (instances.length === 0) throw new Error(`No "destination" service instance found in org ${orgId}`);
 
-  const { url, clientid, clientsecret } = entry.credentials;
-  const basic      = Buffer.from(`${clientid}:${clientsecret}`).toString('base64');
-  const tokenUrl   = `${url}/oauth/token`;
-  const reqHeaders = { 'Content-Type': 'application/x-www-form-urlencoded', Authorization: `Basic ${basic}` };
-  const reqBody    = 'grant_type=client_credentials';
-  if (logger.isLevelEnabled('trace')) {
-    logger.trace({ method: 'POST', url: tokenUrl, reqHeaders, reqBody, org: entry.org_id }, 'Destination OAuth request');
-  }
+  // Batch-fetch oldest service keys across all instances in one call; oldest keys are preferred for the same reason
+  const keys = await fetchDestKeysForInstances(region, instances.map(i => i.instanceId));
+  const key  = keys.find(k => k.instanceId);
+  if (!key) throw new Error(`No service key found for any destination service instance in org ${orgId}`);
+
+  const inst = instances.find(i => i.instanceId === key.instanceId) ?? instances[0]!;
+  const credential = await fetchDestCredentials(region, key.keyId);
+  logger.info({ orgId, region, instanceId: inst.instanceId, keyId: key.keyId }, 'Destination service key acquired via CF API');
+  return { ...inst, ...key, credential };
+}
+
+// ─── Destination OAuth token ──────────────────────────────────────────────────
+
+async function acquireDestToken(credential: DestCredentials): Promise<DestToken> {
+  const tokenUrl = `${credential.url}/oauth/token`;
+  const basic    = Buffer.from(`${credential.clientid}:${credential.clientsecret}`).toString('base64');
+  const headers  = { 'Content-Type': 'application/x-www-form-urlencoded', Authorization: `Basic ${basic}` };
+  const body     = 'grant_type=client_credentials';
+  if (logger.isLevelEnabled('trace')) logger.trace({ method: 'POST', url: tokenUrl, reqHeaders: headers, reqBody: body }, 'Destination OAuth request');
   const t0  = Date.now();
-  const res = await fetchWithRateLimit(
-    () => fetch(tokenUrl, { method: 'POST', headers: reqHeaders, body: reqBody }),
-    tokenUrl,
-  );
-  const ms = Date.now() - t0;
+  const res = await fetchWithRateLimit(() => fetch(tokenUrl, { method: 'POST', headers, body }), tokenUrl);
+  const ms  = Date.now() - t0;
   let resText: string | undefined;
   if (logger.isLevelEnabled('trace')) {
     resText = await res.text().catch(() => '');
-    logger.trace({ method: 'POST', url: tokenUrl, status: res.status, org: entry.org_id, resHeaders: Object.fromEntries(res.headers.entries()), resBody: resText }, 'Destination OAuth response');
+    logger.trace({ method: 'POST', url: tokenUrl, status: res.status, resHeaders: Object.fromEntries(res.headers.entries()), resBody: resText }, 'Destination OAuth response');
   }
-  logger.debug({ method: 'POST', url: tokenUrl, grant_type: 'client_credentials', org: entry.org_id, status: res.status, cl: res.headers.get('content-length'), ms }, 'Destination OAuth token call');
+  logger.debug({ method: 'POST', url: tokenUrl, grant_type: 'client_credentials', status: res.status, cl: res.headers.get('content-length'), ms }, 'Destination OAuth token call');
   if (!res.ok) {
     const text = resText ?? await res.text().catch(() => '');
-    throw new Error(`Destination OAuth for ${entry.org_id} → HTTP ${res.status}: ${text.slice(0, 200)}`);
+    throw new Error(`Destination OAuth → HTTP ${res.status}: ${text.slice(0, 200)}`);
   }
-  const data = (resText !== undefined ? JSON.parse(resText) : await res.json()) as { access_token: string; expires_in?: number };
+  const data = (resText !== undefined ? JSON.parse(resText) : await res.json()) as { access_token: string; expires_in?: number; refresh_token?: string };
   const expiresIn = typeof data.expires_in === 'number' ? data.expires_in : 1800;
-  store[entry.org_id] = { org_id: entry.org_id, access_token: data.access_token, expires_at: Date.now() + expiresIn * 1000 };
-  return data.access_token;
+  return {
+    access_token:   data.access_token,
+    expires_at:     Date.now() + expiresIn * 1000,
+    refresh_token:  data.refresh_token,
+    token_url:      tokenUrl,
+  };
+}
+
+async function refreshDestToken(existing: DestToken): Promise<DestToken> {
+  if (!existing.refresh_token) throw new Error('No refresh_token available');
+  const headers = { 'Content-Type': 'application/x-www-form-urlencoded' };
+  const body    = `grant_type=refresh_token&refresh_token=${encodeURIComponent(existing.refresh_token)}`;
+  const res     = await fetchWithRateLimit(() => fetch(existing.token_url, { method: 'POST', headers, body }), existing.token_url);
+  if (!res.ok) throw new Error(`Destination token refresh → HTTP ${res.status}`);
+  const data = await res.json() as { access_token: string; expires_in?: number; refresh_token?: string };
+  const expiresIn = typeof data.expires_in === 'number' ? data.expires_in : 1800;
+  return {
+    access_token:  data.access_token,
+    expires_at:    Date.now() + expiresIn * 1000,
+    refresh_token: data.refresh_token ?? existing.refresh_token,
+    token_url:     existing.token_url,
+  };
+}
+
+// ─── Token resolution (full fallback chain) ───────────────────────────────────
+
+interface ResolvedAuth { accessToken: string; credential: DestCredentials }
+type TokenResult = ResolvedAuth | { error: string };
+
+async function resolveToken(
+  region:        string,
+  orgId:         string,
+  orgName:       string,
+  keyStore:      KeyStore,
+  tokenStore:    TokenStore,
+  cfLoginFailed: Set<string>,
+  planGuids:     Record<string, string>,
+  location:      string,
+): Promise<TokenResult> {
+  const keyInfo   = getFirstKeyInfo(keyStore, region, orgId);
+  const tokenInfo = getTokenInfo(tokenStore, region, orgId);
+
+  // 1. Valid cached token + known credential → use immediately
+  if (tokenInfo && tokenInfo.token.expires_at - Date.now() > 60_000 && keyInfo) {
+    return { accessToken: tokenInfo.token.access_token, credential: keyInfo.credential };
+  }
+
+  // 2. Try refresh_token
+  if (tokenInfo?.token.refresh_token) {
+    try {
+      const refreshed = await refreshDestToken(tokenInfo.token);
+      setTokenEntry(tokenStore, region, orgId, orgName, tokenInfo.instanceId, tokenInfo.instanceName, refreshed);
+      if (keyInfo) return { accessToken: refreshed.access_token, credential: keyInfo.credential };
+    } catch (err) {
+      logger.debug({ location, err }, 'Destination token refresh failed — will use service key');
+    }
+  }
+
+  // 3. Use existing key for a new client_credentials token; re-discover if key is rejected
+  if (keyInfo) {
+    try {
+      const token = await acquireDestToken(keyInfo.credential);
+      setTokenEntry(tokenStore, region, orgId, orgName, keyInfo.instanceId, keyInfo.instanceName, token);
+      return { accessToken: token.access_token, credential: keyInfo.credential };
+    } catch (err) {
+      const errMsg = String(err);
+      const isCredErr = errMsg.includes('HTTP 401') || errMsg.includes('HTTP 403') ||
+                        errMsg.includes('Bad credentials') || errMsg.includes('Incomplete');
+      if (isCredErr && !cfLoginFailed.has(region)) {
+        // Cached key is stale/revoked — re-discover once with fresh CF API lookup
+        logger.info({ location, err }, 'Cached destination key rejected — re-discovering latest key');
+        return await rediscoverAndAcquire(region, orgId, orgName, keyStore, tokenStore, cfLoginFailed, planGuids, location);
+      }
+      logger.debug({ location, err }, 'Token from existing key failed — trying CF API for new key');
+    }
+  }
+
+  // 4. Discover key via CF API (no cached key, or non-credential failure above)
+  if (cfLoginFailed.has(region)) {
+    return { error: `CF login failed for region ${region}` };
+  }
+
+  return await rediscoverAndAcquire(region, orgId, orgName, keyStore, tokenStore, cfLoginFailed, planGuids, location);
+}
+
+async function rediscoverAndAcquire(
+  region:        string,
+  orgId:         string,
+  orgName:       string,
+  keyStore:      KeyStore,
+  tokenStore:    TokenStore,
+  cfLoginFailed: Set<string>,
+  planGuids:     Record<string, string>,
+  location:      string,
+): Promise<TokenResult> {
+  // Fetch (and cache) the destination service plan guid — one per region
+  let planGuid = planGuids[region];
+  if (!planGuid) {
+    try {
+      planGuid = await fetchDestServicePlanGuid(region);
+      planGuids[region] = planGuid;
+      logger.debug({ region, planGuid }, 'Cached destination service plan guid');
+    } catch (err) {
+      const msg = String(err);
+      const isCfAuth = msg.includes('No CF credentials available') ||
+                       (msg.includes('HTTP 401') && msg.includes('oauth/token'));
+      if (isCfAuth) {
+        logger.warn({ region, err }, `Not able to login to CF at ${region}`);
+        cfLoginFailed.add(region);
+        return { error: `CF login failed for region ${region}` };
+      }
+      logger.info({ region, err }, 'Cannot fetch destination service plan guid');
+      return { error: `Cannot fetch destination service plan: ${msg}` };
+    }
+  }
+
+  try {
+    const discovered = await discoverDestKey(region, orgId, planGuid);
+    setKeyEntry(keyStore, region, orgId, orgName, discovered.instanceId, discovered.instanceName, discovered.keyId, discovered.keyName, discovered.credential);
+    const token = await acquireDestToken(discovered.credential);
+    setTokenEntry(tokenStore, region, orgId, orgName, discovered.instanceId, discovered.instanceName, token);
+    return { accessToken: token.access_token, credential: discovered.credential };
+  } catch (err) {
+    const msg = String(err);
+    const isCfAuth  = msg.includes('No CF credentials available') ||
+                      (msg.includes('HTTP 401') && msg.includes('oauth/token'));
+    const isNoSvc   = msg.includes('No "destination" service instance');
+    if (isCfAuth) {
+      logger.warn({ region, err }, `Not able to login or refresh destinations at ${region}`);
+      cfLoginFailed.add(region);
+      return { error: `CF login failed for region ${region}` };
+    }
+    if (isNoSvc) {
+      logger.info({ location }, 'No destination service instance found');
+      return { error: 'No destination service instance found' };
+    }
+    logger.info({ location, err }, `Cannot get destination key for ${location}`);
+    return { error: `Cannot fetch destination key: ${msg}` };
+  }
 }
 
 // ─── Destination API ──────────────────────────────────────────────────────────
 
-async function fetchSubaccountDestinations(entry: DestKeyEntry, token: string): Promise<unknown[]> {
-  const url        = `${entry.credentials.uri}/destination-configuration/v1/subaccountDestinations`;
-  const reqHeaders = { Authorization: `Bearer ${token}` };
-  if (logger.isLevelEnabled('trace')) {
-    logger.trace({ method: 'GET', url, reqHeaders, org: entry.org_id }, 'Destination API request');
-  }
+async function fetchSubaccountDestinations(credential: DestCredentials, accessToken: string): Promise<unknown[]> {
+  const url     = `${credential.uri}/destination-configuration/v1/subaccountDestinations`;
+  const headers = { Authorization: `Bearer ${accessToken}` };
+  if (logger.isLevelEnabled('trace')) logger.trace({ method: 'GET', url, reqHeaders: headers }, 'Destination API request');
   const t0  = Date.now();
-  const res = await fetchWithRateLimit(
-    () => fetch(url, { headers: reqHeaders }),
-    url,
-  );
-  const ms = Date.now() - t0;
+  const res = await fetchWithRateLimit(() => fetch(url, { headers }), url);
+  const ms  = Date.now() - t0;
   let resText: string | undefined;
   if (logger.isLevelEnabled('trace')) {
     resText = await res.text().catch(() => '');
-    logger.trace({ method: 'GET', url, status: res.status, org: entry.org_id, resHeaders: Object.fromEntries(res.headers.entries()), resBody: resText }, 'Destination API response');
+    logger.trace({ method: 'GET', url, status: res.status, resHeaders: Object.fromEntries(res.headers.entries()), resBody: resText }, 'Destination API response');
   }
-  logger.debug({ method: 'GET', url, org: entry.org_id, status: res.status, cl: res.headers.get('content-length'), ms }, 'Destination API call');
+  logger.debug({ method: 'GET', url, status: res.status, cl: res.headers.get('content-length'), ms }, 'Destination API call');
   if (!res.ok) {
     const text = resText ?? await res.text().catch(() => '');
-    throw new Error(`Destination API for ${entry.org_id} → HTTP ${res.status}: ${text.slice(0, 200)}`);
+    throw new Error(`Destination API → HTTP ${res.status}: ${text.slice(0, 200)}`);
   }
   const data = resText !== undefined ? JSON.parse(resText) : await res.json();
   return Array.isArray(data) ? data : [];
@@ -194,11 +445,14 @@ function diffDestination(prev: Record<string, unknown>, next: Record<string, unk
   return lines.join('\n');
 }
 
+type PersistResult = 'created' | 'updated' | 'unchanged';
+
 async function persistDestination(
-  destDir: string,
-  name: string,
+  destDir:  string,
+  name:     string,
   incoming: Record<string, unknown>,
-): Promise<void> {
+  username: string,
+): Promise<PersistResult> {
   const filePath      = join(destDir, `${name}.json`);
   const changelogPath = join(destDir, `${name}.changelog.md`);
   const incomingJson  = JSON.stringify(incoming, null, 2);
@@ -206,123 +460,150 @@ async function persistDestination(
   if (existsSync(filePath)) {
     const existing = JSON.parse(await readFile(filePath, 'utf-8')) as Record<string, unknown>;
     if (JSON.stringify(existing) !== JSON.stringify(incoming)) {
-      const diff = diffDestination(existing, incoming);
-      const heading = `## ${new Date().toISOString().replace('T', ' ').slice(0, 19)} UTC`;
+      const diff    = diffDestination(existing, incoming);
+      const dateStr = new Date().toISOString().replace('T', ' ').slice(0, 19) + ' UTC';
+      const heading = `## Refreshed by <${username}> at ${dateStr}`;
       const entry   = `${heading}\n${diff}\n\n`;
-      const existing_cl = existsSync(changelogPath) ? await readFile(changelogPath, 'utf-8') : '';
-      await writeFile(changelogPath, entry + existing_cl, 'utf-8');
+      const prev    = existsSync(changelogPath) ? await readFile(changelogPath, 'utf-8') : '';
+      await writeFile(changelogPath, entry + prev, 'utf-8');
+      await writeFile(filePath, incomingJson, 'utf-8');
+      return 'updated';
     }
+    return 'unchanged';
   }
+
   await writeFile(filePath, incomingJson, 'utf-8');
+  return 'created';
 }
 
-// ─── Public API ──────────────────────────────────────────────────────────────
+// ─── Public: refresh ─────────────────────────────────────────────────────────
 
-export async function refreshDestinations(): Promise<{ refreshed: number; errors: string[] }> {
+export interface RefreshResult {
+  refreshed: number;
+  received:  number;
+  created:   number;
+  updated:   number;
+  deleted:   number;
+  errors:    string[];
+}
+
+export async function refreshDestinations(username = 'system'): Promise<RefreshResult> {
   const allSas    = await readSubaccounts();
-  const targetSas = allSas.filter((sa): sa is SubaccountEntry & { org: NonNullable<SubaccountEntry['org']> } =>
-    sa.manageDestinations && !!sa.org?.orgId,
-  );
+  const targetSas = allSas
+    .filter(sa => sa.manageDestinations)
+    .sort((a, b) => a.region.localeCompare(b.region) || a.subdomain.localeCompare(b.subdomain));
 
-  if (targetSas.length === 0) {
+  const total = targetSas.length;
+  if (total === 0) {
     logger.info('No subaccounts with manageDestinations=true — nothing to refresh');
-    emitImmediate('refresh-destinations', { type: 'done', refreshed: 0, total: 0, received: 0, errors: [] });
-    return { refreshed: 0, errors: [] };
+    emitImmediate('refresh-destinations', { type: 'done', refreshed: 0, total: 0, received: 0, created: 0, updated: 0, deleted: 0, issues: [] });
+    return { refreshed: 0, received: 0, created: 0, updated: 0, deleted: 0, errors: [] };
   }
 
-  const total    = targetSas.length;
-  const keyStore   = await loadKeyStore();
+  const { orgs: keyStore, planGuids } = await loadKeyStore();
   const tokenStore = await loadTokenStore();
-  const errors: string[] = [];
-  let refreshed     = 0;
-  let totalReceived = 0;
+
+  // Warnings and errors collected during the run, keyed with location for display
+  const issues: string[] = [];
+  const cfLoginFailed = new Set<string>();
+  let refreshed = 0, received = 0, created = 0, updated = 0, deleted = 0;
 
   emit('refresh-destinations', { type: 'progress', current: 0, total, name: 'Initializing…', received: 0 });
 
-  // Step 1: discover missing keys
-  for (const sa of targetSas) {
-    const orgId = sa.org.orgId;
-    if (keyStore[orgId]) continue;
-    try {
-      const instanceGuid = await fetchDestInstanceGuid(sa.region, orgId);
-      if (!instanceGuid) {
-        logger.warn({ org: orgId, region: sa.region }, 'No "destination" service instance found — skipping');
-        continue;
-      }
-      const keyGuid = await fetchDestKeyGuid(sa.region, instanceGuid);
-      if (!keyGuid) {
-        logger.warn({ org: orgId, region: sa.region }, 'No service key found for destination instance — skipping');
-        continue;
-      }
-      const credentials = await fetchDestCredentials(sa.region, keyGuid);
-      keyStore[orgId] = { org_id: orgId, region: sa.region, subdomain: sa.subdomain, credentials };
-      logger.info({ org: orgId, region: sa.region }, 'Destination service key acquired');
-    } catch (err) {
-      const msg = `Key discovery failed for ${orgId}: ${String(err)}`;
-      logger.error({ org: orgId, err }, msg);
-      errors.push(msg);
-    }
-  }
-  await saveKeyStore(keyStore);
-
-  // Step 2: fetch destinations for each subaccount that has a key
   for (let idx = 0; idx < targetSas.length; idx++) {
-    const sa     = targetSas[idx]!;
-    const orgId  = sa.org.orgId;
-    const saName = sa.alias || sa.subaccountName || sa.subdomain;
-    const keyEntry = keyStore[orgId];
-    if (!keyEntry) continue;
+    const sa       = targetSas[idx]!;
+    const location = `${sa.region}/${sa.subdomain}`;
+    const saLabel  = sa.alias || sa.subaccountName || sa.subdomain;
 
-    emit('refresh-destinations', { type: 'progress', current: idx + 1, total, name: saName, received: totalReceived });
+    emit('refresh-destinations', { type: 'progress', current: idx + 1, total, name: saLabel, received });
+
+    if (!sa.org?.orgId) {
+      const msg = `${location}: no org — cannot access destination service`;
+      logger.warn({ location }, msg);
+      issues.push(msg);
+      continue;
+    }
+
+    const orgId   = sa.org.orgId;
+    const orgName = sa.org.orgName ?? '';
+
+    // Helper: format issue with instance name/id when available
+    function issueRef(): string {
+      const ki = getFirstKeyInfo(keyStore, sa.region, orgId);
+      return ki ? ` -> ${ki.instanceName}[${ki.instanceId}]` : '';
+    }
 
     try {
-      const accessToken  = await getDestToken(keyEntry, tokenStore);
-      const destinations = await fetchSubaccountDestinations(keyEntry, accessToken);
+      const tokenResult = await resolveToken(sa.region, orgId, orgName, keyStore, tokenStore, cfLoginFailed, planGuids, location);
+      if ('error' in tokenResult) {
+        issues.push(`${location}${issueRef()}: ${tokenResult.error}`);
+        continue;
+      }
 
+      const destinations = await fetchSubaccountDestinations(tokenResult.credential, tokenResult.accessToken);
       const destDir = join(LOCAL_DEST_DIR, sa.region, sa.subdomain);
       await mkdir(destDir, { recursive: true });
 
-      // Track names returned by API
       const apiNames = new Set<string>();
       for (const dest of destinations) {
         const d    = dest as Record<string, unknown>;
         const name = String(d['Name'] ?? d['name'] ?? '');
         if (!name) continue;
         apiNames.add(name);
-        await persistDestination(destDir, name, d);
+        const result = await persistDestination(destDir, name, d, username);
+        if (result === 'created') created++;
+        else if (result === 'updated') updated++;
       }
+      received += apiNames.size;
 
-      // Rename local files not in API response to .deleted.json
+      // Rename destinations absent from API response to .deleted.json
       const entries = await readdir(destDir).catch(() => [] as string[]);
       for (const fname of entries) {
         if (!fname.endsWith('.json') || fname.endsWith('.deleted.json')) continue;
-        const destName = fname.slice(0, -5);
-        if (!apiNames.has(destName)) {
-          await rename(join(destDir, fname), join(destDir, `${destName}.deleted.json`));
-          logger.info({ org: orgId, destination: destName }, 'Destination marked as deleted');
-        }
+        const destName     = fname.slice(0, -5);
+        if (apiNames.has(destName)) continue;
+        const changelogPath = join(destDir, `${destName}.changelog.md`);
+        const dateStr       = new Date().toISOString().replace('T', ' ').slice(0, 19) + ' UTC';
+        const entry         = `## Deleted by refresh at ${dateStr}\n\n`;
+        const prev          = existsSync(changelogPath) ? await readFile(changelogPath, 'utf-8') : '';
+        await writeFile(changelogPath, entry + prev, 'utf-8');
+        await rename(join(destDir, fname), join(destDir, `${destName}.deleted.json`));
+        logger.info({ location, destination: destName }, `${location}/${destName} is deleted`);
+        deleted++;
       }
 
-      logger.info({ org: orgId, region: sa.region, count: apiNames.size }, 'Destinations refreshed');
-      totalReceived += apiNames.size;
+      logger.info({ location, count: apiNames.size }, `Destinations refreshed for ${location}`);
       refreshed++;
     } catch (err) {
-      const msg = `Destination refresh failed for ${orgId}: ${String(err)}`;
-      logger.error({ org: orgId, err }, msg);
-      errors.push(msg);
+      const msg = String(err);
+      logger.error({ location, err }, `Destination refresh failed for ${location}: ${msg}`);
+      issues.push(`${location}${issueRef()}: ${msg}`);
     }
   }
+
+  await saveKeyStore(keyStore, planGuids);
   await saveTokenStore(tokenStore);
 
-  emitImmediate('refresh-destinations', { type: 'done', refreshed, total, received: totalReceived, errors });
+  emitImmediate('refresh-destinations', {
+    type: 'done',
+    refreshed,
+    total,
+    received,
+    created,
+    updated,
+    deleted,
+    issues,
+  });
 
-  if (refreshed > 0) {
+  if (refreshed > 0 || deleted > 0) {
     notifyCallbacks();
     emit('dest', { ts: Date.now() });
   }
 
-  return { refreshed, errors };
+  return { refreshed, received, created, updated, deleted, errors: issues };
 }
+
+// ─── Public: search ───────────────────────────────────────────────────────────
 
 export interface DestSearchResult {
   region:     string;
@@ -333,19 +614,14 @@ export interface DestSearchResult {
   matchValue: string;
 }
 
-export async function searchDestinations(
-  query: string,
-  scopeRegion?: string,
-  scopeSubdomain?: string,
-): Promise<DestSearchResult[]> {
+export async function searchDestinations(query: string, scopeRegion?: string, scopeSubdomain?: string): Promise<DestSearchResult[]> {
   if (!query) return [];
   const lq = query.toLowerCase();
   const results: DestSearchResult[] = [];
-
   if (!existsSync(LOCAL_DEST_DIR)) return results;
 
-  const allSas = await readSubaccounts();
-  const orgIndex = new Map<string, string>(); // "region/subdomain" → org_id (CF org GUID)
+  const allSas   = await readSubaccounts();
+  const orgIndex = new Map<string, string>();
   for (const sa of allSas) {
     if (sa.manageDestinations && sa.org?.orgId) orgIndex.set(`${sa.region}/${sa.subdomain}`, sa.org.orgId);
   }
@@ -366,8 +642,7 @@ export async function searchDestinations(
         if (!file.endsWith('.json') || file.endsWith('.deleted.json')) continue;
         const name = file.slice(0, -5);
         try {
-          const raw = await readFile(join(subDir, file), 'utf-8');
-          const obj = JSON.parse(raw) as Record<string, unknown>;
+          const obj = JSON.parse(await readFile(join(subDir, file), 'utf-8')) as Record<string, unknown>;
           if (name.toLowerCase().includes(lq)) {
             results.push({ region, subdomain, org_id, name, matchField: 'Name', matchValue: name });
             continue;
@@ -379,14 +654,14 @@ export async function searchDestinations(
               break;
             }
           }
-        } catch { /* skip unreadable file */ }
+        } catch { /* skip unreadable */ }
       }
     }
   }
   return results;
 }
 
-// ─── Single-destination CRUD ──────────────────────────────────────────────────
+// ─── Public: single-destination CRUD ─────────────────────────────────────────
 
 const REDACTED_SENTINEL = '***';
 
@@ -414,7 +689,7 @@ export async function getDestination(region: string, subdomain: string, name: st
   const { jsonPath } = guardDestPath(region, subdomain, name);
   try {
     const data = JSON.parse(await readFile(jsonPath, 'utf-8')) as Record<string, unknown>;
-    return { data, sensitiveFields: Object.keys(data).filter(k => isSensitiveField(k)) };
+    return { data, sensitiveFields: Object.keys(data).filter(isSensitiveField) };
   } catch { return null; }
 }
 
@@ -425,9 +700,9 @@ export async function exportDestination(region: string, subdomain: string, name:
 }
 
 export async function saveDestinationEntry(
-  region: string,
+  region:   string,
   subdomain: string,
-  name: string,
+  name:     string,
   incoming: Record<string, unknown>,
   username: string,
 ): Promise<void> {
@@ -436,22 +711,19 @@ export async function saveDestinationEntry(
   let existing: Record<string, unknown> = {};
   try { existing = JSON.parse(await readFile(jsonPath, 'utf-8')) as Record<string, unknown>; } catch { /* new */ }
 
-  // Restore original sensitive values when the client sent the redacted sentinel unchanged
+  // Restore original sensitive values when the client sent the redacted sentinel
   const merged: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(incoming)) {
     merged[k] = (v === REDACTED_SENTINEL && isSensitiveField(k) && k in existing) ? existing[k] : v;
   }
 
-  // Compute diff
   const diffLines: string[] = [];
   const allKeys = [...new Set([...Object.keys(existing), ...Object.keys(merged)])].sort();
   for (const k of allKeys) {
     const pv = JSON.stringify(existing[k] ?? null);
     const nv = JSON.stringify(merged[k] ?? null);
     if (pv === nv) continue;
-    diffLines.push(isSensitiveField(k)
-      ? `- ${k}: [redacted] → [redacted]`
-      : `- ${k}: ${pv} → ${nv}`);
+    diffLines.push(isSensitiveField(k) ? `- ${k}: [redacted] → [redacted]` : `- ${k}: ${pv} → ${nv}`);
   }
 
   if (diffLines.length > 0) {
@@ -476,9 +748,8 @@ export async function getDestinationChangelog(region: string, subdomain: string,
 export async function listDestinations(): Promise<Record<string, Array<{ name: string; status: 'OK' }>>> {
   const result: Record<string, Array<{ name: string; status: 'OK' }>> = {};
 
-  // Build a lookup: region/subdomain → org_id (CF org GUID) from subaccounts.json
-  const allSas = await readSubaccounts();
-  const orgIndex = new Map<string, string>(); // "region/subdomain" → org_id (CF org GUID)
+  const allSas   = await readSubaccounts();
+  const orgIndex = new Map<string, string>();
   for (const sa of allSas) {
     if (sa.manageDestinations && sa.org?.orgId) orgIndex.set(`${sa.region}/${sa.subdomain}`, sa.org.orgId);
   }
@@ -487,14 +758,13 @@ export async function listDestinations(): Promise<Record<string, Array<{ name: s
 
   const regions = await readdir(LOCAL_DEST_DIR).catch(() => [] as string[]);
   for (const region of regions) {
-    const regionDir = join(LOCAL_DEST_DIR, region);
+    const regionDir  = join(LOCAL_DEST_DIR, region);
     const subdomains = await readdir(regionDir).catch(() => [] as string[]);
     for (const subdomain of subdomains) {
       const org_id = orgIndex.get(`${region}/${subdomain}`);
       if (!org_id) continue;
-      const subDir  = join(regionDir, subdomain);
-      const files   = await readdir(subDir).catch(() => [] as string[]);
-      const dests   = files
+      const files = await readdir(join(regionDir, subdomain)).catch(() => [] as string[]);
+      const dests = files
         .filter(f => f.endsWith('.json') && !f.endsWith('.deleted.json'))
         .map(f => ({ name: f.slice(0, -5), status: 'OK' as const }));
       if (dests.length > 0) result[org_id] = dests;

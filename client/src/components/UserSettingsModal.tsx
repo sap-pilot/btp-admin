@@ -28,52 +28,36 @@ export default function UserSettingsModal({ open, onClose, initialSection = 'the
     if (open) setActiveSection(initialSection);
   }, [open, initialSection]);
 
+  const tabCls = (id: Section) =>
+    `px-4 py-2 text-sm transition-colors border-b-2 shrink-0 ${
+      activeSection === id
+        ? 'border-primary text-foreground font-medium'
+        : 'border-transparent text-muted-foreground hover:text-foreground'
+    }`;
+
   return (
     <Dialog open={open} onOpenChange={o => { if (!o) onClose(); }}>
       <DialogContent className="max-w-3xl w-full p-0 gap-0 overflow-hidden flex flex-col h-[58vh] max-h-[58vh]">
         <DialogTitle className="sr-only">User Settings</DialogTitle>
-        <div className="flex flex-1 min-h-0">
 
-          {/* Left nav */}
-          <div className="w-44 shrink-0 border-r border-border flex flex-col bg-muted/20">
-            <div className="h-[44px] px-4 flex items-center border-b border-border shrink-0">
-              <span className="text-sm font-semibold">User Settings</span>
-            </div>
-            <nav className="flex-1 overflow-y-auto py-1">
-              {SECTIONS.map(s => (
-                <button
-                  key={s.id}
-                  onClick={() => setActiveSection(s.id)}
-                  className={`w-full text-left px-4 py-2 text-sm transition-colors rounded-none ${
-                    activeSection === s.id
-                      ? 'bg-accent text-accent-foreground font-medium'
-                      : 'text-muted-foreground hover:bg-accent/50 hover:text-foreground'
-                  }`}
-                >
-                  {s.label}
-                </button>
-              ))}
-            </nav>
-          </div>
-
-          {/* Right content */}
-          <div className="flex-1 flex flex-col min-w-0 min-h-0">
-            {/* Title row — same height as left header, pr-10 keeps text clear of the X close button */}
-            <div className="h-[44px] px-6 pr-10 flex items-center gap-3 border-b border-border shrink-0">
-              <span className="text-sm font-medium">
-                {SECTIONS.find(s => s.id === activeSection)?.label}
-              </span>
-              {activeSection === 'themes' && (
-                <span className="text-xs text-muted-foreground">Changes apply immediately</span>
-              )}
-            </div>
-            <div className="flex-1 overflow-y-auto">
-              {activeSection === 'account' && <AccountSection />}
-              {activeSection === 'themes'  && <ThemesSection  />}
-            </div>
-          </div>
-
+        {/* Tab bar — pr-10 keeps tabs clear of the X close button */}
+        <div className="flex items-center border-b border-border shrink-0 px-2 pr-10">
+          {SECTIONS.map(s => (
+            <button key={s.id} className={tabCls(s.id)} onClick={() => setActiveSection(s.id)}>
+              {s.label}
+            </button>
+          ))}
+          {activeSection === 'themes' && (
+            <span className="ml-2 text-xs text-muted-foreground">Changes apply immediately</span>
+          )}
         </div>
+
+        {/* Content */}
+        <div className="flex-1 overflow-y-auto min-h-0">
+          {activeSection === 'account' && <AccountSection />}
+          {activeSection === 'themes'  && <ThemesSection  />}
+        </div>
+
       </DialogContent>
     </Dialog>
   );

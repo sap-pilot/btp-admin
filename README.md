@@ -68,7 +68,7 @@ Azure Traffic Manager polls these health endpoints from multiple PoPs. When all 
 
 12. **Modern, fast React UI** — built with shadcn/ui + Tailwind CSS; initial JS bundle ~55 kB gzip (lazy-loaded pages, Mermaid deferred); mobile-responsive with hamburger menu; shared date range picker with localStorage persistence across pages
 
-12. **Destination Overview** — a cross-subaccount matrix view of SAP BTP Destination service configurations at `/destinations`; tabs and group IDs are read from `{LOCAL_STORE_DIR}/config/tabs.json`; only subaccounts with `manageDestinations=true` in `subaccounts.json` appear as columns; a **Refresh** button discovers the Destination service instance and key for each subaccount's CF org via the CF v3 API (saved to `~/.ba/destination-keys.json`), acquires an OAuth2 `client_credentials` token for the Destination service (saved to `~/.ba/destination-tokens.json`), and downloads all subaccount destinations to `{LOCAL_STORE_DIR}/dest/{region}/{subdomain}/{name}.json`; changed destinations produce a field-level diff in `{name}.changelog.md`; destinations absent from the latest API response are renamed to `{name}.deleted.json`; the grid categorises destinations as **Generic** (`API_[S4|MDG]_[HTTP|RFC]_*`), **Specific S/4** (other `API_*`), **Workzone** (`cep-*-runtime`), and **OTHERS**; clicking any destination cell, subaccount header, OTHERS button, or search result opens a **Subaccount Destinations modal**; left panel supports Ctrl/Shift+click multi-selection; Properties tab toolbar has **Create** (new destination from scratch), **Import** (single or array JSON), **Export** (single file or bulk `multi_destinations.json` for N selected), **Reset**, and **Save Destination** above the editable table; sensitive fields (password/secret/credential) are transmitted as plaintext and masked by default with a lock icon and eye-reveal toggle; the server returns a `sensitiveFields` array alongside raw data to drive the client UI; server-side diff/changelog on every save, import, or create; Change History tab renders the raw changelog; Test Destination tab has request headers + body editor and a ~50% response panel with mock status, headers, and body (Send disabled)
+12. **Destination Overview** — a cross-subaccount matrix view of SAP BTP Destination service configurations at `/destinations`; tabs and group IDs are read from `{LOCAL_STORE_DIR}/conf/tabs.json`; only subaccounts with `manageDestinations=true` in `subaccounts.json` appear as columns; a **Refresh** button fetches destinations from the Destination service API for each qualifying subaccount — credentials are discovered via CF v3 API by service plan guid — the 10 oldest destination service instances are fetched (`order_by=created_at`; older instances are more stable and less likely to be redeployed) and their credential bindings batch-fetched oldest-first; auth fields are resolved from `credentials` or `credentials.uaa` in the binding details — and cached in `~/.ba/destination-keys.json`; tokens are resolved via a four-stage chain: (1) valid cached token, (2) `refresh_token` grant, (3) `client_credentials` with stored key (if rejected, the key is automatically re-discovered before returning an error), (4) full CF API discovery for first use — and cached in `~/.ba/destination-tokens.json`; downloads written to `{LOCAL_STORE_DIR}/dest/{region}/{subdomain}/{name}.json`; changed destinations produce a field-level diff in `{name}.changelog.md`; destinations absent from the latest API response are renamed to `{name}.deleted.json`; the grid categorises destinations as **Generic** (`API_[S4|MDG]_[HTTP|RFC]_*`), **Specific S/4** (other `API_*`), **Workzone** (`cep-*-runtime`), and **OTHERS**; clicking any destination cell, subaccount header, OTHERS button, or search result opens a **Subaccount Destinations modal**; left panel supports Ctrl/Shift+click multi-selection; Properties tab toolbar has **Create** (new destination from scratch), **Import** (single or array JSON), **Export** (single file or bulk `multi_destinations.json` for N selected), **Reset**, and **Save Destination** above the editable table; sensitive fields (password/secret/credential) are transmitted as plaintext and masked by default with a lock icon and eye-reveal toggle; the server returns a `sensitiveFields` array alongside raw data to drive the client UI; server-side diff/changelog on every save, import, or create; Change History tab renders the raw changelog; Test Destination tab has request headers + body editor and a ~50% response panel with mock status, headers, and body (Send disabled)
 
 13. **Minimal server dependencies** — production runtime requires only Express (HTTP), Pino (logging), and Playwright (browser checks); all HTTP requests, crypto, gzip compression, and ZIP packaging use native Node.js APIs — no axios, no ORM, no utility libraries
 
@@ -786,3 +786,32 @@ npm run logs-recent   # print recent logs from btp-admin
 ```
 
 > Use `npm run logs-idle` when a blue-green deploy is in progress to monitor the new "green" instance before traffic is switched to it.
+
+## Debugging / Troubleshooting
+
+### Capturing outgoing HTTP/HTTPS calls with mitmproxy
+
+The Express server makes outbound calls to the CF v3 API, destination service OAuth endpoints, and the SAP BTP Destination API. To inspect these in [mitmproxy](https://mitmproxy.org/):
+
+**Why `HTTPS_PROXY` alone doesn't work**: Node.js's native `fetch` (backed by undici) intentionally ignores the `HTTP_PROXY` / `HTTPS_PROXY` environment variables. You need to explicitly set undici's global dispatcher, and trust the mitmproxy CA cert.
+
+**One-time setup**: start mitmproxy once (`mitmweb` or `mitmproxy`) to generate its CA certificate at `~/.mitmproxy/mitmproxy-ca-cert.pem`.
+
+**Run `npm run dev` with all traffic routed through mitmproxy:**
+
+```bash
+export HTTPS_PROXY=http://127.0.0.1:9000
+export NODE_EXTRA_CA_CERTS="$HOME/.mitmproxy/mitmproxy-ca-cert.pem"
+export NODE_OPTIONS="--require $(pwd)/scripts/dev-proxy.cjs"
+npm run dev
+```
+
+| Variable | Purpose |
+|----------|---------|
+| `HTTPS_PROXY` | Proxy address read by `scripts/dev-proxy.cjs` |
+| `NODE_EXTRA_CA_CERTS` | Adds the mitmproxy CA to Node's trusted CA list so TLS handshakes succeed |
+| `NODE_OPTIONS=--require` | Loads `scripts/dev-proxy.cjs` before the app starts, patching undici's global dispatcher |
+
+`scripts/dev-proxy.cjs` uses `undici` (a devDependency — already in the project) t
+o set a `ProxyAgent` as the global fetch dispatcher. Only the Express server proce
+ss is intercepted — the Vite dev server does not make outbound API calls.

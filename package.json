@@ -26,7 +26,9 @@
     "logs-idle": "cf logs btp-admin-idle | grep --line-buffered -v -E '\\[RTR|\\[API|\\[CELL|\\[PROXY|\\[STG' | node scripts/format-logs.mjs",
     "logs-recent": "cf logs btp-admin --recent | grep --line-buffered -v -E '\\[RTR|\\[API|\\[CELL|\\[PROXY|\\[STG' | node scripts/format-logs.mjs"
   },
-  "devDependencies": {},
+  "devDependencies": {
+    "undici": "^8.9.0"
+  },
   "overrides": {
     "react": "^19.2.8",
     "react-dom": "^19.2.8"

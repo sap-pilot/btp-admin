@@ -487,7 +487,7 @@ export default function ConfigPage() {
           Settings
         </button>
         <button className={tabCls('changelog')} onClick={() => { if (changelog === null) fetchChangelog(); goTab('changelog'); }}>
-          Change Log
+          History
         </button>
       </div>
 
