@@ -19,8 +19,7 @@ export async function runHousekeeping(): Promise<void> {
   let starred = 0;
   let errors = 0;
 
-  // Housekeeping is scoped strictly to {LOCAL_STORE_DIR}/resp/ — root files
-  // (homepage.json, etc.) stored directly in LOCAL_STORE_DIR are never touched.
+  // Housekeeping is scoped strictly to {LOCAL_STORE_DIR}/resp/.
   const respBase = join(config.LOCAL_STORE_DIR, 'resp');
 
   try {

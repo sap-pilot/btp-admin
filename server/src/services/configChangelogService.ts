@@ -5,7 +5,7 @@ import { logger } from '../logger.js';
 import { notifyCallbacks } from './syncService.js';
 import { emit } from './liveEvents.js';
 
-const CONFIG_DIR     = join(config.LOCAL_STORE_DIR, 'config');
+const CONFIG_DIR     = join(config.LOCAL_STORE_DIR, 'conf');
 const CHANGELOG_PATH = join(CONFIG_DIR, 'changelog.md');
 
 export async function readConfigChangelog(): Promise<string> {
@@ -37,7 +37,7 @@ export async function appendConfigChangelog(
   await writeFile(CHANGELOG_PATH, entry + existing, 'utf-8');
   notifyCallbacks();
   const ts = Date.now();
-  emit('root',   { files: ['config/changelog.md'], ts });
+  emit('root',   { files: ['conf/changelog.md'], ts });
   emit('config', { files: ['changelog.md'], ts });
   logger.info({ action, user, filename }, 'config changelog updated');
 }

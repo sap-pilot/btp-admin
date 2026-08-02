@@ -47,6 +47,20 @@
   - `'config'`: emitted by `writeSubaccounts`, `writeTabs`, and `importConfig` when an admin saves locally, and by `executeSync` when any `config/` file is downloaded from a remote producer; the Config page subscribes via `GET /api/events?config=1` (which also subscribes to `refresh-subaccounts` for progress events) and re-fetches subaccounts and/or tabs automatically on `update` — skipped for whichever dataset has unsaved edits or an in-flight save/refresh/import
   - `'dest'`: emitted by `saveDestinationEntry` and `refreshDestinations` (on success) when destinations change locally, and by `executeSync` when any `dest/` file is downloaded from a remote; the Destination Overview page subscribes via `GET /api/events?dest=1` and re-fetches `/api/destinations` on `update` so the overview grid and the modal's destination list stay current without a manual page reload
 
+### Fixed
+- **Subaccounts not imported from exported config** — `POST /api/config/import` now unwraps the `{ subaccounts, globalAccounts }` object shape produced by `exportConfig()`; previously `importSubaccounts` was called with the raw object instead of the inner array, so subaccounts were silently skipped on import
+- **`changelog.md` not synced** — `readConfigFile` regex was restricted to `.json`; extended to `\.(json|md)` so `changelog.md` is served correctly by `GET /api/download?path=conf/changelog.md` and `POST /api/batch-download`
+- **`dest/` files not downloadable by sync consumer** — `GET /api/download` and `POST /api/batch-download` were routing `dest/…` paths through `readRawResponseFile`, which prepends `resp/`; a dedicated `readDestFile(relPath)` now reads directly from `localStore/dest/{relPath}` and both endpoints dispatch to it for the `dest` folder prefix
+- **`GET /api/download` rejected multi-segment paths** — the old `parts.length !== 2` guard rejected valid paths such as `dest/us10/my-sub/file.json`; replaced with a first-slash split (`folder = rawPath.slice(0, slash)`, `rest = rawPath.slice(slash + 1)`) that handles any depth under `dest/`
+
+### Changed
+- **`localStore/conf/` — config folder renamed from `localStore/config/`** — all services (`settingsService`, `subaccountsService`, `tabsService`, `configChangelogService`, `lastUpdatedService`, `localStoreService`) and `syncService` now read/write the `conf/` subdirectory; `GET /api/browse` returns folder key `"conf"` instead of `"config"`; sync consumers write received config files to `localStore/conf/`; the SSE topic name `'config'` is unchanged (it is a notification channel, not a path)
+- **Authorization on `/api/browse`, `/api/batch-download`, `/api/download`** — when a valid XSUAA session is present (`authSession` attached by middleware): non-admin users receive `403 Admin role required` on `/api/browse` and `/api/batch-download` (which expose `conf/` and `dest/`); on `/api/download`, non-admin users may only download files under the `resp/` folder — root files, `conf/`, and `dest/` all return `403`; peer HMAC requests (no `authSession`) and open deployments retain full access
+- **`requireSyncAuth` rewrite** — middleware now enforces the following priority: (1) loopback → always allow; (2) SYNC_KEY + valid HMAC → `next()` with no `authSession` attached; (3) XSUAA configured + valid session → attach `authSession`, `next()`; (4) XSUAA configured + no session → `401`; (5) no XSUAA + no SYNC_KEY → open deployment, allow; (6) SYNC_KEY present + invalid/missing HMAC → `401`; previously the middleware did not integrate XSUAA session checking, leaving browser users without a role-aware auth path on these endpoints
+
+### Removed
+- **`homepage.json` and `/api/homepage` route** — `server/src/routes/homepage.ts` and `server/src/services/home/homepageEditService.ts` deleted; `app.use('/api/homepage', homepageRouter)` removed from `index.ts`; `sample/homepage.json` deleted; SSE `homepage` topic removed from `syncService`; `.gitignore` entry for `server/homepage*.json` removed; the Home page is fully driven by `tabs.json`, `subaccounts.json`, `settings.json`, and `cockpit-menu.json` — no `homepage.json` dependency remains
+
 ## [v1.1.0] - 2026-07-28
 
 ### Added

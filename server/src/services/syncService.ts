@@ -274,7 +274,7 @@ async function downloadOne(
   const slash = filePath.indexOf('/');
   let target: string;
   if (slash === -1) {
-    // Root-level file (e.g. homepage.json)
+    // Root-level file
     target = resolvePath(config.LOCAL_STORE_DIR, filePath);
     if (!target.startsWith(safeBase + '/')) {
       logger.warn({ path: filePath }, 'Skipping root file: path traversal detected');
@@ -284,13 +284,13 @@ async function downloadOne(
   } else {
     const folder = filePath.slice(0, slash);
     const filename = filePath.slice(slash + 1);
-    if (folder === 'config') {
-      target = resolvePath(config.LOCAL_STORE_DIR, 'config', filename);
+    if (folder === 'conf') {
+      target = resolvePath(config.LOCAL_STORE_DIR, 'conf', filename);
       if (!target.startsWith(safeBase + '/')) {
-        logger.warn({ path: filePath }, 'Skipping config file: path traversal detected');
+        logger.warn({ path: filePath }, 'Skipping conf file: path traversal detected');
         return { transferred: 0, decompressed: 0 };
       }
-      await mkdir(join(config.LOCAL_STORE_DIR, 'config'), { recursive: true });
+      await mkdir(join(config.LOCAL_STORE_DIR, 'conf'), { recursive: true });
     } else if (folder === 'dest') {
       target = resolvePath(config.LOCAL_STORE_DIR, 'dest', filename);
       if (!target.startsWith(safeBase + '/')) {
@@ -335,7 +335,7 @@ async function downloadBatch(
       const slash = name.indexOf('/');
       let target: string;
       if (slash === -1) {
-        // Root-level file (e.g. homepage.json)
+        // Root-level file
         target = resolvePath(config.LOCAL_STORE_DIR, name);
         if (!target.startsWith(safeBase + '/')) {
           logger.warn({ name }, 'Skipping ZIP root entry: path traversal detected');
@@ -346,13 +346,13 @@ async function downloadBatch(
         const folder = name.slice(0, slash);
         const filename = name.slice(slash + 1);
         if (!folder || !filename) return;
-        if (folder === 'config') {
-          target = resolvePath(config.LOCAL_STORE_DIR, 'config', filename);
+        if (folder === 'conf') {
+          target = resolvePath(config.LOCAL_STORE_DIR, 'conf', filename);
           if (!target.startsWith(safeBase + '/')) {
-            logger.warn({ name }, 'Skipping ZIP config entry: path traversal detected');
+            logger.warn({ name }, 'Skipping ZIP conf entry: path traversal detected');
             return;
           }
-          await mkdir(join(config.LOCAL_STORE_DIR, 'config'), { recursive: true });
+          await mkdir(join(config.LOCAL_STORE_DIR, 'conf'), { recursive: true });
         } else if (folder === 'dest') {
           target = resolvePath(config.LOCAL_STORE_DIR, 'dest', filename);
           if (!target.startsWith(safeBase + '/')) {
@@ -547,14 +547,10 @@ async function executeSync(
       const svcName = folderToService[folder];
       if (svcName) emit(`service:${svcName}`, { service: svcName, ts });
     }
-    if (updatedRootFiles.some(f => f.startsWith('homepage'))) {
-      emit('homepage', { ts });
+    if (updatedRootFiles.length > 0) {
+      emit('root', { files: updatedRootFiles, ts });
     }
-    const otherRootFiles = updatedRootFiles.filter(f => !f.startsWith('homepage'));
-    if (otherRootFiles.length > 0) {
-      emit('root', { files: otherRootFiles, ts });
-    }
-    if (updatedFolders.has('config')) {
+    if (updatedFolders.has('conf')) {
       emit('config', { ts });
       void refreshLastUpdated(); // re-read file mtimes set by utimes() during sync
     }

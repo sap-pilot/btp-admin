@@ -4,9 +4,9 @@ A lightweight, file-backed admin dashboard and status monitor for SAP BTP. Provi
 
 ## Home Page for BTP Services
 
-A configurable navigation hub at `/home` driven by a `homepage.json` descriptor. Organise your BTP global accounts into tabs, directories, and subaccounts. Each subaccount column renders service links resolved from named URL templates — Cockpit, Launchpad, BAS, Integration Suite, HANA Cloud, and more. A **Cockpit** row provides deep dropdown navigation with per-space sub-menus. Sidebar `menus` groups expose curated links (documentation, portals, tools) with optional `restricted` filtering for unauthenticated users.
+A configurable navigation hub at `/home`. Organise your BTP global accounts into tabs and subaccount groups; each subaccount column renders service links resolved from named URL templates — Cockpit, Launchpad, BAS, Integration Suite, HANA Cloud, and more. A **Cockpit** row provides deep dropdown navigation with per-space sub-menus. Sidebar `menus` groups expose curated links (documentation, portals, tools) with optional `public` filtering for unauthenticated users.
 
-An **Edit** button in the topbar (visible to logged-in users, enabled for admins only) opens an in-app JSON editor with live preview and change history — edits are saved and immediately applied without a restart.
+Tab structure is driven by `tabs.json`, subaccount columns by `subaccounts.json`, cockpit menu by `cockpit-menu.json`, and main subscription rows + sidebar menus by `settings.json`. All are managed via the **Config** page (`/config`) without a restart.
 
 ![BTP Admin Homepage](doc/img/btp-status-compare.png)
 
@@ -56,7 +56,7 @@ Azure Traffic Manager polls these health endpoints from multiple PoPs. When all 
 
 6. **Landscape diagram with live status** — tabbed Mermaid flowchart diagrams on the Overview page showing service topology; diagram nodes are coloured by live health status and are clickable links to the service detail page; nodes in `service.endpoint` format (e.g. `wz-us10.Workzone-Login`) show per-endpoint status and link directly to that endpoint's filtered view; compose diagrams at [mermaid.live](https://mermaid.live/); active tab is persisted in the URL hash for easy sharing
 
-7. **File-based storage — no database** — every check result is saved as a plain JSON file under `./localStore/resp/{service}/`; root files such as `homepage.json` are stored directly under `./localStore/`; BTP config files (`subaccounts.json`, `tabs.json`) are stored under `./localStore/config/`; no database, message broker, or external service required; XSUAA is optional and used only for authentication; the local store directory is the only persistent state
+7. **File-based storage — no database** — every check result is saved as a plain JSON file under `./localStore/resp/{service}/`; BTP config files (`subaccounts.json`, `tabs.json`, `settings.json`, `changelog.md`) are stored under `./localStore/conf/`; destination snapshots under `./localStore/dest/{region}/{subdomain}/`; no database, message broker, or external service required; XSUAA is optional and used only for authentication; the local store directory is the only persistent state
 
 8. **Full authentication enforcement** — when XSUAA is bound, every `/api/*` endpoint requires a valid session; unauthenticated browsers land on a minimal login gate (app title, site switcher, theme toggle, **Welcome, click here to login** button, and a report-an-issue link) rather than seeing any data; the site switcher is fully functional before login — backed by the always-public `GET /api/info` — so users can switch to another region if they lack access to the current one; exceptions: `/health` is always public (Azure Traffic Manager probes), `/api/me` and `/api/info` are always public, and HMAC-signed peer-sync requests bypass session auth so the two-instance sync continues to work regardless of user login state
 
@@ -89,11 +89,7 @@ npm install
 cp sample/config.json server/config.json
 # Edit server/config.json with your real service endpoints and credentials
 
-# 3. (Optional) Set up the homepage
-cp sample/homepage.json server/homepage.json
-# Edit server/homepage.json with your BTP global accounts and services
-
-# 4. Build client once, then start Express (serves UI + API on :3000)
+# 3. Build client once, then start Express (serves UI + API on :3000)
 npm run dev
 ```
 
@@ -122,142 +118,9 @@ Open http://localhost:3000/overview
 
 ## Configuration
 
-### Home Page Configuration
-
-The homepage is driven by a `homepage.json` file. Copy the provided sample as a starting point:
-
-```bash
-cp sample/homepage.json server/homepage.json
-```
-
-The file is also editable in-app via the **Edit** (pencil) button in the topbar (admin role required to save). At runtime, the server reads `{LOCAL_STORE_DIR}/homepage.json`; if that file does not exist it falls back to the path in the `HOMEPAGE_JSON` env var or `server/homepage.json`.
-
-#### Structure overview
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `tabs` | array | Tab definitions — each `{ title, dirs }` maps a tab label to a list of directory `short` codes shown under that tab |
-| `btp` | object | Main BTP account tree: `{ title, globalAccounts[] }` |
-| `btp.globalAccounts[].cockpitRegion` | string | Cockpit region prefix for URL construction (e.g. `"amer"`, `"emea"`) |
-| `btp.globalAccounts[].id` | string | Global account ID used in Cockpit deep-links |
-| `btp.globalAccounts[].directories[]` | array | Directories (or landscapes) under this global account |
-| `directories[].short` | string | Short code referenced in `tabs[].dirs` |
-| `directories[].region` | string | BTP region (e.g. `"us10"`) injected as `{region}` in template URLs |
-| `directories[].subaccounts[]` | array | Subaccounts rendered as columns |
-| `subaccounts[].subdomain` | string | Injected as `{subdomain}` in template URLs |
-| `subaccounts[].services` | object | Keys match `templates` names; values supply per-instance overrides and extra placeholders |
-| `subaccounts[].spaces[]` | array | CF space list for the Cockpit dropdown: `{ spaceId, spaceName, destInstanceId }` |
-| `subaccounts[].usage` | string | `"prod"` marks production subaccounts with a visual indicator |
-| `menus` | array | Sidebar link groups — each `{ title, restricted?, children[] }` where `children[].{ title, url, target, restricted? }` |
-| `templates` | object | Named URL patterns. Each entry: `{ name, url, fullName?, children? }` with `{placeholder}` substitution. `children` items support `repeatOn: "spaces"` or `repeatOn: "instances"` for dynamic dropdown expansion. |
-
-#### Sample `homepage.json`
-
-```json
-{
-  "tabs": [
-    { "title": "Core (US East)", "dirs": ["USE"] }
-  ],
-  "btp": {
-    "title": "BTP @ Your Company",
-    "globalAccounts": [
-      {
-        "name": "My Company",
-        "cockpitRegion": "amer",
-        "id": "CA000000TID000000000000000001",
-        "directories": [
-          {
-            "name": "Digital Core - US East",
-            "region": "us10",
-            "short": "USE",
-            "subaccounts": [
-              {
-                "id": "aaaaaaaa-0000-0000-0000-000000000001",
-                "name": "Production",
-                "orgId": "aaaaaaaa-0000-0000-0000-aaa000000001",
-                "subdomain": "mycompany-prod",
-                "services": {
-                  "launchpad": {
-                    "instances": [{ "alias": "core-prod", "name": "Core Production" }]
-                  },
-                  "hana": { "id": "aaaaaaaa-0000-0000-0000-hana000001" },
-                  "int": {}
-                },
-                "spaces": [
-                  {
-                    "spaceId": "aaaaaaaa-sp00-0000-0000-000000000001",
-                    "spaceName": "prod",
-                    "destInstanceId": "aaaaaaaa-0000-0000-0000-dest000001"
-                  }
-                ],
-                "usage": "prod"
-              }
-            ]
-          }
-        ]
-      }
-    ]
-  },
-  "menus": [
-    {
-      "title": "Resources",
-      "children": [
-        {
-          "title": "SAP BTP What's New",
-          "url": "https://help.sap.com/whats-new/cf0cb2cb149647329b5d02aa96303f56?locale=en-US",
-          "target": "_blank"
-        }
-      ]
-    }
-  ],
-  "templates": {
-    "cockpit": {
-      "name": "Cockpit",
-      "url": "https://{cockpitRegion}.cockpit.btp.cloud.sap/cockpit/#/globalaccount/{globalAccountId}/subaccount/{subaccountId}/subaccountoverview",
-      "children": [
-        {
-          "name": "Instances & Subscriptions",
-          "url": "https://{cockpitRegion}.cockpit.btp.cloud.sap/cockpit/#/globalaccount/{globalAccountId}/subaccount/{subaccountId}/service-instances"
-        },
-        {
-          "name": "{spaceName}",
-          "repeatOn": "spaces",
-          "url": "https://{cockpitRegion}.cockpit.btp.cloud.sap/cockpit/#/globalaccount/{globalAccountId}/subaccount/{subaccountId}/org/{orgId}/space/{spaceId}/applications"
-        }
-      ]
-    },
-    "launchpad": {
-      "name": "Launchpad",
-      "url": "https://{subdomain}.dt.launchpad.cfapps.{region}.hana.ondemand.com/sites",
-      "children": [
-        {
-          "name": "{launchpad-name}",
-          "repeatOn": "instances",
-          "url": "https://{subdomain}.launchpad.cfapps.{region}.hana.ondemand.com/site/{launchpad-alias}"
-        }
-      ]
-    },
-    "hana": {
-      "fullName": "HANA Cloud Central",
-      "name": "HANA Cloud",
-      "url": "https://{subdomain}.hana-tooling.ingress.orchestration.prod-{region}.hanacloud.ondemand.com/hcs/sap/hana/cloud/index.html"
-    },
-    "int": {
-      "name": "Integration",
-      "url": "https://{subdomain}.integrationsuite.cfapps.{region}.hana.ondemand.com/shell/home",
-      "children": [
-        { "name": "API Portal", "url": "https://{subdomain}.apiportal.cfapps.{region}.hana.ondemand.com/" }
-      ]
-    }
-  }
-}
-```
-
-See `sample/homepage.json` for a full example covering multiple global accounts, directories, and all supported service templates.
-
 ### settings.json — Cockpit, Subscriptions, and Sidebar Menus
 
-`{LOCAL_STORE_DIR}/config/settings.json` (falls back to `server/config/default-settings.json`). Managed via **Config → Settings**.
+`{LOCAL_STORE_DIR}/conf/settings.json` (falls back to `server/config/default-settings.json`). Managed via **Config → Settings**.
 
 ```json
 {
@@ -717,7 +580,7 @@ The server uses [pino](https://getpino.io) with colorized pretty-print output.
 | `PORT` | `3000` | HTTP listen port (Cloud Foundry sets this automatically) |
 | `CONFIG_JSON` | — | Full config as a JSON string; takes priority over `CONFIG_FILE` (ideal for BTP env properties) |
 | `CONFIG_FILE` | `./config.json` | Path to config JSON file (relative to `server/` working dir; resolved as `server/config.json` from repo root) |
-| `LOCAL_STORE_DIR` | `./localStore` | Root directory for local file storage; response files go under `resp/{service}/`; root files (homepage.json, etc.) go directly in this directory |
+| `LOCAL_STORE_DIR` | `./localStore` | Root directory for local file storage; response files go under `resp/{service}/`; config files (`subaccounts.json`, `tabs.json`, `settings.json`, `changelog.md`) go under `conf/`; destination snapshots under `dest/{region}/{subdomain}/` |
 | `SYNC_REMOTE` | — | Base URL of the producer BTP Status instance (e.g. `https://btp-status-prod.cfapps.eu10.hana.ondemand.com`). On startup the consumer downloads all existing files and registers itself as a webhook consumer. Subsequent updates arrive via push (`/api/download-trigger`). |
 | `SELF_URL` | auto | Base URL of this (consumer) instance used when registering the `/api/download-trigger` webhook with the producer. Auto-detected from `VCAP_APPLICATION.application_uris[0]` in Cloud Foundry. Set explicitly if auto-detection is unavailable (e.g. local development). |
 | `SYNC_REMOTE_BATCH_SIZE` | `200` | Number of files requested per `POST /api/batch-download` call during sync. The sync job tries the batch endpoint first; if the remote does not support it, it falls back to individual `GET /api/download` requests with concurrency 10. |

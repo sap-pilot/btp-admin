@@ -13,7 +13,7 @@ import {
 } from './btpCliService.js';
 import { appendConfigChangelog } from './configChangelogService.js';
 
-const CONFIG_DIR        = join(config.LOCAL_STORE_DIR, 'config');
+const CONFIG_DIR        = join(config.LOCAL_STORE_DIR, 'conf');
 const SUBACCOUNTS_PATH  = join(CONFIG_DIR, 'subaccounts.json');
 
 export interface SpaceEntry {
@@ -77,7 +77,7 @@ async function writeSubaccounts(subaccounts: SubaccountEntry[], globalAccounts?:
   touchLastUpdated();
   notifyCallbacks();
   const ts = Date.now();
-  emit('root',   { files: ['config/subaccounts.json'], ts });
+  emit('root',   { files: ['conf/subaccounts.json'], ts });
   emit('config', { files: ['subaccounts.json'], ts });
   logger.info({ subaccounts: subaccounts.length, globalAccounts: gas.length }, 'subaccounts.json saved');
 }

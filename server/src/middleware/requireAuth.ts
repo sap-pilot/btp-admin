@@ -26,49 +26,61 @@ export function requireAuth(req: Request, res: Response, next: NextFunction): vo
 }
 
 /**
- * Guards sync endpoints when a sync key is configured.
- * Allows the request if:
- *   - No sync key is configured (open access)
- *   - The request originates from loopback (127.0.0.1 / ::1) — local dev
- *   - The request carries valid HMAC-signed headers (x-sync-ts + x-sync-sig) within a 1-minute window
- *   - The request carries a valid XSUAA session cookie
- * Otherwise responds 401.
+ * Guards /api/browse, /api/batch-download, and /api/download.
+ * Allows the request when ANY of the following is true:
+ *   - Loopback origin (127.0.0.1 / ::1) — local dev
+ *   - Valid HMAC-signed headers (x-sync-ts + x-sync-sig) within a ±1-minute window
+ *     (peer-sync; attaches no authSession — route handler treats absence as full access)
+ *   - Valid XSUAA session cookie (attaches authSession; route handler enforces role)
+ * When neither SYNC_KEY nor XSUAA is configured the request passes through (open deployment).
+ * When XSUAA is configured but there is no SYNC_KEY, XSUAA authentication is still required.
  */
 export function requireSyncAuth(req: Request, res: Response, next: NextFunction): void {
   const syncKey = getSyncKey();
-  if (!syncKey) { next(); return; }
+  const xsuaa   = getXsuaaConfig();
+
+  // Loopback: always allow for local dev
   const ip = req.ip ?? req.socket.remoteAddress ?? '';
   if (ip === '127.0.0.1' || ip === '::1' || ip === '::ffff:127.0.0.1') { next(); return; }
-  const ts = req.headers['x-sync-ts'];
-  const sig = req.headers['x-sync-sig'];
-  if (typeof ts === 'string' && typeof sig === 'string') {
-    const tsNum = parseInt(ts, 10);
-    const now = Math.floor(Date.now() / 1000);
-    const skew = isNaN(tsNum) ? Infinity : Math.abs(now - tsNum);
-    if (skew > 60) {
-      logger.warn({ skewSec: skew, ip, path: req.path }, 'Sync auth rejected: timestamp skew exceeds 60 s');
-    } else {
-      const expected = createHmac('sha256', syncKey).update(ts).digest('hex');
-      const expBuf = Buffer.from(expected);
-      const sigBuf = Buffer.from(sig);
-      if (expBuf.length === sigBuf.length && timingSafeEqual(expBuf, sigBuf)) { next(); return; }
-      logger.warn({ ip, path: req.path }, 'Sync auth rejected: HMAC signature mismatch');
+
+  // HMAC peer-sync: if syncKey is set and signature is valid → allow (no session attached)
+  if (syncKey) {
+    const ts  = req.headers['x-sync-ts'];
+    const sig = req.headers['x-sync-sig'];
+    if (typeof ts === 'string' && typeof sig === 'string') {
+      const tsNum = parseInt(ts, 10);
+      const now   = Math.floor(Date.now() / 1000);
+      const skew  = isNaN(tsNum) ? Infinity : Math.abs(now - tsNum);
+      if (skew <= 60) {
+        const expected = createHmac('sha256', syncKey).update(ts).digest('hex');
+        const expBuf   = Buffer.from(expected);
+        const sigBuf   = Buffer.from(sig);
+        if (expBuf.length === sigBuf.length && timingSafeEqual(expBuf, sigBuf)) { next(); return; }
+      }
+      logger.warn({ ip, path: req.path }, 'Sync auth rejected: invalid HMAC signature or timestamp skew');
     }
   }
-  const x = getXsuaaConfig();
-  if (x) {
-    const session = readSessionFromRequest(req.headers.cookie ?? '', x.clientsecret);
-    if (session) { next(); return; }
+
+  // XSUAA session: attach to request so route handlers can enforce role-level access
+  if (xsuaa) {
+    const session = readSessionFromRequest(req.headers.cookie ?? '', xsuaa.clientsecret);
+    if (session) { (req as AuthRequest).authSession = session; next(); return; }
+    res.status(401).json({ error: 'Authentication required' });
+    return;
   }
+
+  // Open deployment (no SYNC_KEY, no XSUAA) → allow
+  if (!syncKey) { next(); return; }
+
+  // SYNC_KEY configured but no valid HMAC and no XSUAA → reject
   res.status(401).json({
-    error: 'Unauthorized: provide valid HMAC sync signature headers (x-sync-ts, x-sync-sig) or authenticate via XSUAA',
+    error: 'Unauthorized: provide valid HMAC sync signature headers (x-sync-ts, x-sync-sig)',
   });
 }
 
 /**
  * Same as requireSyncAuth but skips all validation when SYNC_PROTECTION_OFF is set.
- * Used on /api/browse and /api/batch-download so a backup/transitory instance can
- * pull files without needing a matching SYNC_KEY.
+ * Used on /api/browse and /api/batch-download for transitory open access during key rotation.
  */
 export function requireSyncAuthOrOpen(req: Request, res: Response, next: NextFunction): void {
   if (config.SYNC_PROTECTION_OFF) { next(); return; }

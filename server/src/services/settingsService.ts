@@ -7,7 +7,7 @@ import { emit } from './liveEvents.js';
 import { appendConfigChangelog } from './configChangelogService.js';
 import { touchLastUpdated } from './lastUpdatedService.js';
 
-const CONFIG_DIR     = join(config.LOCAL_STORE_DIR, 'config');
+const CONFIG_DIR     = join(config.LOCAL_STORE_DIR, 'conf');
 const SETTINGS_PATH  = join(CONFIG_DIR, 'settings.json');
 const DEFAULT_PATH   = './config/default-settings.json';
 

@@ -2,7 +2,7 @@ import { stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { config } from '../config.js';
 
-const CONFIG_DIR  = join(config.LOCAL_STORE_DIR, 'config');
+const CONFIG_DIR  = join(config.LOCAL_STORE_DIR, 'conf');
 const WATCH_FILES = ['tabs.json', 'subaccounts.json', 'settings.json'];
 
 let lastUpdatedTs: number | null = null;
