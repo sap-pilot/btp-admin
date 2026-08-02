@@ -12,13 +12,17 @@ interface DestItem { name: string; status: 'OK' }
 type DestData = Record<string, DestItem[]>;
 
 interface RefreshProgress {
-  type:      'progress' | 'done';
-  current?:  number;
-  total:     number;
-  name?:     string;
-  received:  number;
+  type:       'progress' | 'done';
+  current?:   number;
+  total:      number;
+  name?:      string;
+  received:   number;
   refreshed?: number;
-  errors?:   string[];
+  created?:   number;
+  updated?:   number;
+  deleted?:   number;
+  issues?:    string[];
+  errors?:    string[];
 }
 
 interface Buckets { generic: string[]; s4: string[]; cep: string[]; others: string[] }
@@ -120,7 +124,7 @@ export default function DestinationOverview() {
           const p = data as unknown as RefreshProgress;
           if (autoHideTimerRef.current) { clearTimeout(autoHideTimerRef.current); autoHideTimerRef.current = null; }
           setProgress(p);
-          if (p.type === 'done' && (!p.errors || p.errors.length === 0)) {
+          if (p.type === 'done' && (!p.issues || p.issues.length === 0)) {
             autoHideTimerRef.current = setTimeout(() => setProgress(null), 5000);
           }
         } else {
@@ -277,21 +281,19 @@ export default function DestinationOverview() {
 
       {/* Progress bar */}
       {progress && (() => {
-        const isDone    = progress.type === 'done';
-        const hasErrors = isDone && !!progress.errors?.length;
-        const pct       = isDone ? 100 : progress.total > 0 ? Math.round(((progress.current ?? 0) / progress.total) * 100) : 0;
+        const isDone     = progress.type === 'done';
+        const hasIssues  = isDone && !!progress.issues?.length;
+        const pct        = isDone ? 100 : progress.total > 0 ? Math.round(((progress.current ?? 0) / progress.total) * 100) : 0;
 
-        const barColor  = hasErrors ? 'bg-destructive' : isDone ? 'bg-green-500' : 'bg-primary';
-        const textColor = hasErrors ? 'text-destructive' : isDone ? 'text-green-600 dark:text-green-400' : 'text-foreground';
-        const bgColor   = hasErrors ? 'bg-destructive/8' : isDone ? 'bg-green-500/8' : 'bg-muted/40';
+        const barColor  = hasIssues ? 'bg-amber-500' : isDone ? 'bg-green-500' : 'bg-primary';
+        const textColor = hasIssues ? 'text-amber-600 dark:text-amber-400' : isDone ? 'text-green-600 dark:text-green-400' : 'text-foreground';
+        const bgColor   = hasIssues ? 'bg-amber-500/8' : isDone ? 'bg-green-500/8' : 'bg-muted/40';
 
         let msg: string;
         if (progress.type === 'progress') {
           msg = `Processing ${progress.current ?? 0} of ${progress.total} subaccounts: ${progress.name ?? ''}${progress.received > 0 ? `, received ${progress.received} destinations` : ''}`;
-        } else if (hasErrors) {
-          msg = `Refresh failed: ${progress.errors!.join('; ')}`;
         } else {
-          msg = `Refreshed ${progress.refreshed ?? progress.total} of ${progress.total} subaccounts, received ${progress.received} destinations total`;
+          msg = `Refreshed ${progress.refreshed ?? 0} of ${progress.total} subaccounts, received ${progress.received} destinations, created ${progress.created ?? 0}, updated ${progress.updated ?? 0} and deleted ${progress.deleted ?? 0} destinations`;
         }
 
         return (
@@ -300,6 +302,13 @@ export default function DestinationOverview() {
               <div className={`h-full transition-all duration-300 ${barColor}`} style={{ width: `${pct}%` }} />
             </div>
             <div className={`px-4 py-1.5 text-xs text-center ${textColor}`}>{msg}</div>
+            {hasIssues && (
+              <div className="px-4 pb-2 flex flex-col gap-0.5">
+                {progress.issues!.map((issue, i) => (
+                  <div key={i} className="text-[11px] text-amber-600 dark:text-amber-400 text-center">{issue}</div>
+                ))}
+              </div>
+            )}
           </div>
         );
       })()}

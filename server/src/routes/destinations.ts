@@ -29,9 +29,11 @@ router.get('/', requireAuth, async (_req, res, next) => {
   } catch (err) { next(err); }
 });
 
-router.post('/refresh', requireAdmin, async (_req, res, next) => {
+router.post('/refresh', requireAdmin, async (req, res, next) => {
   try {
-    const result = await refreshDestinations();
+    const authReq  = req as AuthRequest;
+    const username = authReq.authSession?.email || authReq.authSession?.firstName || 'admin';
+    const result   = await refreshDestinations(username);
     res.json({ ok: true, result });
   } catch (err) { next(err); }
 });

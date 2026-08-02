@@ -347,18 +347,20 @@ export default function SubaccountsTable({
                     {!isFiltered && <GripVertical className="h-3.5 w-3.5 cursor-grab" />}
                   </td>
                   <td className={`${tdCls} font-mono text-muted-foreground truncate`}>{sa.region}</td>
-                  <td className={`${tdCls} font-mono text-[11px] text-muted-foreground truncate`}>{sa.subdomain}</td>
+                  <td className={`${tdCls} font-mono text-[11px] truncate`}>
+                    <button
+                      onClick={() => onOpenDetail(sa)}
+                      className="text-primary hover:underline text-left block w-full truncate"
+                    >
+                      {sa.subdomain}
+                    </button>
+                  </td>
                   <td className={tdCls}>
                     <span className="block text-[11px] truncate">{sa.globalAccountName || '—'}</span>
                     <span className="block font-mono text-[10px] text-muted-foreground/60 truncate mt-0.5" title={sa.globalAccountGUID}>{sa.globalAccountGUID}</span>
                   </td>
                   <td className={tdCls}>
-                    <button
-                      onClick={() => onOpenDetail(sa)}
-                      className="text-primary hover:underline text-left font-medium block w-full truncate"
-                    >
-                      {sa.subaccountName}
-                    </button>
+                    <span className="font-medium block text-[11px] truncate">{sa.subaccountName}</span>
                     <span className="block font-mono text-[10px] text-muted-foreground/70 truncate mt-0.5">{sa.subaccountId}</span>
                   </td>
                   <td className={tdCls}>
