@@ -179,6 +179,7 @@ export async function btpListSubscriptions(
 }
 
 export interface RawServiceInstance {
+  id:              string;
   name:            string;
   service_plan_id: string;
   dashboard_url:   string;
@@ -192,10 +193,11 @@ export async function btpListServiceInstances(
 ): Promise<RawServiceInstance[]> {
   const data = await btpPost(sessionId, gaSubdomain, '/command/v2.106.1/services/instance?list', {
     paramValues: { subaccount: subaccountId },
-  }) as Array<{ name?: string; service_plan_id?: string; dashboard_url?: string | null; context?: { space_guid?: string } }>;
+  }) as Array<{ guid?: string; name?: string; service_plan_id?: string; dashboard_url?: string | null; context?: { space_guid?: string } }>;
   return (Array.isArray(data) ? data : [])
     .filter(inst => inst.dashboard_url && inst.dashboard_url.startsWith('http'))
     .map(inst => ({
+      id:              String(inst.guid            ?? ''),
       name:            String(inst.name            ?? ''),
       service_plan_id: String(inst.service_plan_id ?? ''),
       dashboard_url:   inst.dashboard_url as string,

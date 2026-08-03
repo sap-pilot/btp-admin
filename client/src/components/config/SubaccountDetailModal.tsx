@@ -64,6 +64,19 @@ function buildCtx(sa: SubaccountEntry, cockpit: { idp: string; host: string }): 
   };
 }
 
+const SPACE_SVC_INST_TPL = 'https://{cockpitRegion}.cockpit.btp.cloud.sap/cockpit/?idp={homepage.cockpit.idp}#/globalaccount/{globalAccountGUID}/subaccount/{subaccountId}/org/{orgId}/space/{spaceId}/service-instances';
+
+function buildSpaceInstUrl(sa: SubaccountEntry, cockpit: { idp: string; host: string }, spaceId: string): string {
+  return resolveUrl(SPACE_SVC_INST_TPL, { ...buildCtx(sa, cockpit), spaceId });
+}
+
+function buildInstanceDetailUrl(sa: SubaccountEntry, cockpit: { idp: string; host: string }, spaceId: string, instanceId: string): string {
+  const region = deriveCockpitRegion(sa.region);
+  const idp    = cockpit.idp ? `?idp=${cockpit.idp}` : '';
+  const orgId  = sa.org?.orgId ?? '';
+  return `https://${region}.cockpit.btp.cloud.sap/cockpit/${idp}#/globalaccount/${sa.globalAccountGUID}/subaccount/${sa.subaccountId}/org/${orgId}/space/${spaceId}/service-instances&//detail/${instanceId}/?layout=TwoColumnsMidExpanded`;
+}
+
 function renderMenuItems(items: CockpitMenuItem[], ctx: Record<string, string>, spaces: SpaceEntry[]): React.ReactNode[] {
   return items.flatMap((item, i) => {
     if (item.name === '-') return [<DropdownMenuSeparator key={`sep-${i}`} />];
@@ -310,33 +323,64 @@ export default function SubaccountDetailModal({ sa, onClose, cockpit, cockpitMen
                     <table className="w-full border-collapse text-xs">
                       <thead className="sticky top-0 z-10">
                         <tr className="bg-muted/30">
-                          <th className={thCls}>Space</th>
-                          <th className={thCls}>Instance Name (Service Plan)</th>
+                          <th className={thCls}>Space / Instance</th>
+                          <th className={thCls}>Service</th>
                           <th className={thCls}>Dashboard</th>
                         </tr>
                       </thead>
                       <tbody>
-                        {sa.serviceInstances.map((svc, i) => {
-                          const spaceName = sa.org?.spaces.find(s => s.spaceId === svc.spaceId)?.spaceName ?? '';
-                          return (
-                            <tr key={i} className="hover:bg-muted/20">
-                              <td className={`${tdCls} text-muted-foreground whitespace-nowrap`}>{spaceName || '—'}</td>
-                              <td className={tdCls}>
-                                <span className="block">{svc.instanceName}</span>
-                                {(svc.serviceOfferingName || svc.servicePlanId) && (
-                                  <span className="block text-[10px] text-muted-foreground font-mono mt-0.5">
-                                    {svc.serviceOfferingName || svc.servicePlanId}
-                                  </span>
-                                )}
-                              </td>
-                              <td className={`${tdCls} font-mono text-[11px]`}>
-                                <a href={svc.url} target="_blank" rel="noreferrer" className="text-primary hover:underline break-all">
-                                  {svc.url}
-                                </a>
-                              </td>
-                            </tr>
-                          );
-                        })}
+                        {(() => {
+                          const groups = sa.serviceInstances.reduce<Record<string, typeof sa.serviceInstances>>((acc, svc) => {
+                            (acc[svc.spaceId ?? ''] ??= []).push(svc);
+                            return acc;
+                          }, {});
+                          return Object.entries(groups)
+                            .sort(([a], [b]) => {
+                              const nameA = sa.org?.spaces.find(s => s.spaceId === a)?.spaceName ?? a;
+                              const nameB = sa.org?.spaces.find(s => s.spaceId === b)?.spaceName ?? b;
+                              return nameA.localeCompare(nameB);
+                            })
+                            .flatMap(([spaceId, instances]) => {
+                              const spaceName = (sa.org?.spaces.find(s => s.spaceId === spaceId)?.spaceName ?? spaceId) || 'Unknown Space';
+                              const spaceUrl  = cockpit && sa.org && spaceId
+                                ? buildSpaceInstUrl(sa, cockpit, spaceId)
+                                : undefined;
+                              return [
+                                <tr key={`sp-${spaceId}`} className="bg-muted/10">
+                                  <td colSpan={3} className="px-2 py-1 border-b border-border text-xs font-medium text-foreground">
+                                    {spaceUrl
+                                      ? <a href={spaceUrl} target="_blank" rel="noopener noreferrer" className="hover:underline hover:text-primary transition-colors">{spaceName}</a>
+                                      : spaceName
+                                    }
+                                  </td>
+                                </tr>,
+                                ...instances.map((svc, i) => {
+                                  const instUrl = cockpit && sa.org && spaceId && svc.id
+                                    ? buildInstanceDetailUrl(sa, cockpit, spaceId, svc.id)
+                                    : undefined;
+                                  return (
+                                    <tr key={`${spaceId}-${i}`} className="hover:bg-muted/20">
+                                      <td className={`${tdCls} pl-6`}>
+                                        {instUrl
+                                          ? <a href={instUrl} target="_blank" rel="noopener noreferrer" className="hover:underline hover:text-primary transition-colors">{svc.instanceName}</a>
+                                          : svc.instanceName
+                                        }
+                                      </td>
+                                      <td className={tdCls}>
+                                        {(svc.serviceOfferingName || svc.servicePlanId)
+                                          ? <span className="font-mono text-[10px] text-muted-foreground">{svc.serviceOfferingName || svc.servicePlanId}</span>
+                                          : <span className="text-muted-foreground/40">—</span>
+                                        }
+                                      </td>
+                                      <td className={`${tdCls} font-mono text-[11px]`}>
+                                        <a href={svc.url} target="_blank" rel="noreferrer" className="text-primary hover:underline break-all">{svc.url}</a>
+                                      </td>
+                                    </tr>
+                                  );
+                                }),
+                              ];
+                            });
+                        })()}
                       </tbody>
                     </table>
                   ) : (

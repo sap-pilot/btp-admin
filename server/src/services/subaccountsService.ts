@@ -26,6 +26,7 @@ export interface ServiceInstanceEntry {
   serviceOfferingName: string;
   servicePlanId:       string;
   instanceName:        string;
+  id:                  string;
   url:                 string;
   spaceId:             string;
 }
@@ -295,6 +296,7 @@ export async function refreshSubaccounts(user = 'system', force = false): Promis
       serviceOfferingName: result?.plansMap.get(inst.service_plan_id) ?? '',
       servicePlanId:       inst.service_plan_id,
       instanceName:        inst.name,
+      id:                  inst.id,
       url:                 inst.dashboard_url,
       spaceId:             inst.spaceId,
     }));
