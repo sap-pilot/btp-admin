@@ -26,24 +26,19 @@ export function requireAuth(req: Request, res: Response, next: NextFunction): vo
 }
 
 /**
- * Guards /api/browse, /api/batch-download, and /api/download.
- * Allows the request when ANY of the following is true:
- *   - Loopback origin (127.0.0.1 / ::1) — local dev
- *   - Valid HMAC-signed headers (x-sync-ts + x-sync-sig) within a ±1-minute window
- *     (peer-sync; attaches no authSession — route handler treats absence as full access)
- *   - Valid XSUAA session cookie (attaches authSession; route handler enforces role)
- * When neither SYNC_KEY nor XSUAA is configured the request passes through (open deployment).
- * When XSUAA is configured but there is no SYNC_KEY, XSUAA authentication is still required.
+ * Guards /api/browse, /api/batch-download, and /api/download-trigger.
+ * HMAC-only: accepts only loopback or valid HMAC-signed headers (x-sync-ts + x-sync-sig).
+ * XSUAA session cookies are NOT accepted — sync endpoints are exclusively for peer-sync.
+ * When SYNC_KEY is not configured the request passes through (open deployment).
  */
 export function requireSyncAuth(req: Request, res: Response, next: NextFunction): void {
   const syncKey = getSyncKey();
-  const xsuaa   = getXsuaaConfig();
 
   // Loopback: always allow for local dev
   const ip = req.ip ?? req.socket.remoteAddress ?? '';
   if (ip === '127.0.0.1' || ip === '::1' || ip === '::ffff:127.0.0.1') { next(); return; }
 
-  // HMAC peer-sync: if syncKey is set and signature is valid → allow (no session attached)
+  // HMAC peer-sync: if syncKey is set and signature is valid → allow
   if (syncKey) {
     const ts  = req.headers['x-sync-ts'];
     const sig = req.headers['x-sync-sig'];
@@ -61,18 +56,11 @@ export function requireSyncAuth(req: Request, res: Response, next: NextFunction)
     }
   }
 
-  // XSUAA session: attach to request so route handlers can enforce role-level access
-  if (xsuaa) {
-    const session = readSessionFromRequest(req.headers.cookie ?? '', xsuaa.clientsecret);
-    if (session) { (req as AuthRequest).authSession = session; next(); return; }
-    res.status(401).json({ error: 'Authentication required' });
-    return;
-  }
-
-  // Open deployment (no SYNC_KEY, no XSUAA) → allow
+  // Open deployment (no SYNC_KEY) → allow
   if (!syncKey) { next(); return; }
 
-  // SYNC_KEY configured but no valid HMAC and no XSUAA → reject
+  // SYNC_KEY configured but no valid HMAC → reject
+  logger.debug({ ip, path: req.path }, 'Sync auth rejected: no valid HMAC headers');
   res.status(401).json({
     error: 'Unauthorized: provide valid HMAC sync signature headers (x-sync-ts, x-sync-sig)',
   });
@@ -81,6 +69,7 @@ export function requireSyncAuth(req: Request, res: Response, next: NextFunction)
 /**
  * Same as requireSyncAuth but skips all validation when SYNC_PROTECTION_OFF is set.
  * Used on /api/browse and /api/batch-download for transitory open access during key rotation.
+ * Like requireSyncAuth, XSUAA session cookies are NOT accepted on these routes.
  */
 export function requireSyncAuthOrOpen(req: Request, res: Response, next: NextFunction): void {
   if (config.SYNC_PROTECTION_OFF) { next(); return; }
@@ -91,8 +80,9 @@ export function requireSyncAuthOrOpen(req: Request, res: Response, next: NextFun
  * Global session-auth guard for all /api/* routes when XSUAA is configured.
  * Passes through when:
  *   - XSUAA is not configured (open deployment)
- *   - path is /me (auth-state probe — always public so the client can detect auth)
- *   - request carries x-sync-sig HMAC headers (peer sync — per-route requireSyncAuth handles it)
+ *   - path is /me or /info (always public)
+ *   - request carries x-sync-sig HMAC headers (peer sync — per-route requireSyncAuth handles it;
+ *     /api/view rejects HMAC at the per-route requireAuth level since it requires an XSUAA session)
  *   - SYNC_PROTECTION_OFF is active and the path is /browse or /batch-download
  */
 export function requireSessionGlobal(req: Request, res: Response, next: NextFunction): void {

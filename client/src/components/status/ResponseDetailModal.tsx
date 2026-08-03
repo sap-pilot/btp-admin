@@ -91,7 +91,7 @@ export default function ResponseDetailModal({ file, serviceName, onClose, auth }
     if (!record) { setConsoleText(null); setHtmlText(null); setRetryRecords([]); setRetrySidecars([]); return; }
 
     const fetchSidecar = async (sidecarFile: string) => {
-      const url = `/api/download?path=${encodeURIComponent(serviceName)}/${encodeURIComponent(sidecarFile)}`;
+      const url = `/api/view?path=${encodeURIComponent(serviceName)}/${encodeURIComponent(sidecarFile)}`;
       try {
         const r = await fetch(url);
         return r.ok ? r.text() : null;
@@ -130,7 +130,7 @@ export default function ResponseDetailModal({ file, serviceName, onClose, auth }
 
   const isBrowser = record?.request.method === 'BROWSER';
   const screenshotUrl = record?.screenshotFile
-    ? `/api/download?path=${encodeURIComponent(serviceName)}/${encodeURIComponent(record.screenshotFile)}`
+    ? `/api/view?path=${encodeURIComponent(serviceName)}/${encodeURIComponent(record.screenshotFile)}`
     : null;
 
   return (
@@ -349,7 +349,7 @@ export default function ResponseDetailModal({ file, serviceName, onClose, auth }
                 const isCollapsed = collapsedRetries.has(idx);
                 const isRetryBrowser = rr.request.method === 'BROWSER';
                 const retryScreenshotUrl = rr.screenshotFile
-                  ? `/api/download?path=${encodeURIComponent(serviceName)}/${encodeURIComponent(rr.screenshotFile)}`
+                  ? `/api/view?path=${encodeURIComponent(serviceName)}/${encodeURIComponent(rr.screenshotFile)}`
                   : null;
                 const sidecar = retrySidecars[idx] ?? { consoleText: null, htmlText: null };
                 const retryPassed = rr.overallStatus === 200;

@@ -387,8 +387,9 @@ The Overview and Service detail pages show separate **Completely Failed** (500/5
 | `GET /api/schedule/:name` | Current effective interval in seconds: `{ intervalSeconds }` |
 | `POST /api/schedule/:name` | Set schedule override (JSON body `{ "intervalSeconds": N }`); `0` disables autorun; resets on server restart |
 | `POST /api/sync` | Trigger an on-demand remote sync; returns `{ ok, files, transferredMB, decompressedMB, elapsedSec }` or `{ ok: false, busy: true }` if a sync is already running |
-| `GET /api/browse` | List all response files grouped by service folder: `{ folders: { name: [filename, ...] }, browseTs }` |
-| `GET /api/download?path=folder/file.json` | Download a single response file (path restricted to `localStore/` directory) |
+| `GET /api/browse` | List all response files grouped by service folder: `{ folders: { name: [filename, ...] }, browseTs }` — HMAC auth only (sync peers) |
+| `POST /api/batch-download` | Download a ZIP of multiple files at once — HMAC auth only (sync peers) |
+| `GET /api/view?path=service/file.json` | View a single response file from `resp/` — XSUAA session required (UI only; no sync-peer access) |
 | `GET /api/homepage` | Current homepage data (JSON); `restricted` items filtered by auth state |
 | `GET /api/homepage/raw` | Raw homepage JSON (admin only) |
 | `GET /api/homepage/changelog` | Homepage change history markdown (admin only) |
@@ -487,7 +488,10 @@ The **BTP Status Admin** role collection grants write access to evaluation mode 
 |-------|-------|-------------|
 | `GET /api/check/:name` | Auth required | Run health check (used by Test All / Run Test) |
 | `POST /api/sync` | Auth required | Trigger on-demand remote sync |
-| `GET /api/download-trigger` | Sync auth | Webhook called by the producer; triggers delta download from `SYNC_REMOTE` |
+| `GET /api/view?path=…` | Auth required | View a response file from `resp/` (UI file viewer; XSUAA session only) |
+| `GET /api/browse` | HMAC sync only | List all response files — sync peers only, no XSUAA |
+| `POST /api/batch-download` | HMAC sync only | Download batch ZIP — sync peers only, no XSUAA |
+| `GET /api/download-trigger` | HMAC sync only | Webhook called by the producer; triggers delta download from `SYNC_REMOTE` |
 | `POST /api/eval-mode/:name` | Admin required | Change evaluation mode |
 | `POST /api/schedule/:name` | Admin required | Change schedule override |
 
@@ -585,7 +589,7 @@ The server uses [pino](https://getpino.io) with colorized pretty-print output.
 | `LOCAL_STORE_DIR` | `./localStore` | Root directory for local file storage; response files go under `resp/{service}/`; config files (`subaccounts.json`, `tabs.json`, `settings.json`, `changelog.md`) go under `conf/`; destination snapshots under `dest/{region}/{subdomain}/` |
 | `SYNC_REMOTE` | — | Base URL of the producer BTP Status instance (e.g. `https://btp-status-prod.cfapps.eu10.hana.ondemand.com`). On startup the consumer downloads all existing files and registers itself as a webhook consumer. Subsequent updates arrive via push (`/api/download-trigger`). |
 | `SELF_URL` | auto | Base URL of this (consumer) instance used when registering the `/api/download-trigger` webhook with the producer. Auto-detected from `VCAP_APPLICATION.application_uris[0]` in Cloud Foundry. Set explicitly if auto-detection is unavailable (e.g. local development). |
-| `SYNC_REMOTE_BATCH_SIZE` | `200` | Number of files requested per `POST /api/batch-download` call during sync. The sync job tries the batch endpoint first; if the remote does not support it, it falls back to individual `GET /api/download` requests with concurrency 10. |
+| `SYNC_REMOTE_BATCH_SIZE` | `200` | Number of files requested per `POST /api/batch-download` call during sync. |
 | `SYNC_INTERVAL` | `300` | Fallback sync interval in seconds. If no webhook-triggered download completes within this window (e.g. because the producer was restarted and lost its registered callbacks), the consumer triggers a delta sync automatically using `GET /api/browse?since=<lastBrowseTs>`. Set to `0` to disable the fallback. |
 | `MAX_RESPONSE_STORAGE_DAYS` | `7` | Response files (JSON + PNG) older than this many days are automatically deleted. Housekeeping runs once on startup then every 24 hours. Set to `0` to disable. Also controls the furthest date selectable in the UI's Date Range picker. |
 | `REQUEST_TIMEOUT_MS` | `30000` | Default HTTP request timeout in milliseconds for standard endpoint checks. A check that exceeds this limit is recorded with status `504` and the response filename ends in `_504.json`. Per-endpoint `timeout` in `config.json` overrides this value for that endpoint only. |
@@ -617,8 +621,7 @@ SELF_URL=https://btp-status-replica.cfapps.eu10.hana.ondemand.com
 1. Consumer calls `GET /api/browse?callback=<SELF_URL>/api/download-trigger` on the producer  
    — registers the consumer's webhook with the producer and gets the full file list with per-file mtimes
 2. Compares against local `./localStore/` directory
-3. Downloads all missing files via `POST /api/batch-download` (ZIP batches, `SYNC_REMOTE_BATCH_SIZE` files per request)  
-   — falls back to individual `GET /api/download?path=…` (concurrency 10) if the remote does not support batch
+3. Downloads all missing files via `POST /api/batch-download` (ZIP batches, `SYNC_REMOTE_BATCH_SIZE` files per request)
 4. Sets each downloaded file's local mtime to match the remote mtime (from the browse response)
 5. Deduplicates starred/unstarred pairs: for files differing only by `.starred.`, deletes the one with the older mtime
 
@@ -637,7 +640,7 @@ Only one download runs at a time. A second trigger that arrives while a download
 ### Sync Key (optional)
 
 > [!WARNING]
-> Configuring `SYNC_KEY` is strongly recommended whenever two instances are deployed. Without it, `/api/browse`, `/api/download`, `/api/batch-download`, and `/api/download-trigger` are open to any caller who can reach the app. If `SYNC_KEY` is set to an empty string (either in the `SYNC_KEY` environment variable or in `config.json → variables`), the key is treated as absent and the endpoints remain unprotected.
+> Configuring `SYNC_KEY` is strongly recommended whenever two instances are deployed. Without it, `/api/browse`, `/api/batch-download`, and `/api/download-trigger` are open to any caller who can reach the app. If `SYNC_KEY` is set to an empty string (either in the `SYNC_KEY` environment variable or in `config.json → variables`), the key is treated as absent and the endpoints remain unprotected.
 
 To authenticate sync requests between instances, set a shared secret on **both** the producer and consumer:
 
@@ -663,13 +666,14 @@ The key is **never transmitted in plaintext**. Instead, every sync request carri
 The server verifies the signature with `timingSafeEqual` and rejects requests whose timestamp falls outside a ±1-minute window, preventing replay attacks.
 
 When a sync key is configured:
-- `GET /api/browse`, `GET /api/download`, `POST /api/batch-download`, and `GET /api/download-trigger` all require either valid HMAC signature headers **or** a valid XSUAA session cookie
-- The sync client automatically signs all requests to the remote (browse, download, and callback notifications)
+- `GET /api/browse`, `POST /api/batch-download`, and `GET /api/download-trigger` require valid HMAC signature headers — XSUAA session cookies are **not** accepted on these endpoints (sync-peers only)
+- `GET /api/view` (UI file viewer) requires a valid XSUAA session cookie — HMAC sync headers are not accepted
+- The sync client automatically signs all requests to the remote (browse, batch-download, and callback notifications)
 - If the remote rejects the signature with `401`, the entire sync is aborted immediately with an explanatory error
-- Requests with neither a valid signature nor a session receive `401 Unauthorized`
+- Requests with an invalid or missing HMAC signature receive `401 Unauthorized` on sync endpoints
 - Requests from loopback (`127.0.0.1`, `::1`) are always allowed for local development
 
-Both instances must use the same key. If XSUAA is configured, authenticated browser users can also access the sync endpoints without a key.
+Both instances must use the same key.
 
 ### Key rotation / temporary open access (`SYNC_PROTECTION_OFF`)
 
@@ -680,7 +684,7 @@ SYNC_PROTECTION_OFF=true cf set-env btp-status-producer SYNC_PROTECTION_OFF true
 cf restart btp-status-producer
 ```
 
-While active, `GET /api/browse` and `POST /api/batch-download` on that instance accept requests from any caller with no authentication. `GET /api/download`, `GET /api/download-trigger`, and all other endpoints remain protected by the usual auth. A `WARN` log line is emitted at startup when the flag is on.
+While active, `GET /api/browse` and `POST /api/batch-download` on that instance accept requests from any caller with no authentication. `GET /api/download-trigger` and all other endpoints remain protected by the usual auth. A `WARN` log line is emitted at startup when the flag is on.
 
 > [!WARNING]
 > Unset `SYNC_PROTECTION_OFF` and restart the producer as soon as the consumer has finished its initial sync.

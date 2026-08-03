@@ -72,34 +72,32 @@ router.post('/sync', requireAuth, async (req, res, next) => {
 
 router.post('/batch-download', requireSyncAuthOrOpen, async (req, res, next) => {
   try {
-    // XSUAA session without admin role cannot use batch-download (it exposes conf/ and dest/)
-    const bdSession = (req as AuthRequest).authSession;
-    if (bdSession && !bdSession.isAdmin) {
-      res.status(403).json({ error: 'Admin role required' });
-      return;
-    }
     const { paths } = req.body as { paths?: unknown };
+    const rejectBatch = (status: number, error: string) => {
+      logger.debug({ from: req.ip, status, error }, 'batch-download rejected');
+      res.status(status).json({ error });
+    };
     if (!Array.isArray(paths) || paths.length === 0) {
-      res.status(400).json({ error: 'paths must be a non-empty array' });
+      rejectBatch(400, 'paths must be a non-empty array');
       return;
     }
     if (paths.length > 500) {
-      res.status(400).json({ error: 'paths exceeds maximum of 500' });
+      rejectBatch(400, 'paths exceeds maximum of 500');
       return;
     }
     for (const p of paths) {
       if (typeof p !== 'string' || p.includes('..') || p.startsWith('/') || p.startsWith('\\')) {
-        res.status(400).json({ error: `invalid path: ${String(p)}` });
+        rejectBatch(400, `invalid path: ${String(p)}`);
         return;
       }
       const parts = p.split('/');
       if (parts.length === 1) {
         if (!/^[a-zA-Z0-9][a-zA-Z0-9_.-]*\.(json|md)$/.test(parts[0]!)) {
-          res.status(400).json({ error: `invalid root filename: ${p}` });
+          rejectBatch(400, `invalid root filename: ${p}`);
           return;
         }
       } else if (parts.length !== 2 || !parts[0] || !parts[1]) {
-        res.status(400).json({ error: `path must be filename or folder/filename: ${p}` });
+        rejectBatch(400, `path must be filename or folder/filename: ${p}`);
         return;
       }
     }
@@ -145,12 +143,6 @@ router.get('/download-trigger', requireSyncAuth, (req, res) => {
 
 router.get('/browse', requireSyncAuthOrOpen, async (req, res, next) => {
   try {
-    // XSUAA session without admin role cannot browse (response includes conf/ and dest/ keys)
-    const brSession = (req as AuthRequest).authSession;
-    if (brSession && !brSession.isAdmin) {
-      res.status(403).json({ error: 'Admin role required' });
-      return;
-    }
     const rawSince = req.query['since'];
     let sinceMs: number | undefined;
     if (typeof rawSince === 'string' && rawSince) {
@@ -185,58 +177,39 @@ router.get('/browse', requireSyncAuthOrOpen, async (req, res, next) => {
   }
 });
 
-router.get('/download', requireSyncAuth, async (req, res, next) => {
+// View endpoint: XSUAA session required; restricted to resp/{service}/{filename} only.
+// Used by the UI to display response JSON, screenshots, console logs, and page source.
+// Sync peers use /browse + /batch-download instead.
+router.get('/view', requireAuth, async (req, res, next) => {
   try {
-    // authSession present → XSUAA session used (not peer HMAC); absent → peer or open
-    const dlSession = (req as AuthRequest).authSession;
-    const isAdmin   = !dlSession || dlSession.isAdmin;
-
     const rawPath = typeof req.query['path'] === 'string' ? req.query['path'] : '';
     if (!rawPath || rawPath.includes('..') || rawPath.startsWith('/') || rawPath.startsWith('\\')) {
       res.status(400).json({ error: 'Invalid path' });
       return;
     }
     const slash = rawPath.indexOf('/');
-    if (slash === -1) {
-      // Root file — admin only
-      if (!isAdmin) { res.status(403).json({ error: 'Admin role required' }); return; }
-      const buf = await readRootFile(rawPath);
-      res.type(rawPath.endsWith('.json') ? 'application/json' : 'text/plain').send(buf);
+    if (slash === -1 || slash === rawPath.length - 1) {
+      res.status(400).json({ error: 'Invalid path: must be service/filename' });
       return;
     }
-    const folder = rawPath.slice(0, slash);
-    const rest   = rawPath.slice(slash + 1);
-    if (!folder || !rest) {
+    const service = rawPath.slice(0, slash);
+    const filename = rawPath.slice(slash + 1);
+    if (!service || !filename || filename.includes('/')) {
       res.status(400).json({ error: 'Invalid path' });
       return;
     }
-    if (folder === 'conf') {
-      if (!isAdmin) { res.status(403).json({ error: 'Admin role required' }); return; }
-      const buf = await readConfigFile(rest);
-      res.type(rest.endsWith('.json') ? 'application/json' : 'text/plain').send(buf);
-    } else if (folder === 'dest') {
-      if (!isAdmin) { res.status(403).json({ error: 'Admin role required' }); return; }
-      const buf = await readDestFile(rest);
-      res.type(rest.endsWith('.png') ? 'image/png' : rest.endsWith('.md') ? 'text/plain' : 'application/json').send(buf);
+    if (filename.endsWith('.png')) {
+      const buf = await readScreenshotFile(service, filename);
+      res.type('image/png').send(buf);
+    } else if (filename.endsWith('.log')) {
+      const buf = await readConsoleLogFile(service, filename);
+      res.type('text/plain').send(buf);
+    } else if (filename.endsWith('.html')) {
+      const buf = await readContentFile(service, filename);
+      res.type('text/plain').send(buf);
     } else {
-      // resp/{service}/filename — allowed for any authenticated user; single level only
-      if (rest.includes('/')) {
-        res.status(400).json({ error: 'Invalid path' });
-        return;
-      }
-      if (rest.endsWith('.png')) {
-        const buf = await readScreenshotFile(folder, rest);
-        res.type('image/png').send(buf);
-      } else if (rest.endsWith('.log')) {
-        const buf = await readConsoleLogFile(folder, rest);
-        res.type('text/plain').send(buf);
-      } else if (rest.endsWith('.html')) {
-        const buf = await readContentFile(folder, rest);
-        res.type('text/plain').send(buf);
-      } else {
-        const data = await readResponseFile(folder, rest);
-        res.json(data);
-      }
+      const data = await readResponseFile(service, filename);
+      res.json(data);
     }
   } catch (err) {
     next(err);
