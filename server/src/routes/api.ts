@@ -96,6 +96,12 @@ router.post('/batch-download', requireSyncAuthOrOpen, async (req, res, next) => 
           rejectBatch(400, `invalid root filename: ${p}`);
           return;
         }
+      } else if (parts[0] === 'dest') {
+        // dest paths are 4 segments: dest/{region}/{subdomain}/{filename}
+        if (parts.length !== 4 || !parts[1] || !parts[2] || !parts[3]) {
+          rejectBatch(400, `invalid dest path: ${p}`);
+          return;
+        }
       } else if (parts.length !== 2 || !parts[0] || !parts[1]) {
         rejectBatch(400, `path must be filename or folder/filename: ${p}`);
         return;
