@@ -1171,7 +1171,7 @@ async function restoreGlobalRefreshTsFromChangelog(): Promise<void> {
     const ts   = parseGlobalRefreshTsFromChangelog(text);
     if (ts !== null && (globalRefreshTs === null || ts > globalRefreshTs)) {
       globalRefreshTs = ts;
-      logger.info({ ts: new Date(ts).toISOString() }, 'globalRefreshTs restored from changelog');
+      logger.info({ ts: new Date(ts).toISOString() }, 'destination globalRefreshTs restored from changelog');
     }
   } catch { /* changelog does not exist yet */ }
 }
