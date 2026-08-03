@@ -75,7 +75,12 @@ router.post('/refresh', requireAdmin, async (req, res, next) => {
   try {
     const authReq  = req as AuthRequest;
     const username = authReq.authSession?.email || authReq.authSession?.firstName || 'admin';
-    const result   = await refreshDestinations(username, 'manual');
+    const force    = req.query['force'] === 'true';
+    const result   = await refreshDestinations(username, 'manual', force);
+    if (result.skipped) {
+      res.json({ ok: false, busy: true, reason: 'Refresh already in progress' });
+      return;
+    }
     res.json({ ok: true, result });
   } catch (err) { next(err); }
 });

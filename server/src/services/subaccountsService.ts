@@ -163,7 +163,17 @@ function mergeSubaccounts(existing: SubaccountEntry[], fresh: SubaccountEntry[])
   return merged;
 }
 
-export async function refreshSubaccounts(user = 'system'): Promise<{ data: SubaccountEntry[]; warnings: string[] }> {
+let subaccountRefreshRunning = false;
+
+export async function refreshSubaccounts(user = 'system', force = false): Promise<{ data: SubaccountEntry[]; warnings: string[]; skipped?: boolean }> {
+  if (subaccountRefreshRunning && !force) {
+    logger.info({ user }, 'Subaccount refresh skipped — already running');
+    return { data: [], warnings: [], skipped: true };
+  }
+  if (force) logger.warn({ user }, 'Force subaccount refresh requested');
+  else logger.info({ user }, 'Subaccount refresh requested');
+  subaccountRefreshRunning = true;
+  try {
   const regions = getCfRegions();
   if (regions.length === 0) {
     throw Object.assign(
@@ -324,6 +334,9 @@ export async function refreshSubaccounts(user = 'system'): Promise<{ data: Subac
   emit('refresh-subaccounts', { type: 'progress', pct: 100, message: 'Done' });
   logger.info({ subaccounts: normalized.length, warnings: warnings.length }, 'Subaccounts refresh complete');
   return { data: normalized, warnings };
+  } finally {
+    subaccountRefreshRunning = false;
+  }
 }
 
 export async function saveSubaccounts(data: SubaccountEntry[], user = 'system'): Promise<void> {

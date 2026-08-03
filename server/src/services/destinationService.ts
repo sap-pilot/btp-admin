@@ -22,6 +22,8 @@ const lastRefreshTs = new Map<string, number>();
 // Timestamp of the last completed global (all-subaccounts) refresh. Null until the first refresh runs.
 let globalRefreshTs: number | null = null;
 
+let globalRefreshRunning = false;
+
 export function getGlobalRefreshTs(): number | null { return globalRefreshTs; }
 
 async function getLocalDestinationNames(region: string, subdomain: string): Promise<string[]> {
@@ -524,6 +526,7 @@ export interface RefreshResult {
   updated:   number;
   deleted:   number;
   errors:    string[];
+  skipped?:  boolean;
 }
 
 interface DestChange { region: string; subdomain: string; name: string; action: 'created' | 'updated' | 'deleted' }
@@ -596,7 +599,15 @@ export async function getGlobalChangelogFile(filename: string): Promise<string> 
   catch { return ''; }
 }
 
-export async function refreshDestinations(username = 'system', mode: 'auto' | 'manual' = 'auto'): Promise<RefreshResult> {
+export async function refreshDestinations(username = 'system', mode: 'auto' | 'manual' = 'auto', force = false): Promise<RefreshResult> {
+  if (globalRefreshRunning && !force) {
+    logger.info({ username, mode }, 'Global destination refresh skipped — already running');
+    return { refreshed: 0, received: 0, created: 0, updated: 0, deleted: 0, errors: [], skipped: true };
+  }
+  if (force) logger.warn({ username, mode }, 'Force global destination refresh requested');
+  else logger.info({ username, mode }, 'Global destination refresh requested');
+  globalRefreshRunning = true;
+  try {
   const allSas    = await readSubaccounts();
   const targetSas = allSas
     .filter(sa => sa.manageDestinations)
@@ -725,6 +736,9 @@ export async function refreshDestinations(username = 'system', mode: 'auto' | 'm
   emit('dest', { ts: Date.now() });
 
   return { refreshed, received, created, updated, deleted, errors: issues };
+  } finally {
+    globalRefreshRunning = false;
+  }
 }
 
 export async function refreshSubaccountDestinations(region: string, subdomain: string, username = 'system'): Promise<RefreshResult> {

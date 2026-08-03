@@ -118,7 +118,8 @@ export default function DestinationOverview() {
   const [progress,        setProgress]        = useState<RefreshProgress | null>(null);
   const [globalRefreshTs, setGlobalRefreshTs] = useState<number | null>(null);
   const [modal,        setModal]        = useState<ModalState | null>(null);
-  const [showRefreshDialog, setShowRefreshDialog] = useState(false);
+  const [showRefreshDialog,      setShowRefreshDialog]      = useState(false);
+  const [showForceRefreshDialog, setShowForceRefreshDialog] = useState(false);
 
   // Search
   const [filterInput,   setFilterInput]   = useState('');
@@ -270,14 +271,16 @@ export default function DestinationOverview() {
 
   // ── Refresh ─────────────────────────────────────────────────────────────────
 
-  async function doRefresh() {
+  async function doRefresh(force = false) {
     setShowRefreshDialog(false);
+    setShowForceRefreshDialog(false);
     setIsRefreshing(true);
     if (autoHideTimerRef.current) { clearTimeout(autoHideTimerRef.current); autoHideTimerRef.current = null; }
     setProgress(null);
     try {
-      const res  = await fetch('/api/destinations/refresh', { method: 'POST' });
-      const json = await res.json() as { ok: boolean; result?: { refreshed: number; errors: string[] }; error?: string };
+      const url  = force ? '/api/destinations/refresh?force=true' : '/api/destinations/refresh';
+      const res  = await fetch(url, { method: 'POST' });
+      const json = await res.json() as { ok: boolean; busy?: boolean; result?: { refreshed: number; errors: string[] }; error?: string };
       if (!json.ok) {
         setProgress({ type: 'done', total: 0, received: 0, errors: [json.error ?? 'Refresh failed'] });
       }
@@ -465,7 +468,11 @@ export default function DestinationOverview() {
           </div>
         </div>
 
-        <button onClick={() => setShowRefreshDialog(true)} disabled={isRefreshing} className={btnOutline} title={isRefreshing ? 'Refreshing…' : 'Refresh all destinations'}>
+        <button
+          onClick={() => isRefreshing ? setShowForceRefreshDialog(true) : setShowRefreshDialog(true)}
+          className={btnOutline}
+          title={isRefreshing ? 'Refreshing… — click to force another refresh' : 'Refresh all destinations'}
+        >
           <RefreshCw className={`h-3.5 w-3.5 ${isRefreshing ? 'animate-spin' : ''}`} />
           <span className="hidden sm:inline">{isRefreshing ? 'Refreshing…' : 'Refresh'}</span>
         </button>
@@ -844,6 +851,21 @@ export default function DestinationOverview() {
           <AlertDialogFooter>
             <AlertDialogCancel onClick={() => setShowRefreshDialog(false)}>Cancel</AlertDialogCancel>
             <AlertDialogAction onClick={() => void doRefresh()}>Yes, proceed</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog open={showForceRefreshDialog}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Refresh already in progress</AlertDialogTitle>
+            <AlertDialogDescription>
+              There is an ongoing global destination refresh. Would you like to force another refresh on top of it?
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel onClick={() => setShowForceRefreshDialog(false)}>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={() => void doRefresh(true)}>Yes, force another global destination refresh</AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>

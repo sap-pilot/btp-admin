@@ -238,7 +238,7 @@ export default function SubaccountsTable({
           )}
         </div>
         <div className="flex items-center gap-1.5 shrink-0">
-          <button onClick={onRefresh} disabled={isRefreshing || isSaving} className={btnOutline} title={isRefreshing ? 'Refreshing…' : 'Refresh'}>
+          <button onClick={onRefresh} disabled={isSaving} className={btnOutline} title={isRefreshing ? 'Refreshing… — click to force another refresh' : 'Refresh'}>
             <RefreshCw className={`h-3.5 w-3.5 ${isRefreshing ? 'animate-spin' : ''}`} />
             <span className="hidden sm:inline">{isRefreshing ? 'Refreshing…' : 'Refresh'}</span>
           </button>
