@@ -86,7 +86,7 @@ export function requireSyncAuthOrOpen(req: Request, res: Response, next: NextFun
  *   - SYNC_PROTECTION_OFF is active and the path is /browse or /batch-download
  */
 export function requireSessionGlobal(req: Request, res: Response, next: NextFunction): void {
-  if (req.path === '/me' || req.path === '/info') { next(); return; }
+  if (req.path === '/me' || req.path === '/info' || req.path === '/settings') { next(); return; }
   if (req.headers['x-sync-sig']) { next(); return; }
   if (config.SYNC_PROTECTION_OFF && (req.path === '/browse' || req.path === '/batch-download')) { next(); return; }
   const x = getXsuaaConfig();
