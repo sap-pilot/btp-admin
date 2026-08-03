@@ -7,7 +7,7 @@ import { logger } from '../logger.js';
 import { getOrRefreshToken, fetchWithRateLimit } from './cfLoginService.js';
 import { getRestrictedIds, getAutoSubaccountRefreshMs } from './configService.js';
 import { readSubaccounts, type SubaccountEntry } from './subaccountsService.js';
-import { notifyCallbacks } from './syncService.js';
+import { notifyCallbacks, registerOnDestChangelogSynced } from './syncService.js';
 import { emit, emitImmediate } from './liveEvents.js';
 
 const BA_DIR         = join(homedir(), '.ba');
@@ -599,6 +599,51 @@ export async function getGlobalChangelogFile(filename: string): Promise<string> 
   catch { return ''; }
 }
 
+// Parse the topmost "global refresh triggered by" timestamp from changelog text.
+// Deliberately skips "subaccount destination refresh/update" lines.
+function parseGlobalRefreshTsFromChangelog(text: string): number | null {
+  const m = text.match(/^## \[(?:Auto|Manual)\] global refresh triggered by [^\n]+ at (\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} UTC)/m);
+  if (!m) return null;
+  const ms = new Date(m[1]!.replace(' ', 'T').replace(' UTC', 'Z')).getTime();
+  return isNaN(ms) ? null : ms;
+}
+
+// Append a subaccount-scoped entry to the global dest/changelog.md.
+// Applies the same 2 MB rotation as writeGlobalChangelog.
+async function appendSubaccountGlobalChangelog(
+  mode:      'auto' | 'manual',
+  action:    'refresh' | 'update',
+  username:  string,
+  region:    string,
+  subdomain: string,
+  names:     string[],
+): Promise<void> {
+  if (names.length === 0) return;
+  await mkdir(LOCAL_DEST_DIR, { recursive: true });
+  const changelogPath = join(LOCAL_DEST_DIR, 'changelog.md');
+
+  try {
+    const info = await stat(changelogPath);
+    if (info.size > 2 * 1024 * 1024) {
+      const archiveName = `changelog.${formatChangelogTs(new Date())}.md`;
+      await rename(changelogPath, join(LOCAL_DEST_DIR, archiveName));
+      logger.info({ archiveName }, 'Rotated global changelog');
+    }
+  } catch { /* file may not exist yet */ }
+
+  const modeLabel = mode === 'auto' ? 'Auto' : 'Manual';
+  const dateStr   = new Date().toISOString().replace('T', ' ').slice(0, 19) + ' UTC';
+  let entry = `## [${modeLabel}] subaccount destination ${action} by <${username}> at ${dateStr}\n\n`;
+  for (const name of names) {
+    const link = `/destinations/${encodeURIComponent(region)}/${encodeURIComponent(subdomain)}/${encodeURIComponent(name)}/history`;
+    entry += `${region}.${subdomain} → [${name}](${link})\n`;
+  }
+  entry += '\n';
+
+  const prev = existsSync(changelogPath) ? await readFile(changelogPath, 'utf-8') : '';
+  await writeFile(changelogPath, entry + prev, 'utf-8');
+}
+
 export async function refreshDestinations(username = 'system', mode: 'auto' | 'manual' = 'auto', force = false): Promise<RefreshResult> {
   if (globalRefreshRunning && !force) {
     logger.info({ username, mode }, 'Global destination refresh skipped — already running');
@@ -741,7 +786,7 @@ export async function refreshDestinations(username = 'system', mode: 'auto' | 'm
   }
 }
 
-export async function refreshSubaccountDestinations(region: string, subdomain: string, username = 'system'): Promise<RefreshResult> {
+export async function refreshSubaccountDestinations(region: string, subdomain: string, username = 'system', mode: 'auto' | 'manual' = 'auto'): Promise<RefreshResult> {
   const allSas = await readSubaccounts();
   const sa     = allSas.find(s => s.region === region && s.subdomain === subdomain && s.manageDestinations);
   if (!sa) return { refreshed: 0, received: 0, created: 0, updated: 0, deleted: 0, errors: [`No managed-destination subaccount found for ${region}/${subdomain}`] };
@@ -749,7 +794,8 @@ export async function refreshSubaccountDestinations(region: string, subdomain: s
   const total    = 1;
   const location = `${sa.region}/${sa.subdomain}`;
   const saLabel  = sa.alias || sa.subaccountName || sa.subdomain;
-  const issues: string[] = [];
+  const issues:       string[] = [];
+  const changedNames: string[] = [];
   let received = 0, created = 0, updated = 0, deleted = 0;
 
   const { orgs: keyStore, planGuids } = await loadKeyStore();
@@ -789,8 +835,8 @@ export async function refreshSubaccountDestinations(region: string, subdomain: s
         if (!name) continue;
         apiNames.add(name);
         const result = await persistDestination(destDir, name, d, username);
-        if (result === 'created') created++;
-        else if (result === 'updated') updated++;
+        if (result === 'created') { created++; changedNames.push(name); }
+        else if (result === 'updated') { updated++; changedNames.push(name); }
       }
       received += apiNames.size;
 
@@ -806,6 +852,7 @@ export async function refreshSubaccountDestinations(region: string, subdomain: s
         await writeFile(changelogPath, entry + prev, 'utf-8');
         await rename(join(destDir, fname), join(destDir, `${destName}.deleted.json`));
         deleted++;
+        changedNames.push(destName);
       }
 
       logger.info({ location, count: apiNames.size }, `Destinations refreshed for ${location}`);
@@ -823,7 +870,9 @@ export async function refreshSubaccountDestinations(region: string, subdomain: s
   const refreshed = issues.length === 0 ? 1 : 0;
   emitImmediate('refresh-destinations', { type: 'done', refreshed, total, received, created, updated, deleted, issues });
 
-  if (created > 0 || updated > 0 || deleted > 0) {
+  if (changedNames.length > 0) {
+    await appendSubaccountGlobalChangelog(mode, 'refresh', username, sa.region, sa.subdomain, changedNames)
+      .catch(err => logger.error({ err }, 'Failed to write subaccount global changelog'));
     notifyCallbacks();
     emit('dest', { ts: Date.now() });
   }
@@ -857,7 +906,7 @@ export async function getSubaccountDestinationNames(
 
   if (stale) {
     logger.info({ location: key, force, ageSec: Math.round((Date.now() - last) / 1000) }, 'Proactive destination refresh');
-    const result = await refreshSubaccountDestinations(region, subdomain, username);
+    const result = await refreshSubaccountDestinations(region, subdomain, username, 'auto');
     const names  = await getLocalDestinationNames(region, subdomain);
     return { names, refreshed: true, errors: result.errors };
   }
@@ -1064,6 +1113,8 @@ export async function saveDestinationEntry(
     const entry   = `## Manual update done by <${username}> at ${dateStr}\n${diffLines.join('\n')}\n\n`;
     const prev    = existsSync(changelogPath) ? await readFile(changelogPath, 'utf-8') : '';
     await writeFile(changelogPath, entry + prev, 'utf-8');
+    await appendSubaccountGlobalChangelog('manual', 'update', username, region, subdomain, [name])
+      .catch(err => logger.error({ err }, 'Failed to write subaccount global changelog'));
     logger.info({ user: username, destination: `${region}.${subdomain}/${name}`, changes: diffLines }, 'Destination updated');
   } else {
     logger.info({ user: username, destination: `${region}.${subdomain}/${name}` }, 'Destination saved (no changes)');
@@ -1108,3 +1159,20 @@ export async function listDestinations(): Promise<Record<string, Array<{ name: s
   }
   return result;
 }
+
+// ─── Sync hook ────────────────────────────────────────────────────────────────
+// When a sync from remote downloads dest/changelog.md, parse the topmost global
+// refresh timestamp and update globalRefreshTs so the next auto-refresh check
+// does not re-run a refresh the remote already completed.
+registerOnDestChangelogSynced(() => {
+  void (async () => {
+    try {
+      const text = await readFile(join(LOCAL_DEST_DIR, 'changelog.md'), 'utf-8');
+      const ts   = parseGlobalRefreshTsFromChangelog(text);
+      if (ts !== null && (globalRefreshTs === null || ts > globalRefreshTs)) {
+        globalRefreshTs = ts;
+        logger.info({ ts: new Date(ts).toISOString() }, 'globalRefreshTs updated from synced changelog');
+      }
+    } catch { /* changelog may not exist */ }
+  })();
+});

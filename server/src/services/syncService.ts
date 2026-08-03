@@ -36,6 +36,15 @@ class HttpError extends Error {
   }
 }
 
+// ── dest/changelog.md sync hook ───────────────────────────────────────────────
+// Called by executeSync when dest/changelog.md was included in a sync batch.
+// Registered by destinationService to update globalRefreshTs without a circular import.
+let onDestChangelogSynced: (() => void) | null = null;
+
+export function registerOnDestChangelogSynced(fn: () => void): void {
+  onDestChangelogSynced = fn;
+}
+
 // ── Callback registry (producer side) ────────────────────────────────────────
 const registeredCallbacks = new Set<string>();
 
@@ -527,7 +536,10 @@ async function executeSync(
       emit('config', { ts });
       void refreshLastUpdated(); // re-read file mtimes set by utimes() during sync
     }
-    if (updatedFolders.has('dest'))   emit('dest',   { ts });
+    if (updatedFolders.has('dest')) {
+      emit('dest', { ts });
+      if (onDestChangelogSynced && missing.includes('dest/changelog.md')) onDestChangelogSynced();
+    }
 
     return stats;
   } catch (err) {
