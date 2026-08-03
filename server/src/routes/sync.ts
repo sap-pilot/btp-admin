@@ -3,7 +3,7 @@ import { readConfigFile, readDestFile, readRootFile, readRawResponseFile, browse
 import { buildZip } from '../services/zipBuilder.js';
 import { handleDownloadTrigger, registerCallback } from '../services/syncService.js';
 import { logger } from '../logger.js';
-import { requireSyncAuth } from '../middleware/requireAuth.js';
+import { requireSyncAuth, getClientIp } from '../middleware/requireAuth.js';
 import { resolve as resolvePath } from 'node:path';
 import { config } from '../config.js';
 
@@ -13,7 +13,7 @@ router.post('/batch', requireSyncAuth, async (req, res, next) => {
   try {
     const { paths } = req.body as { paths?: unknown };
     const rejectBatch = (status: number, error: string) => {
-      logger.debug({ from: req.ip, status, error }, 'sync batch rejected');
+      logger.debug({ from: getClientIp(req), status, error }, 'sync batch rejected');
       res.status(status).json({ error });
     };
     if (!Array.isArray(paths) || paths.length === 0) {

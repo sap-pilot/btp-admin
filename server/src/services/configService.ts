@@ -114,7 +114,7 @@ export function getAutoSubaccountRefreshMs(): number {
   return 10 * 60_000; // default 10 minutes
 }
 
-const DEFAULT_INTERNAL_IP_WHITELIST = '192.168.0.0/16,10.0.0.0/8,172.16.0.0/12';
+const DEFAULT_INTERNAL_IP_WHITELIST = '';
 
 /**
  * Returns CIDRs for internal/private network ranges always allowed on sync endpoints.

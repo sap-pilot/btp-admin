@@ -610,7 +610,7 @@ The server uses [pino](https://getpino.io) with colorized pretty-print output.
 | `SYNC_PROTECTION_OFF` | — | When set to any non-empty value (e.g. `true`, `1`), `GET /api/sync/browse` and `POST /api/sync/batch` skip all HMAC authentication (including the SYNC_KEY requirement). Useful for key rotation or bootstrapping a backup instance. Unset after the initial sync completes. |
 | `SYNC_NO_IP_PROTECTION` | `false` | Set to `true` or `1` to disable IP whitelisting for sync endpoints. When unset (the default), sync requests from IPs not in the BTP egress list (or `SYNC_WHITELIST_IPS`) are rejected with 403 — but only if `server/config/btp-endpoints.json` is present. |
 | `SYNC_WHITELIST_IPS` | — | Comma-separated list of extra IPs or CIDR blocks to allow on sync endpoints, in addition to the BTP egress IPs in `btp-endpoints.json`. Example: `10.0.0.1,192.168.1.0/24`. Can also be set in `config.json → variables`. |
-| `SYNC_INTERNAL_IP_WHITELIST` | `192.168.0.0/16,10.0.0.0/8,172.16.0.0/12` | Comma-separated CIDRs for internal/private network ranges always allowed on sync endpoints. Defaults to the RFC 1918 private ranges. Set to an empty string to disable. Can also be set in `config.json → variables`. |
+| `SYNC_INTERNAL_IP_WHITELIST` | `""` (empty) | Comma-separated CIDRs for internal/private network ranges always allowed on sync endpoints. Default is empty because on SAP BTP Cloud Foundry the real client IP is always available via `x-cf-true-client-ip`, so internal/private ranges need not be trusted. For non-CF deployments where the real IP is the socket IP, set this to e.g. `192.168.0.0/16,10.0.0.0/8,172.16.0.0/12`. Can also be set in `config.json → variables`. |
 | `CF_USERNAME` | — | SAP BTP user email for CF API login and BTP account discovery (required for subaccount refresh and destination refresh) |
 | `CF_PASSWORD` | — | SAP BTP user password (same credential used for CF API and BTP account discovery) |
 | `RESTRICTED_SUBACCOUNT_IDS` | — | Comma-separated list of **subaccount IDs** whose destinations and AOD features are completely blocked. Matching subaccounts always have `manageDestinations` and `useAOD` forced to `false` in every API response regardless of stored config, and are visually marked as **Restricted** in the Config → Subaccounts table, the Subaccount Detail modal, and the Home page column headers. Any attempt to resolve CF service credentials or discover service keys for a restricted subaccount is rejected server-side and logged as a warning. Can also be set in `config.json → variables`. |
@@ -730,12 +730,15 @@ This writes `server/config/btp-endpoints.json` with egress and ingress IPs for e
 |----------|-------------|
 | `SYNC_NO_IP_PROTECTION` | Set to `true` or `1` to disable IP checking entirely (e.g. for local dev without `btp-endpoints.json`). Default: off. |
 | `SYNC_WHITELIST_IPS` | Comma-separated extra IPs or CIDR blocks to allow in addition to BTP egress IPs. Example: `203.0.113.5,10.0.0.0/8`. |
-| `SYNC_INTERNAL_IP_WHITELIST` | Comma-separated CIDRs for internal/private network ranges. Default: `192.168.0.0/16,10.0.0.0/8,172.16.0.0/12`. Set to empty string to disable. |
+| `SYNC_INTERNAL_IP_WHITELIST` | Comma-separated CIDRs for internal/private network ranges. Default: empty. For non-CF deployments set to e.g. `192.168.0.0/16,10.0.0.0/8,172.16.0.0/12`. |
 
 All variables can be set as environment variables or under `config.json → variables`. Environment variables take precedence.
 
 > [!NOTE]
 > IP whitelisting is only active when `server/config/btp-endpoints.json`, `SYNC_WHITELIST_IPS`, or `SYNC_INTERNAL_IP_WHITELIST` contributes at least one entry to the allowlist. Without any entries, no IP check is performed regardless of `SYNC_NO_IP_PROTECTION`. HMAC authentication (`SYNC_KEY`) remains independent and is enforced separately.
+
+> [!NOTE]
+> On SAP BTP Cloud Foundry, the GoRouter injects an `x-cf-true-client-ip` header containing the real caller IP before forwarding the request. The server reads this header first for all IP-related decisions (whitelisting, logging, audit trail). It falls back to the socket-level IP only when the header is absent. Because the real client IP is always available via this header on CF, `SYNC_INTERNAL_IP_WHITELIST` defaults to empty — there is no need to whitelist private ranges just because traffic passes through internal CF infrastructure. For non-CF deployments where no such header is injected, populate `SYNC_INTERNAL_IP_WHITELIST` if you need to allow calls from private network ranges.
 
 ## Gzip Compression
 

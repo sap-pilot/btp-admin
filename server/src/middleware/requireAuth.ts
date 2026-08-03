@@ -7,6 +7,18 @@ import { getSyncKey, getSyncNoIpProtection, getSyncWhitelistIPs, getSyncInternal
 import { config } from '../config.js';
 import { logger } from '../logger.js';
 
+/**
+ * Resolve the true client IP for a request.
+ * On SAP BTP Cloud Foundry, the GoRouter injects x-cf-true-client-ip with the
+ * real caller IP before forwarding the request. When present, use it; otherwise
+ * fall back to the socket-level IP (req.ip / remoteAddress).
+ */
+export function getClientIp(req: Request): string {
+  const header = req.headers['x-cf-true-client-ip'];
+  if (typeof header === 'string' && header.trim()) return header.trim();
+  return req.ip ?? req.socket.remoteAddress ?? '';
+}
+
 // --- IP whitelist helpers (CIDR matching, no external deps) ---
 
 function normalizeIp(ip: string): string {
@@ -99,13 +111,13 @@ export function requireSyncAuth(req: Request, res: Response, next: NextFunction)
 
   // SYNC_KEY not configured → refuse with 503 (server misconfiguration)
   if (!syncKey) {
-    logger.warn({ ip: req.ip, path: req.path }, 'Sync request rejected: SYNC_KEY is not configured');
+    logger.warn({ ip: getClientIp(req), path: req.path }, 'Sync request rejected: SYNC_KEY is not configured');
     res.status(503).json({ error: 'Sync endpoint unavailable: SYNC_KEY is not configured on this server' });
     return;
   }
 
   // Loopback: always allow for local dev
-  const ip = req.ip ?? req.socket.remoteAddress ?? '';
+  const ip = getClientIp(req);
   if (ip === '127.0.0.1' || ip === '::1' || ip === '::ffff:127.0.0.1') { next(); return; }
 
   // IP whitelist: when btp-endpoints.json is present and SYNC_NO_IP_PROTECTION is not set,

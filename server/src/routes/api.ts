@@ -4,7 +4,7 @@ import { syncFromRemote, type SyncStats } from '../services/syncService.js';
 import { config } from '../config.js';
 import { logger } from '../logger.js';
 import { getXsuaaConfig, readSessionFromRequest } from '../services/authService.js';
-import { requireAuth, requireAdmin } from '../middleware/requireAuth.js';
+import { requireAuth, requireAdmin, getClientIp } from '../middleware/requireAuth.js';
 import type { AuthRequest } from '../middleware/requireAuth.js';
 import { userLabel } from '../services/authService.js';
 import { subscribe } from '../services/liveEvents.js';
@@ -61,7 +61,7 @@ router.post('/sync', requireAuth, async (req, res, next) => {
   try {
     const { force } = (req.body as { force?: boolean } | undefined) ?? {};
     const user = (req as AuthRequest).authSession ? userLabel((req as AuthRequest).authSession!) : 'anon';
-    logger.info({ from: req.ip, user, force: !!force }, 'On-demand sync triggered');
+    logger.info({ from: getClientIp(req), user, force: !!force }, 'On-demand sync triggered');
     const stats: SyncStats = await syncFromRemote(config.SYNC_REMOTE, { selfBaseUrl: config.SELF_URL, force: !!force });
     res.json({ ok: !stats.error && !stats.busy, ...stats });
   } catch (err) {

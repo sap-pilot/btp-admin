@@ -8,7 +8,7 @@ import { notifyCallbacks } from '../services/syncService.js';
 import { emit } from '../services/liveEvents.js';
 import { logger } from '../logger.js';
 import { userLabel } from '../services/authService.js';
-import { requireAuth, requireAdmin } from '../middleware/requireAuth.js';
+import { requireAuth, requireAdmin, getClientIp } from '../middleware/requireAuth.js';
 import type { AuthRequest } from '../middleware/requireAuth.js';
 import type { EvaluationMode, ServiceSummary } from '../types/index.js';
 
@@ -192,7 +192,7 @@ router.get('/services', (_req, res) => {
 router.get('/check/:name', requireAuth, async (req, res, next) => {
   const name = req.params['name'] as string;
   const user = (req as AuthRequest).authSession ? userLabel((req as AuthRequest).authSession!) : 'anon';
-  logger.info({ service: name, from: req.ip, user }, 'Manual test triggered');
+  logger.info({ service: name, from: getClientIp(req), user }, 'Manual test triggered');
   try {
     const result = await checkService(name);
     res.json(result);
@@ -212,7 +212,7 @@ router.post('/star/:name/:filename', requireAuth, async (req, res, next) => {
     }
     const user = (req as AuthRequest).authSession ? userLabel((req as AuthRequest).authSession!) : 'anon';
     await starResponseFile(serviceName, filename, star);
-    logger.info({ service: serviceName, filename, star, user, from: req.ip }, star ? 'Response file starred' : 'Response file unstarred');
+    logger.info({ service: serviceName, filename, star, user, from: getClientIp(req) }, star ? 'Response file starred' : 'Response file unstarred');
     notifyCallbacks();
     emit(`service:${serviceName}`, { service: serviceName, ts: Date.now() });
     res.json({ ok: true });
