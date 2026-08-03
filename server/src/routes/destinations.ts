@@ -7,6 +7,7 @@ import {
   refreshDestinations,
   refreshSubaccountDestinations,
   searchDestinations,
+  getSubaccountDestinationNames,
   getDestination,
   exportDestination,
   saveDestinationEntry,
@@ -61,6 +62,20 @@ router.post('/:region/:subdomain/refresh', requireAdmin, async (req, res, next) 
     const username = authReq.authSession?.email || authReq.authSession?.firstName || 'admin';
     const result   = await refreshSubaccountDestinations(region, subdomain, username);
     res.json({ ok: true, result });
+  } catch (err) { next(err); }
+});
+
+// ── Subaccount destination names (proactive load) ────────────────────────────
+
+router.get('/:region/:subdomain', requireAdmin, async (req, res, next) => {
+  try {
+    const { region, subdomain } = req.params as { region: string; subdomain: string };
+    if (await isSubaccountRestricted(region, subdomain)) return void res.status(403).json(RESTRICTED);
+    const authReq  = req as AuthRequest;
+    const username = authReq.authSession?.email || authReq.authSession?.firstName || 'admin';
+    const force    = req.query['force'] === '1';
+    const result   = await getSubaccountDestinationNames(region, subdomain, username, force);
+    res.json({ ok: true, ...result });
   } catch (err) { next(err); }
 });
 

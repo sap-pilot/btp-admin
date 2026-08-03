@@ -5,7 +5,7 @@ import { homedir } from 'node:os';
 import { config } from '../config.js';
 import { logger } from '../logger.js';
 import { getOrRefreshToken, fetchWithRateLimit } from './cfLoginService.js';
-import { getRestrictedIds } from './configService.js';
+import { getRestrictedIds, getDestinationRefreshDeltaMs } from './configService.js';
 import { readSubaccounts, type SubaccountEntry } from './subaccountsService.js';
 import { notifyCallbacks } from './syncService.js';
 import { emit, emitImmediate } from './liveEvents.js';
@@ -14,6 +14,19 @@ const BA_DIR         = join(homedir(), '.ba');
 const KEYS_PATH      = join(BA_DIR, 'destination-keys.json');
 const TOKENS_PATH    = join(BA_DIR, 'destination-tokens.json');
 const LOCAL_DEST_DIR = join(config.LOCAL_STORE_DIR, 'dest');
+
+// In-memory record of when each subaccount's destinations were last successfully fetched from the API.
+// Keyed by "${region}/${subdomain}". Resets on server restart (intentional: first open after restart always refreshes).
+const lastRefreshTs = new Map<string, number>();
+
+async function getLocalDestinationNames(region: string, subdomain: string): Promise<string[]> {
+  const destDir = join(LOCAL_DEST_DIR, region, subdomain);
+  const entries = await readdir(destDir).catch(() => [] as string[]);
+  return entries
+    .filter(f => f.endsWith('.json') && !f.endsWith('.deleted.json'))
+    .map(f => f.slice(0, -5))
+    .sort();
+}
 
 function isSensitiveField(key: string): boolean {
   const k = key.toLowerCase();
@@ -594,6 +607,7 @@ export async function refreshDestinations(username = 'system'): Promise<RefreshR
       }
 
       logger.info({ location, count: apiNames.size }, `Destinations refreshed for ${location}`);
+      lastRefreshTs.set(location, Date.now());
       refreshed++;
     } catch (err) {
       const msg = String(err);
@@ -692,6 +706,7 @@ export async function refreshSubaccountDestinations(region: string, subdomain: s
       }
 
       logger.info({ location, count: apiNames.size }, `Destinations refreshed for ${location}`);
+      lastRefreshTs.set(location, Date.now());
     }
   } catch (err) {
     const msg = String(err);
@@ -711,6 +726,41 @@ export async function refreshSubaccountDestinations(region: string, subdomain: s
   }
 
   return { refreshed, received, created, updated, deleted, errors: issues };
+}
+
+// ─── Public: proactive subaccount destination load ────────────────────────────
+
+export interface SubaccountDestNamesResult {
+  names:     string[];
+  refreshed: boolean;
+  errors:    string[];
+}
+
+/**
+ * Returns destination names for a subaccount, proactively refreshing from the
+ * Destination API if the cached data is older than DESTINATION_REFRESH_DELTA_MS.
+ * When force=true the refresh always runs regardless of age.
+ */
+export async function getSubaccountDestinationNames(
+  region:    string,
+  subdomain: string,
+  username:  string,
+  force      = false,
+): Promise<SubaccountDestNamesResult> {
+  const key   = `${region}/${subdomain}`;
+  const delta = getDestinationRefreshDeltaMs();
+  const last  = lastRefreshTs.get(key) ?? 0;
+  const stale = force || (Date.now() - last > delta);
+
+  if (stale) {
+    logger.info({ location: key, force, ageSec: Math.round((Date.now() - last) / 1000) }, 'Proactive destination refresh');
+    const result = await refreshSubaccountDestinations(region, subdomain, username);
+    const names  = await getLocalDestinationNames(region, subdomain);
+    return { names, refreshed: true, errors: result.errors };
+  }
+
+  const names = await getLocalDestinationNames(region, subdomain);
+  return { names, refreshed: false, errors: [] };
 }
 
 // ─── Public: restriction helper ──────────────────────────────────────────────

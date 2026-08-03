@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import {
-  Download, Eye, EyeOff, GitCompare, Lock, Plus, RefreshCw, RotateCcw, Save, Search, Send, Trash2, Upload, X,
+  Check, Download, Eye, EyeOff, GitCompare, Lock, PanelLeft, Plus, RefreshCw, RotateCcw, Save, Search, Send, Trash2, Upload, X,
 } from 'lucide-react';
 import { useAuth } from '@/hooks/useAuth';
 import type { SubaccountEntry } from '@/components/config/SubaccountsTable';
@@ -571,6 +571,9 @@ export default function SubaccountDestModal({ org, allNames, initialName, onClos
   const [isSaving,    setIsSaving]    = useState(false);
   const [isImporting, setIsImporting] = useState(false);
 
+  // Left-panel visibility toggle
+  const [showList, setShowList] = useState(true);
+
   // Create mode (new destination from scratch)
   const [isCreating,    setIsCreating]    = useState(false);
   const [newName,       setNewName]       = useState('');
@@ -583,7 +586,10 @@ export default function SubaccountDestModal({ org, allNames, initialName, onClos
   const [isLoadingChangelog, setIsLoadingChangelog] = useState(false);
 
   // Per-subaccount refresh
-  const [isRefreshing, setIsRefreshing] = useState(false);
+  type RefreshStatus = 'idle' | 'refreshing' | 'refreshed';
+  const [refreshStatus, setRefreshStatus] = useState<RefreshStatus>('idle');
+  const [refreshError,  setRefreshError]  = useState('');
+  const refreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Save banner
   const [saveBanner,     setSaveBanner]     = useState<SaveBanner | null>(null);
@@ -638,13 +644,40 @@ export default function SubaccountDestModal({ org, allNames, initialName, onClos
     );
   }, [selectedName, org.region, org.subdomain]);
 
-  // Close on Escape; cleanup banner timer on unmount
+  // Proactive destination load on mount — refreshes from API if data is stale
+  useEffect(() => {
+    void (async () => {
+      setRefreshStatus('refreshing');
+      try {
+        const res  = await fetch(`/api/destinations/${enc(org.region)}/${enc(org.subdomain)}`);
+        const json = await res.json() as { ok: boolean; names: string[]; refreshed: boolean; errors: string[] };
+        if (!json.ok) {
+          setRefreshError((json.errors ?? []).join('; ') || 'Failed to load destinations');
+          setRefreshStatus('idle');
+          return;
+        }
+        if (json.names.length > 0) setLocalAllNames(json.names);
+        if (json.refreshed) {
+          setRefreshStatus('refreshed');
+          refreshTimerRef.current = setTimeout(() => setRefreshStatus('idle'), 2000);
+        } else {
+          setRefreshStatus('idle');
+        }
+      } catch (err) {
+        setRefreshError(String(err));
+        setRefreshStatus('idle');
+      }
+    })();
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Close on Escape; cleanup timers on unmount
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
     document.addEventListener('keydown', onKey);
     return () => {
       document.removeEventListener('keydown', onKey);
-      if (bannerTimerRef.current) clearTimeout(bannerTimerRef.current);
+      if (bannerTimerRef.current)  clearTimeout(bannerTimerRef.current);
+      if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current);
     };
   }, [onClose]);
 
@@ -812,20 +845,26 @@ export default function SubaccountDestModal({ org, allNames, initialName, onClos
   }
 
   async function handleRefresh() {
-    setIsRefreshing(true);
+    if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current);
+    setRefreshStatus('refreshing');
+    setRefreshError('');
     try {
-      await fetch(`/api/destinations/${enc(org.region)}/${enc(org.subdomain)}/refresh`, { method: 'POST' });
-      // Reload destination list for this org
-      const listRes  = await fetch('/api/destinations');
-      const listJson = await listRes.json() as { ok: boolean; data: Record<string, Array<{ name: string }>> };
-      if (listJson.ok) {
-        const orgId   = org.org?.orgId ?? '';
-        const updated = (listJson.data[orgId] ?? []).map(d => d.name).sort();
-        if (updated.length > 0) setLocalAllNames(updated);
+      const res  = await fetch(`/api/destinations/${enc(org.region)}/${enc(org.subdomain)}?force=1`);
+      const json = await res.json() as { ok: boolean; names: string[]; refreshed: boolean; errors: string[] };
+      if (!res.ok || !json.ok) {
+        setRefreshError((json.errors ?? []).join('; ') || `HTTP ${res.status}`);
+        setRefreshStatus('idle');
+        return;
       }
-      // Reload current destination properties if one is selected
+      if (json.names.length > 0) setLocalAllNames(json.names);
       if (selectedName) await loadDest(selectedName);
-    } catch { /* ignore */ } finally { setIsRefreshing(false); }
+      if (activeTab === 'changelog' && selectedName) await loadChangelog(selectedName);
+      setRefreshStatus('refreshed');
+      refreshTimerRef.current = setTimeout(() => setRefreshStatus('idle'), 2000);
+    } catch (err) {
+      setRefreshError(String(err));
+      setRefreshStatus('idle');
+    }
   }
 
   const tabCls = (active: boolean) =>
@@ -893,12 +932,16 @@ export default function SubaccountDestModal({ org, allNames, initialName, onClos
                   </button>
                   <button
                     onClick={() => void handleRefresh()}
-                    disabled={isRefreshing || isSaving || isImporting}
-                    className={btnOutline}
-                    title="Refresh destinations for this subaccount"
+                    disabled={refreshStatus === 'refreshing' || isSaving || isImporting}
+                    className={refreshStatus === 'refreshed'
+                      ? `${btnBase} bg-green-500/10 border border-green-500/30 text-green-600 dark:text-green-400`
+                      : btnOutline}
+                    title="Force-refresh destinations from the Destination API"
                   >
-                    <RefreshCw className={`h-3.5 w-3.5 ${isRefreshing ? 'animate-spin' : ''}`} />
-                    {isRefreshing ? 'Refreshing…' : 'Refresh'}
+                    {refreshStatus === 'refreshed'
+                      ? <><Check className="h-3.5 w-3.5" /> Refreshed</>
+                      : <><RefreshCw className={`h-3.5 w-3.5 ${refreshStatus === 'refreshing' ? 'animate-spin' : ''}`} /> {refreshStatus === 'refreshing' ? 'Refreshing…' : 'Refresh'}</>
+                    }
                   </button>
                   <div className="w-px h-4 bg-border mx-0.5" />
                 </>
@@ -910,10 +953,20 @@ export default function SubaccountDestModal({ org, allNames, initialName, onClos
           </div>
         </div>
 
+        {/* Refresh error banner */}
+        {refreshError && (
+          <div className="px-4 py-2 bg-destructive/5 border-b border-destructive/20 text-destructive text-xs flex items-center gap-2 shrink-0">
+            <span className="flex-1">{refreshError}</span>
+            <button onClick={() => setRefreshError('')} className="shrink-0 p-0.5 rounded hover:bg-destructive/10 transition-colors">
+              <X className="h-3 w-3" />
+            </button>
+          </div>
+        )}
+
         {/* Body */}
         <div className="flex flex-1 min-h-0">
           {/* Left panel: destination list */}
-          <div className="w-60 border-r border-border flex flex-col shrink-0">
+          {showList && <div className="w-60 border-r border-border flex flex-col shrink-0">
             <div className="px-2 py-2 border-b border-border">
               <div className="relative">
                 <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground pointer-events-none" />
@@ -956,11 +1009,18 @@ export default function SubaccountDestModal({ org, allNames, initialName, onClos
                 {selectedNames.size} selected · Ctrl/Shift+click to select
               </div>
             )}
-          </div>
+          </div>}
 
           {/* Right panel */}
           <div className="flex-1 flex flex-col min-w-0">
             <div className="flex items-center border-b border-border shrink-0 px-2">
+              <button
+                onClick={() => setShowList(v => !v)}
+                className={`p-1.5 mr-1 rounded transition-colors ${showList ? 'text-muted-foreground hover:text-foreground hover:bg-accent' : 'bg-accent text-foreground'}`}
+                title={showList ? 'Hide destination list' : 'Show destination list'}
+              >
+                <PanelLeft className="h-3.5 w-3.5" />
+              </button>
               <button className={tabCls(activeTab === 'properties')} onClick={() => handleTabChange('properties')}>
                 {isCreating ? 'New Destination' : 'Properties'}
               </button>

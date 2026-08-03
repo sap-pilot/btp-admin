@@ -98,3 +98,17 @@ export function getRestrictedIds(): Set<string> {
   const raw = process.env.RESTRICTED_SUBACCOUNT_IDS ?? getConfig().variables?.['RESTRICTED_SUBACCOUNT_IDS'] ?? '';
   return new Set(raw.split(',').map(s => s.trim()).filter(Boolean));
 }
+
+/**
+ * Returns the destination staleness threshold in milliseconds.
+ * DESTINATION_REFRESH_DELTA_MS env var takes precedence over config.variables entry.
+ * Default: 3 600 000 ms (1 hour).
+ */
+export function getDestinationRefreshDeltaMs(): number {
+  const raw = process.env.DESTINATION_REFRESH_DELTA_MS ?? getConfig().variables?.['DESTINATION_REFRESH_DELTA_MS'];
+  if (raw) {
+    const n = parseInt(raw, 10);
+    if (!isNaN(n) && n > 0) return n;
+  }
+  return 3_600_000;
+}
