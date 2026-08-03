@@ -25,8 +25,13 @@ router.get('/subaccounts', requireAuth, async (_req, res, next) => {
 
 router.post('/subaccounts/refresh', requireAdmin, async (req, res, next) => {
   try {
-    const { data, warnings } = await refreshSubaccounts(reqUser(req));
-    res.json({ ok: true, data, warnings });
+    const force  = req.query['force'] === 'true';
+    const result = await refreshSubaccounts(reqUser(req), force);
+    if (result.skipped) {
+      res.json({ ok: false, busy: true, reason: 'Refresh already in progress' });
+      return;
+    }
+    res.json({ ok: true, data: result.data, warnings: result.warnings });
   } catch (err) { next(err); }
 });
 

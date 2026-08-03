@@ -71,7 +71,7 @@ router.post('/sync', requireAuth, async (req, res, next) => {
 
 // View endpoint: XSUAA session required; restricted to resp/{service}/{filename} only.
 // Used by the UI to display response JSON, screenshots, console logs, and page source.
-// Sync peers use /browse + /batch-download instead.
+// Sync peers use /api/sync/browse + /api/sync/batch instead.
 router.get('/view', requireAuth, async (req, res, next) => {
   try {
     const rawPath = typeof req.query['path'] === 'string' ? req.query['path'] : '';

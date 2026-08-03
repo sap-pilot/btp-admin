@@ -62,8 +62,9 @@ export default function ConfigPage() {
   const importRef = useRef<HTMLInputElement>(null);
 
   // Confirmation dialogs
-  const [showRefreshDialog, setShowRefreshDialog] = useState(false);
-  const [showImportDialog,  setShowImportDialog]  = useState(false);
+  const [showRefreshDialog,      setShowRefreshDialog]      = useState(false);
+  const [showForceRefreshDialog, setShowForceRefreshDialog] = useState(false);
+  const [showImportDialog,       setShowImportDialog]       = useState(false);
   const [importDialogBody,  setImportDialogBody]  = useState('');
   const [pendingImportData, setPendingImportData] = useState<Record<string, unknown> | null>(null);
 
@@ -185,15 +186,17 @@ export default function ConfigPage() {
 
   function handleSasChange(data: SubaccountEntry[]) { setSasData(data); setIsSasDirty(true); }
 
-  async function handleRefresh() {
+  async function handleRefresh(force = false) {
     setShowRefreshDialog(false);
+    setShowForceRefreshDialog(false);
     clearTimeout(progressTimerRef.current);
     setIsRefreshing(true);
     setError('');
     setRefreshProgress({ pct: 0, message: 'Starting refresh…', error: null });
     try {
-      const res  = await fetch('/api/config/subaccounts/refresh', { method: 'POST' });
-      const json = await res.json() as { ok: boolean; data?: SubaccountEntry[]; warnings?: string[]; error?: string };
+      const url  = force ? '/api/config/subaccounts/refresh?force=true' : '/api/config/subaccounts/refresh';
+      const res  = await fetch(url, { method: 'POST' });
+      const json = await res.json() as { ok: boolean; busy?: boolean; data?: SubaccountEntry[]; warnings?: string[]; error?: string };
       if (!json.ok) throw new Error(json.error ?? 'Refresh failed');
       setSasData(json.data ?? []);
       setOriginalSas(json.data ?? []);
@@ -528,7 +531,7 @@ export default function ConfigPage() {
             data={sasData}
             onChange={handleSasChange}
             isDirty={isSasDirty}
-            onRefresh={() => setShowRefreshDialog(true)}
+            onRefresh={() => isRefreshing ? setShowForceRefreshDialog(true) : setShowRefreshDialog(true)}
             isRefreshing={isRefreshing}
             onReset={handleSasReset}
             isSaving={isSavingSas}
@@ -644,6 +647,22 @@ export default function ConfigPage() {
           <AlertDialogFooter>
             <AlertDialogCancel onClick={() => setShowRefreshDialog(false)}>Cancel</AlertDialogCancel>
             <AlertDialogAction onClick={() => void handleRefresh()}>Yes, proceed</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* Force subaccounts refresh dialog */}
+      <AlertDialog open={showForceRefreshDialog}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Subaccount refresh already in progress</AlertDialogTitle>
+            <AlertDialogDescription>
+              A subaccount refresh is already running. Would you like to force another refresh on top of it?
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel onClick={() => setShowForceRefreshDialog(false)}>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={() => void handleRefresh(true)}>Yes, force another subaccount refresh</AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
