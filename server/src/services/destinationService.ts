@@ -890,7 +890,7 @@ export interface SubaccountDestNamesResult {
 
 /**
  * Returns destination names for a subaccount, proactively refreshing from the
- * Destination API if the cached data is older than DESTINATION_REFRESH_DELAY_SECONDS.
+ * Destination API if the cached data is older than DESTINATIONS_AUTO_SUBACCOUNT_REFRESH_MINS.
  * When force=true the refresh always runs regardless of age.
  */
 export async function getSubaccountDestinationNames(
@@ -902,7 +902,7 @@ export async function getSubaccountDestinationNames(
   const key   = `${region}/${subdomain}`;
   const delta = getAutoSubaccountRefreshMs();
   const last  = lastRefreshTs.get(key) ?? 0;
-  const stale = force || (Date.now() - last > delta);
+  const stale = force || (delta > 0 && Date.now() - last > delta);
 
   if (stale) {
     logger.info({ location: key, force, ageSec: Math.round((Date.now() - last) / 1000) }, 'Proactive destination refresh');

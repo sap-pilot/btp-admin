@@ -533,14 +533,16 @@ export default function DestinationOverview() {
 
       {/* Tab bar */}
       {(filteredTabs.length > 0 || visibleTabs.length > 0) && (
-        <div className="flex items-center border-b border-border shrink-0 px-2 overflow-x-auto">
-          {filteredTabs.map(te => (
-            <button key={te.tab} className={tabCls(!isChangeHistory && te === activeTabEntry)} onClick={() => navigate(`/destinations/${encodeURIComponent(te.tab)}`)}>
-              {te.tab}
-            </button>
-          ))}
+        <div className="flex items-stretch border-b border-border shrink-0 px-2">
+          <div className="flex items-center overflow-x-auto flex-1 min-w-0">
+            {filteredTabs.map(te => (
+              <button key={te.tab} className={tabCls(!isChangeHistory && te === activeTabEntry)} onClick={() => navigate(`/destinations/${encodeURIComponent(te.tab)}`)}>
+                {te.tab}
+              </button>
+            ))}
+          </div>
           <button
-            className={`${tabCls(isChangeHistory)} flex items-center gap-1`}
+            className={`${tabCls(isChangeHistory)} flex items-center gap-1 shrink-0`}
             onClick={() => navigate('/destinations/change-history')}
           >
             <History className="h-3.5 w-3.5" />

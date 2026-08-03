@@ -100,43 +100,30 @@ export function getRestrictedIds(): Set<string> {
 }
 
 /**
- * Returns the destination staleness threshold in milliseconds.
- * DESTINATION_REFRESH_DELAY_SECONDS env var takes precedence over config.variables entry.
- * Default: 600 s (10 minutes).
- */
-export function getDestinationRefreshDeltaMs(): number {
-  const raw = process.env.DESTINATION_REFRESH_DELAY_SECONDS ?? getConfig().variables?.['DESTINATION_REFRESH_DELAY_SECONDS'];
-  if (raw) {
-    const n = parseInt(raw, 10);
-    if (!isNaN(n) && n > 0) return n * 1000;
-  }
-  return 600_000;
-}
-
-/**
  * Per-subaccount proactive refresh threshold in milliseconds.
- * DESTINATIONS_AUTO_SUBACCOUNT_REFRESH_MINS takes precedence; falls back to
- * DESTINATION_REFRESH_DELAY_SECONDS (seconds); default 10 minutes.
+ * DESTINATIONS_AUTO_SUBACCOUNT_REFRESH_MINS replaces DESTINATION_REFRESH_DELAY_SECONDS.
+ * Fractional values supported (e.g. 0.5 = 30 s). Default: 10 minutes.
+ * Set to 0 to disable proactive refresh entirely.
  */
 export function getAutoSubaccountRefreshMs(): number {
   const mins = process.env.DESTINATIONS_AUTO_SUBACCOUNT_REFRESH_MINS ?? getConfig().variables?.['DESTINATIONS_AUTO_SUBACCOUNT_REFRESH_MINS'];
-  if (mins) {
+  if (mins !== undefined && mins !== '') {
     const n = parseFloat(mins);
-    if (!isNaN(n) && n > 0) return n * 60_000;
+    return (!isNaN(n) && n > 0) ? n * 60_000 : 0;
   }
-  return getDestinationRefreshDeltaMs();
+  return 10 * 60_000; // default 10 minutes
 }
 
 /**
  * Global (all-subaccounts) auto-refresh threshold in milliseconds.
  * DESTINATION_AUTO_GLOBAL_REFRESH_HRS supports fractional values (e.g. 1.5 = 90 min).
- * Env var takes precedence over config.json → variables. Default: 6 hours.
+ * Default: 6 hours. Set to 0 to disable auto-refresh on page open.
  */
 export function getAutoGlobalRefreshMs(): number {
   const raw = process.env.DESTINATION_AUTO_GLOBAL_REFRESH_HRS ?? getConfig().variables?.['DESTINATION_AUTO_GLOBAL_REFRESH_HRS'];
-  if (raw) {
+  if (raw !== undefined && raw !== '') {
     const n = parseFloat(raw);
-    if (!isNaN(n) && n > 0) return n * 3_600_000;
+    return (!isNaN(n) && n > 0) ? n * 3_600_000 : 0;
   }
-  return 6 * 3_600_000;
+  return 6 * 3_600_000; // default 6 hours
 }
