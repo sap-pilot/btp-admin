@@ -1160,19 +1160,24 @@ export async function listDestinations(): Promise<Record<string, Array<{ name: s
   return result;
 }
 
-// ─── Sync hook ────────────────────────────────────────────────────────────────
-// When a sync from remote downloads dest/changelog.md, parse the topmost global
-// refresh timestamp and update globalRefreshTs so the next auto-refresh check
-// does not re-run a refresh the remote already completed.
-registerOnDestChangelogSynced(() => {
-  void (async () => {
-    try {
-      const text = await readFile(join(LOCAL_DEST_DIR, 'changelog.md'), 'utf-8');
-      const ts   = parseGlobalRefreshTsFromChangelog(text);
-      if (ts !== null && (globalRefreshTs === null || ts > globalRefreshTs)) {
-        globalRefreshTs = ts;
-        logger.info({ ts: new Date(ts).toISOString() }, 'globalRefreshTs updated from synced changelog');
-      }
-    } catch { /* changelog may not exist */ }
-  })();
-});
+// ─── Startup + sync: restore globalRefreshTs from changelog ──────────────────
+// Reads dest/changelog.md and updates globalRefreshTs from the topmost global
+// refresh header. Called at module init and again whenever the file is synced
+// from a remote peer, so local dev servers (and consumers) avoid triggering a
+// redundant global refresh that was already done recently.
+async function restoreGlobalRefreshTsFromChangelog(): Promise<void> {
+  try {
+    const text = await readFile(join(LOCAL_DEST_DIR, 'changelog.md'), 'utf-8');
+    const ts   = parseGlobalRefreshTsFromChangelog(text);
+    if (ts !== null && (globalRefreshTs === null || ts > globalRefreshTs)) {
+      globalRefreshTs = ts;
+      logger.info({ ts: new Date(ts).toISOString() }, 'globalRefreshTs restored from changelog');
+    }
+  } catch { /* changelog does not exist yet */ }
+}
+
+// Run on module load (server startup)
+void restoreGlobalRefreshTsFromChangelog();
+
+// Re-run whenever dest/changelog.md is downloaded from a remote peer
+registerOnDestChangelogSynced(() => void restoreGlobalRefreshTsFromChangelog());
