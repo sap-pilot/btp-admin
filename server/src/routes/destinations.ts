@@ -104,7 +104,7 @@ router.post('/:region/:subdomain/refresh', requireAdmin, async (req, res, next) 
     if (await isSubaccountRestricted(region, subdomain)) return void res.status(403).json(RESTRICTED);
     const authReq  = req as AuthRequest;
     const username = authReq.authSession?.email || authReq.authSession?.firstName || 'admin';
-    const result   = await refreshSubaccountDestinations(region, subdomain, username);
+    const result   = await refreshSubaccountDestinations(region, subdomain, username, 'manual');
     res.json({ ok: true, result });
   } catch (err) { next(err); }
 });
