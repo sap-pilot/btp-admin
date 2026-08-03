@@ -1,5 +1,14 @@
 # Changelog
 
+## [v1.2.2] - 2026-08-03
+
+### Added
+- **`x-cf-true-client-ip` header support** — all client IP resolution (sync IP whitelisting, request logging, user action tracing, login/logout audit) now reads the `x-cf-true-client-ip` header first (case-insensitive) and falls back to the socket-level IP only when the header is absent; on SAP BTP Cloud Foundry the GoRouter injects this header with the real caller IP before forwarding, so the true client IP is always used for security decisions regardless of internal routing hops
+- **Login/logout IP logging** — user login and logout events now include the resolved client IP in the log entry alongside the existing user field
+
+### Changed
+- **`SYNC_INTERNAL_IP_WHITELIST` default changed to empty** — previously defaulted to `192.168.0.0/16,10.0.0.0/8,172.16.0.0/12`; on CF deployments the true client IP is always available via `x-cf-true-client-ip` so whitelisting RFC 1918 ranges is unnecessary and would mask misdirected internal traffic; for non-CF deployments where the socket IP is the real source, set this variable explicitly to the required private CIDRs
+
 ## [v1.2.1] - 2026-08-03
 
 ### Added

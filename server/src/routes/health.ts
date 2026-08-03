@@ -4,6 +4,7 @@ import { getService } from '../services/configService.js';
 import { listResponseFiles } from '../services/localStoreService.js';
 import { getEvaluationMode } from '../services/status/overrideService.js';
 import { logger } from '../logger.js';
+import { getClientIp } from '../middleware/requireAuth.js';
 
 const router = Router();
 
@@ -56,7 +57,7 @@ router.get('/:name', async (req: Request, res: Response, next: NextFunction) => 
     (req.headers['x-forwarded-host'] as string | undefined)?.split(',')[0]?.trim() ??
     (req.headers['host'] as string | undefined) ?? '';
 
-  logger.debug({ service: name, from: req.ip ?? 'unknown' }, 'Health check request received');
+  logger.debug({ service: name, from: getClientIp(req) || 'unknown' }, 'Health check request received');
 
   const evalMode = getEvaluationMode(name);
 
