@@ -308,8 +308,8 @@ export default function AppSidebar() {
           </div>
         )}
 
-        {/* Dynamic menus from settings.json — public items visible before login */}
-        {visibleMenus.map(menu => {
+        {/* Dynamic menus from settings.json — rendered only after settings resolves */}
+        {settings !== null && visibleMenus.map(menu => {
           const Icon = resolveIcon(menu.icon);
           const visibleSubmenus = menu.submenus.filter(s => !auth.enabled || auth.loggedIn || s.public);
 
