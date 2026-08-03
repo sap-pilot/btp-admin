@@ -104,22 +104,22 @@ const SA_DIFF_FIELDS = [
 function diffSubaccounts(before: SubaccountEntry[], after: SubaccountEntry[]): string {
   const beforeMap = new Map<string, SubaccountEntry>();
   const afterMap  = new Map<string, SubaccountEntry>();
-  for (const s of before) beforeMap.set(`${s.region}/${s.subaccountId}`, s);
-  for (const s of after)  afterMap.set(`${s.region}/${s.subaccountId}`,  s);
+  for (const s of before) beforeMap.set(s.subaccountId, s);
+  for (const s of after)  afterMap.set(s.subaccountId,  s);
 
   const lines: string[] = [];
-  for (const [key, s] of afterMap)  { if (!beforeMap.has(key)) lines.push(`+ ${key} (${s.subaccountName})`); }
-  for (const [key, s] of beforeMap) { if (!afterMap.has(key))  lines.push(`- ${key} (${s.subaccountName})`); }
+  for (const [id, s] of afterMap)  { if (!beforeMap.has(id)) lines.push(`+ ${id} (${s.subaccountName})`); }
+  for (const [id, s] of beforeMap) { if (!afterMap.has(id))  lines.push(`- ${id} (${s.subaccountName})`); }
 
-  for (const [key, bef] of beforeMap) {
-    const aft = afterMap.get(key);
+  for (const [id, bef] of beforeMap) {
+    const aft = afterMap.get(id);
     if (!aft) continue;
     const changes: string[] = [];
     for (const f of SA_DIFF_FIELDS) {
       if (String(bef[f]) !== String(aft[f]))
         changes.push(`    ${f}: ${JSON.stringify(bef[f])} → ${JSON.stringify(aft[f])}`);
     }
-    if (changes.length) { lines.push(`~ ${key} (${aft.subaccountName})`); lines.push(...changes); }
+    if (changes.length) { lines.push(`~ ${id} (${aft.subaccountName})`); lines.push(...changes); }
   }
   return lines.join('\n');
 }
@@ -137,9 +137,9 @@ function normalizeSubaccountPositions(data: SubaccountEntry[]): SubaccountEntry[
 
 function mergeSubaccounts(existing: SubaccountEntry[], fresh: SubaccountEntry[]): SubaccountEntry[] {
   type Editable = Pick<SubaccountEntry, 'alias' | 'groupIds' | 'pos' | 'inHomepage' | 'manageDestinations' | 'useAOD'>;
-  const editableByKey = new Map<string, Editable>();
+  const editableById = new Map<string, Editable>();
   for (const s of existing) {
-    editableByKey.set(`${s.region}/${s.subaccountId}`, {
+    editableById.set(s.subaccountId, {
       alias:              s.alias,
       groupIds:           s.groupIds,
       pos:                s.pos,
@@ -149,17 +149,16 @@ function mergeSubaccounts(existing: SubaccountEntry[], fresh: SubaccountEntry[])
     });
   }
 
-  const seenKeys = new Set<string>();
+  const seenIds = new Set<string>();
   const merged: SubaccountEntry[] = fresh.map((s, i) => {
-    const key = `${s.region}/${s.subaccountId}`;
-    seenKeys.add(key);
-    const prev = editableByKey.get(key);
+    seenIds.add(s.subaccountId);
+    const prev = editableById.get(s.subaccountId);
     return prev ? { ...s, ...prev } : { ...s, pos: i };
   });
 
   // Keep subaccounts from existing that did not appear in fresh (temporary access loss)
   for (const s of existing) {
-    if (!seenKeys.has(`${s.region}/${s.subaccountId}`)) merged.push(s);
+    if (!seenIds.has(s.subaccountId)) merged.push(s);
   }
   return merged;
 }
@@ -183,7 +182,7 @@ export async function refreshSubaccounts(user = 'system'): Promise<{ data: Subac
 
   const warnings: string[] = [];
 
-  // ── BTP CLI: login + collect all subaccounts across all global accounts ──
+  // ── BTP account API: login + collect all subaccounts across all global accounts ──
   type SaWithGa = { saRaw: import('./btpCliService.js').SaRaw; gaSubdomain: string };
   let allSas:     SaWithGa[]   = [];
   let sessionId:  string | null = null;
@@ -192,24 +191,24 @@ export async function refreshSubaccounts(user = 'system'): Promise<{ data: Subac
   try {
     sessionId  = await btpLogin(username, password);
     fetchedGas = await btpListGlobalAccounts(sessionId);
-    logger.info({ globalAccounts: fetchedGas.length }, 'BTP CLI: global accounts fetched');
+    logger.info({ globalAccounts: fetchedGas.length }, 'BTP: global accounts fetched');
     for (const ga of fetchedGas) {
       try {
         const sas = await btpListSubaccounts(sessionId, ga.subdomain);
         for (const saRaw of sas) allSas.push({ saRaw, gaSubdomain: ga.subdomain });
-        logger.info({ ga: ga.subdomain, subaccounts: sas.length }, 'BTP CLI: subaccounts fetched');
+        logger.info({ ga: ga.subdomain, subaccounts: sas.length }, 'BTP: subaccounts fetched');
       } catch (err) {
-        logger.warn({ ga: ga.subdomain, err }, 'BTP CLI: failed to list subaccounts for GA — skipping');
+        logger.warn({ ga: ga.subdomain, err }, 'BTP: failed to list subaccounts for GA — skipping');
       }
     }
   } catch (err) {
-    logger.warn({ err }, 'BTP CLI login / GA list failed — proceeding without BTP CLI data');
+    logger.warn({ err }, 'BTP login / GA list failed — proceeding without BTP account data');
     warnings.push(
-      'BTP CLI login failed — subaccount names, subscriptions, and services may be stale. Check CF_USERNAME / CF_PASSWORD.',
+      'Account discovery failed — subaccount names, subscriptions, and services may be stale. Check CF_USERNAME / CF_PASSWORD.',
     );
   }
 
-  // ── CF API: orgs + spaces (runs in parallel with BTP CLI per-SA processing) ──
+  // ── CF API: orgs + spaces (runs in parallel with BTP account API per-SA processing) ──
   const cfOrgMapPromise = (async () => {
     const cfOrgMap = new Map<string, { region: string; orgName: string; spaces: SpaceEntry[] }>();
     for (const region of regions) {
@@ -237,7 +236,7 @@ export async function refreshSubaccounts(user = 'system'): Promise<{ data: Subac
     return cfOrgMap;
   })();
 
-  // ── BTP CLI per-subaccount sequential processing ──
+  // ── BTP account API: per-subaccount sequential processing ──
   type SaResult = {
     orgInstances:   { orgId: string; orgName: string }[];
     subscriptions:  import('./btpCliService.js').SubscriptionInfo[];
@@ -264,7 +263,7 @@ export async function refreshSubaccounts(user = 'system'): Promise<{ data: Subac
           : new Map<string, string>();
         saResults.set(saRaw.guid, { orgInstances: envInstances, subscriptions, serviceInstRaw, plansMap });
       } catch (err) {
-        logger.warn({ sa: saRaw.guid, name: saRaw.displayName, err }, 'BTP CLI per-SA processing failed — skipping');
+        logger.warn({ sa: saRaw.guid, name: saRaw.displayName, err }, 'BTP per-SA processing failed — skipping');
         saResults.set(saRaw.guid, { orgInstances: [], subscriptions: [], serviceInstRaw: [], plansMap: new Map() });
       }
     }

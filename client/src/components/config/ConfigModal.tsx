@@ -53,7 +53,7 @@ export default function ConfigModal({ open, onClose }: Props) {
   function handleSasChange(data: SubaccountEntry[]) { setSasData(data); setIsSasDirty(true); }
 
   async function handleRefresh() {
-    if (!window.confirm('Refresh will re-fetch subaccounts from BTP CLI / CF API and merge with local edits. Continue?')) return;
+    if (!window.confirm('Refresh will re-fetch subaccounts from SAP BTP and merge with local edits. Continue?')) return;
     setIsRefreshing(true);
     setError('');
     try {
