@@ -152,7 +152,7 @@ export default function DestinationOverview() {
   const [archivedChangelogFiles, setArchivedChangelogFiles] = useState<string[]>([]);
   const [selectedArchive,        setSelectedArchive]        = useState('');
 
-  const deepLinkOpened   = useRef(false);
+  const deepLinkKey      = useRef(''); // last URL key that opened the modal
   const autoHideTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   async function fetchStatus() {
@@ -227,11 +227,17 @@ export default function DestinationOverview() {
 
   // Open modal from deep-link URL: /destinations/:region/:subdomain/:name[/:destTab]
   useEffect(() => {
-    if (deepLinkOpened.current || !regionParam || !subdomainParam || saData.length === 0) return;
+    if (!regionParam || !subdomainParam) {
+      deepLinkKey.current = ''; // navigated away — reset so the next deep-link always works
+      return;
+    }
+    const key = `${regionParam}/${subdomainParam}/${nameParam ?? ''}/${destTab ?? ''}`;
+    if (deepLinkKey.current === key) return; // already opened this exact URL
+    if (saData.length === 0) return; // wait for data
     const destSas = saData.filter(sa => sa.manageDestinations && !!sa.org?.orgId);
     const sa = destSas.find(sa => sa.region === regionParam && sa.subdomain === subdomainParam);
     if (!sa) return;
-    deepLinkOpened.current = true;
+    deepLinkKey.current = key;
     const names = (destData[saOrgId(sa)] ?? []).map(d => d.name).sort();
     const initialTab = destTab === 'history' ? 'changelog' : destTab === 'test' ? 'test' : 'properties';
     setModal({ sa, allNames: names, initialName: nameParam ?? names[0], initialTab });
