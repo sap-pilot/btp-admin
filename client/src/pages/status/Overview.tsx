@@ -94,7 +94,7 @@ export default function Overview() {
   const navigate = useNavigate();
   const auth = useAuth();
   const { theme } = useTheme();
-  const { toggle: toggleSidebar } = useSidebar();
+  const { toggle: toggleSidebar, collapsed } = useSidebar();
   const windowWidth = useWindowWidth();
   // max-w-7xl (1280px) page with px-4 (32px) → page content width
   // table-fixed: service col w-56 (224px) + stats col w-40 (160px) + 3×px-4 cells (96px)
@@ -339,7 +339,7 @@ const [statusFilter, setStatusFilter] = useState<'failed' | 'partial' | null>(()
           >
             <PanelLeft className="h-4 w-4" />
           </button>
-          <span className="text-sm font-semibold">Status Overview</span>
+          <span className={`text-sm font-semibold${!collapsed ? ' hidden sm:block' : ''}`}>Status Overview</span>
         </div>
 
         {/* Right: desktop controls */}

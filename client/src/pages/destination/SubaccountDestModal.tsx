@@ -219,16 +219,16 @@ function PropertiesTab({
               title={compareSelected ? 'Remove from comparison basket' : 'Add to comparison basket'}
             >
               <GitCompare className="h-3.5 w-3.5" />
-              {compareSelected ? 'In Compare' : 'Select for Compare'}
+              <span className="hidden sm:inline">{compareSelected ? 'In Compare' : 'Select for Compare'}</span>
             </button>
           )}
           <button onClick={onReset} disabled={!dirty || saving || importing} className={btnOutline}>
             <RotateCcw className="h-3.5 w-3.5" />
-            Reset
+            <span className="hidden sm:inline">Reset</span>
           </button>
           <button onClick={onSave} disabled={!name || !dirty || saving || importing} className={btnPrimary}>
             <Save className="h-3.5 w-3.5" />
-            {saving ? 'Saving…' : 'Save'}
+            <span className="hidden sm:inline">{saving ? 'Saving…' : 'Save'}</span>
           </button>
         </div>
       </div>
@@ -1013,7 +1013,7 @@ export default function SubaccountDestModal({ org, allNames, initialName, onClos
 
           {/* Right panel */}
           <div className="flex-1 flex flex-col min-w-0">
-            <div className="flex items-center border-b border-border shrink-0 px-2 min-h-[44px]">
+            <div className="flex items-center border-b border-border shrink-0 px-2 min-h-[45px]">
               <button
                 onClick={() => setShowList(v => !v)}
                 className={`p-1.5 mr-1 rounded transition-colors ${showList ? 'text-muted-foreground hover:text-foreground hover:bg-accent' : 'bg-accent text-foreground'}`}
@@ -1024,8 +1024,8 @@ export default function SubaccountDestModal({ org, allNames, initialName, onClos
               <button className={tabCls(activeTab === 'properties')} onClick={() => handleTabChange('properties')}>
                 {isCreating ? 'New Destination' : 'Properties'}
               </button>
-              <button className={tabCls(activeTab === 'changelog')} onClick={() => { setIsCreating(false); handleTabChange('changelog'); }}>Change History</button>
-              <button className={tabCls(activeTab === 'test')}      onClick={() => { setIsCreating(false); handleTabChange('test'); }}>Test Destination</button>
+              <button className={tabCls(activeTab === 'changelog')} onClick={() => { setIsCreating(false); handleTabChange('changelog'); }}>History</button>
+              <button className={tabCls(activeTab === 'test')}      onClick={() => { setIsCreating(false); handleTabChange('test'); }}>Test</button>
             </div>
 
             <div className="flex-1 min-h-0 overflow-hidden">

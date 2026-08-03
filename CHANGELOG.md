@@ -1,5 +1,19 @@
 # Changelog
 
+## [v1.2.1] - 2026-08-03
+
+### Added
+- **`DESTINATION_AUTO_GLOBAL_REFRESH_HRS`** — env var or `config.json → variables`; fractional values supported (e.g. `1.5` = 90 min); default 6 hours; when the Destination Overview page is opened the server checks whether `Date.now() − globalRefreshTs > DESTINATION_AUTO_GLOBAL_REFRESH_HRS × 3600000`; if stale (or never refreshed), a global destination refresh runs automatically in the background; `GET /api/destinations/status` returns `{ globalRefreshTs, autoGlobalRefreshHrs, autoSubaccountRefreshMins }`; `globalRefreshTs` is updated after every completed global refresh (manual or auto); resets on server restart
+- **`DESTINATIONS_AUTO_SUBACCOUNT_REFRESH_MINS`** — env var or `config.json → variables`; fractional values supported; default 10 minutes; replaces `DESTINATION_REFRESH_DELAY_SECONDS` (seconds-based, kept for backwards compat) as the primary per-subaccount staleness threshold for the proactive load triggered when the Subaccount Destinations modal opens
+- **Destination Overview — "Updated at" label** — tiny muted text below "Destination Overview" title (desktop only) showing the local time of the last global refresh at minute precision; visible whenever `globalRefreshTs` is known
+
+### Changed
+- **Mobile view optimisation** — all page title bars (Home, Status Overview, Destination Overview, Configuration) hide their text title on small screens when the sidebar is expanded; Destination Overview mobile title is a Globe icon (sidebar collapsed) instead of text; all config action bar buttons (Import, Export, Preview; Subaccounts Refresh/Reset/Save; Tabs Expand/Collapse/Reset/Save; Settings Reset/Save) are icon-only on mobile with full labels on `sm:`+; Destination modal Properties tab toolbar (Compare, Reset, Save) is icon-only on mobile; modal tab labels "Change History" → "History", "Test Destination" → "Test"
+- **Tabs tab "Add section" buttons** — three per-tab ghost buttons renamed to "+ Subaccount Group", "+ Banner", "+ Table" (removing redundant "Add"); on mobile these collapse into a single "+" button with a dropdown menu to save header space; Expand/Collapse action buttons now have icons (`ChevronsUpDown` / `ChevronsDownUp`)
+- **Home page filter** — placeholder changed from "Filter subaccounts…" to "Search"; width reduced from 200 px to 160 px
+- **Destination Overview search** — placeholder changed from "Full-text search …" to "Full-text search"
+- **Subaccount Destinations modal** — tab panel height increased by 1 px (`min-h-[45px]`) to align with the destination search bar height
+
 ## [v1.2.0](https://github.com/sap-pilot/btp-admin/releases/tag/v1.2.0) - 2026-08-02
 
 ### Added

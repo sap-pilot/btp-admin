@@ -1,5 +1,5 @@
-import { useState, useRef } from 'react';
-import { ChevronDown, ChevronRight, RotateCcw, Save, GripVertical, Plus, X } from 'lucide-react';
+import { useState, useRef, useEffect } from 'react';
+import { ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown, RotateCcw, Save, GripVertical, Plus, X } from 'lucide-react';
 
 export type BannerColor = 'transparent' | 'blue' | 'green' | 'yellow' | 'red' | 'purple';
 
@@ -53,11 +53,25 @@ function matchesFilter(tab: TabEntry, q: string): { tabMatch: boolean; sections:
 export default function TabsTable({ data, onChange, isDirty, isSaving, onReset, onSave, saveStatus }: Props) {
   const [filter, setFilter]           = useState('');
   const [expanded, setExpanded]       = useState<Set<number>>(() => new Set(data.map((_, i) => i)));
+  const [addMenuTi, setAddMenuTi]     = useState<number | null>(null);
+  const addMenuRef = useRef<HTMLDivElement>(null);
   const [dragging, setDragging]       = useState<{ ti: number; si: number } | null>(null);
   const [dragOver, setDragOver]       = useState<{ ti: number; si: number } | null>(null);
   const [dragTab, setDragTab]         = useState<number | null>(null);
   const [dragOverTab, setDragOverTab] = useState<number | null>(null);
   const dragTabRef                    = useRef<number | null>(null);
+
+  // Close add-section dropdown on outside click
+  useEffect(() => {
+    if (addMenuTi === null) return;
+    function onDown(e: MouseEvent) {
+      if (addMenuRef.current && !addMenuRef.current.contains(e.target as Node)) {
+        setAddMenuTi(null);
+      }
+    }
+    document.addEventListener('mousedown', onDown);
+    return () => document.removeEventListener('mousedown', onDown);
+  }, [addMenuTi]);
 
   const isFiltering    = filter.trim().length > 0;
   const totalTabs      = data.length;
@@ -408,10 +422,10 @@ export default function TabsTable({ data, onChange, isDirty, isSaving, onReset, 
             </button>
           )}
         </div>
-        <button onClick={() => setExpanded(new Set(data.map((_, i) => i)))} disabled={isFiltering} className={btnOutline}>Expand</button>
-        <button onClick={() => setExpanded(new Set())} disabled={isFiltering} className={btnOutline}>Collapse</button>
-        <button onClick={onReset} disabled={!isDirty || isSaving} className={btnOutline}><RotateCcw className="h-3.5 w-3.5" /> Reset</button>
-        <button onClick={onSave}  disabled={!isDirty || isSaving} className={btnPrimary}><Save className="h-3.5 w-3.5" />{isSaving ? 'Saving…' : 'Save'}</button>
+        <button onClick={() => setExpanded(new Set(data.map((_, i) => i)))} disabled={isFiltering} className={btnOutline} title="Expand all"><ChevronsUpDown className="h-3.5 w-3.5" /><span className="hidden sm:inline">Expand</span></button>
+        <button onClick={() => setExpanded(new Set())} disabled={isFiltering} className={btnOutline} title="Collapse all"><ChevronsDownUp className="h-3.5 w-3.5" /><span className="hidden sm:inline">Collapse</span></button>
+        <button onClick={onReset} disabled={!isDirty || isSaving} className={btnOutline} title="Reset"><RotateCcw className="h-3.5 w-3.5" /><span className="hidden sm:inline"> Reset</span></button>
+        <button onClick={onSave}  disabled={!isDirty || isSaving} className={btnPrimary} title={isSaving ? 'Saving…' : 'Save'}><Save className="h-3.5 w-3.5" /><span className="hidden sm:inline">{isSaving ? 'Saving…' : 'Save'}</span></button>
       </div>
 
       {/* Save status banner */}
@@ -466,14 +480,32 @@ export default function TabsTable({ data, onChange, isDirty, isSaving, onReset, 
                   onClick={e => e.stopPropagation()}
                 />
                 <span className="text-xs text-muted-foreground shrink-0">({tab.sections.length})</span>
-                <button onClick={() => addSection(ti, 'subaccountGroup')} className={`${btnGhost} shrink-0`}>
-                  <Plus className="h-3 w-3" /> Add Subaccount Group
+                {/* Mobile: single + button with dropdown */}
+                <div className="relative sm:hidden shrink-0" ref={addMenuTi === ti ? addMenuRef : undefined}>
+                  <button
+                    onClick={e => { e.stopPropagation(); setAddMenuTi(prev => prev === ti ? null : ti); }}
+                    className={`${btnGhost} shrink-0`}
+                    title="Add section"
+                  >
+                    <Plus className="h-3 w-3" />
+                  </button>
+                  {addMenuTi === ti && (
+                    <div className="absolute right-0 top-full z-20 bg-background border border-border rounded shadow-lg py-1 min-w-[160px]">
+                      <button onClick={() => { addSection(ti, 'subaccountGroup'); setAddMenuTi(null); }} className="w-full text-left px-3 py-1.5 text-xs hover:bg-muted/40 transition-colors">+ Subaccount Group</button>
+                      <button onClick={() => { addSection(ti, 'banner');          setAddMenuTi(null); }} className="w-full text-left px-3 py-1.5 text-xs hover:bg-muted/40 transition-colors">+ Banner</button>
+                      <button onClick={() => { addSection(ti, 'table');           setAddMenuTi(null); }} className="w-full text-left px-3 py-1.5 text-xs hover:bg-muted/40 transition-colors">+ Table</button>
+                    </div>
+                  )}
+                </div>
+                {/* Desktop: individual buttons */}
+                <button onClick={() => addSection(ti, 'subaccountGroup')} className={`${btnGhost} shrink-0 hidden sm:inline-flex`}>
+                  <Plus className="h-3 w-3" /> Subaccount Group
                 </button>
-                <button onClick={() => addSection(ti, 'banner')} className={`${btnGhost} shrink-0`}>
-                  <Plus className="h-3 w-3" /> Add Banner
+                <button onClick={() => addSection(ti, 'banner')} className={`${btnGhost} shrink-0 hidden sm:inline-flex`}>
+                  <Plus className="h-3 w-3" /> Banner
                 </button>
-                <button onClick={() => addSection(ti, 'table')} className={`${btnGhost} shrink-0`}>
-                  <Plus className="h-3 w-3" /> Add Table
+                <button onClick={() => addSection(ti, 'table')} className={`${btnGhost} shrink-0 hidden sm:inline-flex`}>
+                  <Plus className="h-3 w-3" /> Table
                 </button>
                 <button onClick={() => deleteTab(ti)} className={`${btnGhost} shrink-0 ml-1`} title="Delete tab">
                   <X className="h-3.5 w-3.5" />
