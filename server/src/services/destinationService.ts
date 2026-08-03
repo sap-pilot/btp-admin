@@ -738,7 +738,7 @@ export interface SubaccountDestNamesResult {
 
 /**
  * Returns destination names for a subaccount, proactively refreshing from the
- * Destination API if the cached data is older than DESTINATION_REFRESH_DELTA_MS.
+ * Destination API if the cached data is older than DESTINATION_REFRESH_DELAY_SECONDS.
  * When force=true the refresh always runs regardless of age.
  */
 export async function getSubaccountDestinationNames(

@@ -101,14 +101,14 @@ export function getRestrictedIds(): Set<string> {
 
 /**
  * Returns the destination staleness threshold in milliseconds.
- * DESTINATION_REFRESH_DELTA_MS env var takes precedence over config.variables entry.
- * Default: 3 600 000 ms (1 hour).
+ * DESTINATION_REFRESH_DELAY_SECONDS env var takes precedence over config.variables entry.
+ * Default: 600 s (10 minutes).
  */
 export function getDestinationRefreshDeltaMs(): number {
-  const raw = process.env.DESTINATION_REFRESH_DELTA_MS ?? getConfig().variables?.['DESTINATION_REFRESH_DELTA_MS'];
+  const raw = process.env.DESTINATION_REFRESH_DELAY_SECONDS ?? getConfig().variables?.['DESTINATION_REFRESH_DELAY_SECONDS'];
   if (raw) {
     const n = parseInt(raw, 10);
-    if (!isNaN(n) && n > 0) return n;
+    if (!isNaN(n) && n > 0) return n * 1000;
   }
-  return 3_600_000;
+  return 600_000;
 }
