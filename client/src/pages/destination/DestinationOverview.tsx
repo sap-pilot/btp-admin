@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { useParams, useNavigate } from 'react-router';
+import { useParams, useNavigate, Link } from 'react-router';
 import { ChevronDown, GitCompare, Globe, History, PanelLeft, RefreshCw, Search, X } from 'lucide-react';
 import { useSidebar } from '@/components/AppLayout';
 import type { SubaccountEntry } from '@/components/config/SubaccountsTable';
@@ -91,16 +91,29 @@ const CAT_META = {
 
 // ─── Component ───────────────────────────────────────────────────────────────
 
+function parseLinks(line: string): React.ReactNode {
+  const parts: React.ReactNode[] = [];
+  const re = /\[([^\]]*)\]\(([^)]+)\)/g;
+  let last = 0, k = 0, m: RegExpExecArray | null;
+  while ((m = re.exec(line)) !== null) {
+    if (m.index > last) parts.push(line.slice(last, m.index));
+    parts.push(<Link key={k++} to={m[2]!} className="underline underline-offset-2 hover:text-foreground">{m[1]}</Link>);
+    last = m.index + m[0].length;
+  }
+  if (last < line.length) parts.push(line.slice(last));
+  return parts.length ? parts : line;
+}
+
 function renderGlobalChangelog(text: string): React.ReactNode {
   return text.split('\n').map((line, i) => {
     if (line.startsWith('## ')) {
-      return <div key={i} className="font-bold mt-4 mb-1 text-foreground first:mt-0">{line.slice(3)}</div>;
+      return <div key={i} className="font-bold mt-4 mb-1 text-foreground first:mt-0">{parseLinks(line.slice(3))}</div>;
     }
-    if (line.startsWith('- created:')) return <div key={i} className="text-green-600 dark:text-green-400 pl-1">{line}</div>;
-    if (line.startsWith('- updated:')) return <div key={i} className="text-amber-600 dark:text-amber-400 pl-1">{line}</div>;
-    if (line.startsWith('- deleted:')) return <div key={i} className="text-red-500 dark:text-red-400 pl-1">{line}</div>;
-    if (line.startsWith('- '))        return <div key={i} className="text-muted-foreground pl-1">{line}</div>;
-    return <div key={i} className="text-muted-foreground">{line || ' '}</div>;
+    if (line.startsWith('- created:')) return <div key={i} className="text-green-600 dark:text-green-400 pl-1">{parseLinks(line)}</div>;
+    if (line.startsWith('- updated:')) return <div key={i} className="text-amber-600 dark:text-amber-400 pl-1">{parseLinks(line)}</div>;
+    if (line.startsWith('- deleted:')) return <div key={i} className="text-red-500 dark:text-red-400 pl-1">{parseLinks(line)}</div>;
+    if (line.startsWith('- '))        return <div key={i} className="text-muted-foreground pl-1">{parseLinks(line)}</div>;
+    return <div key={i} className="text-muted-foreground">{line ? parseLinks(line) : ' '}</div>;
   });
 }
 
@@ -544,9 +557,10 @@ export default function DestinationOverview() {
           <button
             className={`${tabCls(isChangeHistory)} flex items-center gap-1 shrink-0`}
             onClick={() => navigate('/destinations/change-history')}
+            title="Change History"
           >
             <History className="h-3.5 w-3.5" />
-            Change History
+            <span className="hidden sm:inline">Change History</span>
           </button>
         </div>
       )}
