@@ -15,7 +15,8 @@ import { emit } from './liveEvents.js';
 import { refreshLastUpdated } from './lastUpdatedService.js';
 
 const gunzipAsync = promisify(gunzip);
-const INDIVIDUAL_CONCURRENCY = 10;
+const BATCH_MAX_ATTEMPTS  = 3;
+const BATCH_RETRY_DELAY_MS = 4_000;
 
 /** Thrown when the remote rejects the sync key with 401; always aborts the full sync. */
 class SyncAuthError extends Error {
@@ -262,63 +263,6 @@ function syncKeyHeader(): Record<string, string> {
   return { 'x-sync-ts': ts, 'x-sync-sig': sig };
 }
 
-async function downloadOne(
-  remoteBase: string,
-  filePath: string,
-  remoteMtime?: number,
-): Promise<{ transferred: number; decompressed: number }> {
-  const url = `${remoteBase}/api/download?path=${encodeURIComponent(filePath)}`;
-  const { buf, transferred, decompressed } = await fetchRaw(url, syncKeyHeader());
-
-  const safeBase = resolvePath(config.LOCAL_STORE_DIR);
-  const slash = filePath.indexOf('/');
-  let target: string;
-  if (slash === -1) {
-    // Root-level file
-    target = resolvePath(config.LOCAL_STORE_DIR, filePath);
-    if (!target.startsWith(safeBase + '/')) {
-      logger.warn({ path: filePath }, 'Skipping root file: path traversal detected');
-      return { transferred: 0, decompressed: 0 };
-    }
-    await mkdir(config.LOCAL_STORE_DIR, { recursive: true });
-  } else {
-    const folder = filePath.slice(0, slash);
-    const filename = filePath.slice(slash + 1);
-    if (folder === 'conf') {
-      target = resolvePath(config.LOCAL_STORE_DIR, 'conf', filename);
-      if (!target.startsWith(safeBase + '/')) {
-        logger.warn({ path: filePath }, 'Skipping conf file: path traversal detected');
-        return { transferred: 0, decompressed: 0 };
-      }
-      await mkdir(join(config.LOCAL_STORE_DIR, 'conf'), { recursive: true });
-    } else if (folder === 'dest') {
-      target = resolvePath(config.LOCAL_STORE_DIR, 'dest', filename);
-      if (!target.startsWith(safeBase + '/')) {
-        logger.warn({ path: filePath }, 'Skipping dest file: path traversal detected');
-        return { transferred: 0, decompressed: 0 };
-      }
-      const lastSlash = filename.lastIndexOf('/');
-      const parentDir = lastSlash !== -1
-        ? join(config.LOCAL_STORE_DIR, 'dest', filename.slice(0, lastSlash))
-        : join(config.LOCAL_STORE_DIR, 'dest');
-      await mkdir(parentDir, { recursive: true });
-    } else {
-      target = resolvePath(config.LOCAL_STORE_DIR, 'resp', folder, filename);
-      if (!target.startsWith(safeBase + '/')) {
-        logger.warn({ path: filePath }, 'Skipping file: path traversal detected');
-        return { transferred: 0, decompressed: 0 };
-      }
-      await mkdir(join(config.LOCAL_STORE_DIR, 'resp', folder), { recursive: true });
-    }
-  }
-  await writeFile(target, buf);
-  if (remoteMtime) {
-    const mt = new Date(remoteMtime);
-    try { await utimes(target, mt, mt); } catch { /* ignore — best-effort */ }
-  }
-  logger.debug({ path: filePath }, 'Downloaded file');
-  return { transferred, decompressed };
-}
 
 async function downloadBatch(
   remoteBase: string,
@@ -466,39 +410,33 @@ async function executeSync(
     let totalDecompressed = 0;
 
     const batchSize = config.SYNC_REMOTE_BATCH_SIZE;
-    let batchAvailable: boolean | null = null;
 
     for (let i = 0; i < missing.length; i += batchSize) {
       const chunk = missing.slice(i, i + batchSize);
+      let lastErr: unknown;
 
-      if (batchAvailable !== false) {
+      for (let attempt = 1; attempt <= BATCH_MAX_ATTEMPTS; attempt++) {
         try {
           const result = await downloadBatch(remoteBase, chunk, remoteMtimes);
           totalTransferred += result.transferred;
           totalDecompressed += result.decompressed;
-          batchAvailable = true;
-          logger.debug({ done: Math.min(i + batchSize, missing.length), total: missing.length }, 'Sync batch complete');
-          continue;
+          lastErr = undefined;
+          break;
         } catch (err) {
           if (err instanceof SyncAuthError) throw err;
-          if (batchAvailable === null) {
-            logger.info({ err }, 'Batch download not available, falling back to individual downloads');
-            batchAvailable = false;
-          } else {
-            throw err;
+          lastErr = err;
+          if (attempt < BATCH_MAX_ATTEMPTS) {
+            logger.warn({ err, attempt, maxAttempts: BATCH_MAX_ATTEMPTS, delayMs: BATCH_RETRY_DELAY_MS }, 'Batch download failed, retrying');
+            await new Promise<void>(res => setTimeout(res, BATCH_RETRY_DELAY_MS));
           }
         }
       }
 
-      // Individual download fallback
-      for (let j = 0; j < chunk.length; j += INDIVIDUAL_CONCURRENCY) {
-        const concurrentSlice = chunk.slice(j, j + INDIVIDUAL_CONCURRENCY);
-        const results = await Promise.all(concurrentSlice.map(f => downloadOne(remoteBase, f, remoteMtimes.get(f))));
-        for (const r of results) {
-          totalTransferred += r.transferred;
-          totalDecompressed += r.decompressed;
-        }
+      if (lastErr !== undefined) {
+        logger.error({ err: lastErr, maxAttempts: BATCH_MAX_ATTEMPTS }, 'Batch download failed after all retries — aborting sync');
+        throw lastErr;
       }
+
       logger.debug({ done: Math.min(i + batchSize, missing.length), total: missing.length }, 'Sync batch complete');
     }
 
