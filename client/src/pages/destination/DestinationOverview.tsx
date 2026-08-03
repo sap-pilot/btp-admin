@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { useParams, useNavigate } from 'react-router';
-import { ChevronDown, GitCompare, Globe, PanelLeft, RefreshCw, Search, X } from 'lucide-react';
+import { ChevronDown, GitCompare, Globe, History, PanelLeft, RefreshCw, Search, X } from 'lucide-react';
 import { useSidebar } from '@/components/AppLayout';
 import type { SubaccountEntry } from '@/components/config/SubaccountsTable';
 import type { TabEntry, TabSection } from '@/components/config/TabsTable';
@@ -33,7 +33,7 @@ interface RefreshProgress {
 
 interface Buckets { generic: string[]; s4: string[]; cep: string[]; others: string[] }
 
-interface ModalState { sa: SubaccountEntry; allNames: string[]; initialName?: string }
+interface ModalState { sa: SubaccountEntry; allNames: string[]; initialName?: string; initialTab?: 'properties' | 'changelog' | 'test' }
 
 interface DestSearchResult {
   region:     string;
@@ -91,10 +91,23 @@ const CAT_META = {
 
 // ─── Component ───────────────────────────────────────────────────────────────
 
+function renderGlobalChangelog(text: string): React.ReactNode {
+  return text.split('\n').map((line, i) => {
+    if (line.startsWith('## ')) {
+      return <div key={i} className="font-bold mt-4 mb-1 text-foreground first:mt-0">{line.slice(3)}</div>;
+    }
+    if (line.startsWith('- created:')) return <div key={i} className="text-green-600 dark:text-green-400 pl-1">{line}</div>;
+    if (line.startsWith('- updated:')) return <div key={i} className="text-amber-600 dark:text-amber-400 pl-1">{line}</div>;
+    if (line.startsWith('- deleted:')) return <div key={i} className="text-red-500 dark:text-red-400 pl-1">{line}</div>;
+    if (line.startsWith('- '))        return <div key={i} className="text-muted-foreground pl-1">{line}</div>;
+    return <div key={i} className="text-muted-foreground">{line || ' '}</div>;
+  });
+}
+
 export default function DestinationOverview() {
   const { toggle, collapsed } = useSidebar();
-  const { tab: tabParam, region: regionParam, subdomain: subdomainParam, name: nameParam } = useParams<{
-    tab?: string; region?: string; subdomain?: string; name?: string;
+  const { tab: tabParam, region: regionParam, subdomain: subdomainParam, name: nameParam, destTab } = useParams<{
+    tab?: string; region?: string; subdomain?: string; name?: string; destTab?: string;
   }>();
   const navigate = useNavigate();
 
@@ -119,6 +132,12 @@ export default function DestinationOverview() {
   const [showCompareDropdown, setShowCompareDropdown] = useState(false);
   const compareDropdownRef = useRef<HTMLDivElement>(null);
 
+  // Global changelog (Change History tab)
+  const [globalChangelog,        setGlobalChangelog]        = useState('');
+  const [globalChangelogLoading, setGlobalChangelogLoading] = useState(false);
+  const [archivedChangelogFiles, setArchivedChangelogFiles] = useState<string[]>([]);
+  const [selectedArchive,        setSelectedArchive]        = useState('');
+
   const deepLinkOpened   = useRef(false);
   const autoHideTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -128,6 +147,19 @@ export default function DestinationOverview() {
       const json = await res.json() as { ok: boolean; globalRefreshTs: number | null };
       if (json.ok) setGlobalRefreshTs(json.globalRefreshTs);
     } catch { /* ignore */ }
+  }
+
+  async function fetchGlobalChangelog(archiveFile?: string) {
+    setGlobalChangelogLoading(true);
+    try {
+      const url  = archiveFile ? `/api/destinations/global-changelog?file=${encodeURIComponent(archiveFile)}` : '/api/destinations/global-changelog';
+      const res  = await fetch(url);
+      const json = await res.json() as { ok: boolean; data: string; archivedFiles?: string[] };
+      if (json.ok) {
+        setGlobalChangelog(json.data);
+        if (!archiveFile && json.archivedFiles) setArchivedChangelogFiles(json.archivedFiles);
+      }
+    } catch { /* ignore */ } finally { setGlobalChangelogLoading(false); }
   }
 
   async function loadData() {
@@ -166,6 +198,10 @@ export default function DestinationOverview() {
             .then(r => r.json() as Promise<{ ok: boolean; data: DestData }>)
             .then(({ ok, data: d }) => { if (ok) setDestData(d); })
             .catch(() => {});
+          void fetch('/api/destinations/global-changelog')
+            .then(r => r.json() as Promise<{ ok: boolean; data: string; archivedFiles: string[] }>)
+            .then(j => { if (j.ok) { setGlobalChangelog(j.data); setArchivedChangelogFiles(j.archivedFiles); } })
+            .catch(() => {});
         }
       } catch { /* ignore */ }
     });
@@ -175,7 +211,7 @@ export default function DestinationOverview() {
     };
   }, []);
 
-  // Open modal from deep-link URL: /destinations/:region/:subdomain/:name
+  // Open modal from deep-link URL: /destinations/:region/:subdomain/:name[/:destTab]
   useEffect(() => {
     if (deepLinkOpened.current || !regionParam || !subdomainParam || saData.length === 0) return;
     const destSas = saData.filter(sa => sa.manageDestinations && !!sa.org?.orgId);
@@ -183,8 +219,9 @@ export default function DestinationOverview() {
     if (!sa) return;
     deepLinkOpened.current = true;
     const names = (destData[saOrgId(sa)] ?? []).map(d => d.name).sort();
-    setModal({ sa, allNames: names, initialName: nameParam ?? names[0] });
-  }, [regionParam, subdomainParam, nameParam, saData, destData]);
+    const initialTab = destTab === 'history' ? 'changelog' : destTab === 'test' ? 'test' : 'properties';
+    setModal({ sa, allNames: names, initialName: nameParam ?? names[0], initialTab });
+  }, [regionParam, subdomainParam, nameParam, destTab, saData, destData]);
 
   // Close compare dropdown on outside click
   useEffect(() => {
@@ -281,6 +318,14 @@ export default function DestinationOverview() {
     if (!matched) return items;
     return items.filter(d => matched.has(d.name));
   }
+
+  const isChangeHistory = tabParam === 'change-history';
+
+  // Load global changelog when navigating to change-history tab
+  useEffect(() => {
+    if (!isChangeHistory) return;
+    void fetchGlobalChangelog();
+  }, [isChangeHistory]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Build visible tabs (unfiltered)
   const visibleTabs = tabEntries.filter(te =>
@@ -480,18 +525,69 @@ export default function DestinationOverview() {
       })()}
 
       {/* Tab bar */}
-      {filteredTabs.length > 0 && (
+      {(filteredTabs.length > 0 || visibleTabs.length > 0) && (
         <div className="flex items-center border-b border-border shrink-0 px-2 overflow-x-auto">
           {filteredTabs.map(te => (
-            <button key={te.tab} className={tabCls(te === activeTabEntry)} onClick={() => navigate(`/destinations/${encodeURIComponent(te.tab)}`)}>
+            <button key={te.tab} className={tabCls(!isChangeHistory && te === activeTabEntry)} onClick={() => navigate(`/destinations/${encodeURIComponent(te.tab)}`)}>
               {te.tab}
             </button>
           ))}
+          <button
+            className={`${tabCls(isChangeHistory)} flex items-center gap-1`}
+            onClick={() => navigate('/destinations/change-history')}
+          >
+            <History className="h-3.5 w-3.5" />
+            Change History
+          </button>
+        </div>
+      )}
+
+      {/* Change History panel */}
+      {isChangeHistory && (
+        <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
+          <div className="shrink-0 px-4 py-2 border-b border-border flex items-center gap-3">
+            {archivedChangelogFiles.length > 0 && (
+              <select
+                value={selectedArchive}
+                onChange={e => {
+                  const val = e.target.value;
+                  setSelectedArchive(val);
+                  void fetchGlobalChangelog(val || undefined);
+                }}
+                className="text-xs border border-border rounded px-2 py-1 bg-background text-foreground focus:outline-none focus:ring-1 focus:ring-ring"
+              >
+                <option value="">changelog.md (current)</option>
+                {archivedChangelogFiles.map(f => (
+                  <option key={f} value={f}>{f}</option>
+                ))}
+              </select>
+            )}
+            <button
+              onClick={() => void fetchGlobalChangelog(selectedArchive || undefined)}
+              disabled={globalChangelogLoading}
+              className="ml-auto inline-flex items-center gap-1.5 px-2 py-1 rounded text-xs border border-border hover:bg-accent transition-colors disabled:opacity-50"
+              title="Reload changelog"
+            >
+              <RefreshCw className={`h-3 w-3 ${globalChangelogLoading ? 'animate-spin' : ''}`} />
+              Reload
+            </button>
+          </div>
+          <div className="flex-1 overflow-auto p-4">
+            {globalChangelogLoading && (
+              <div className="text-xs text-muted-foreground text-center py-8">Loading…</div>
+            )}
+            {!globalChangelogLoading && !globalChangelog && (
+              <div className="text-xs text-muted-foreground text-center py-8">No global refresh has run yet. Click <strong>Refresh</strong> to generate the first changelog entry.</div>
+            )}
+            {!globalChangelogLoading && globalChangelog && (
+              <div className="font-mono text-xs leading-relaxed">{renderGlobalChangelog(globalChangelog)}</div>
+            )}
+          </div>
         </div>
       )}
 
       {/* Content */}
-      <div className="flex-1 overflow-auto px-4 py-3 space-y-6">
+      {!isChangeHistory && <div className="flex-1 overflow-auto px-4 py-3 space-y-6">
         {visibleTabs.length === 0 && (
           <div className="flex flex-col items-center justify-center h-full gap-2 text-muted-foreground">
             <p className="text-sm">No destinations configured.</p>
@@ -707,13 +803,14 @@ export default function DestinationOverview() {
               </div>
             );
           })}
-      </div>
+      </div>}
 
       {modal && (
         <SubaccountDestModal
           org={modal.sa}
           allNames={modal.allNames}
           initialName={modal.initialName}
+          initialTab={modal.initialTab}
           onClose={() => {
             setModal(null);
             const base = activeTabEntry ? `/destinations/${encodeURIComponent(activeTabEntry.tab)}` : '/destinations';

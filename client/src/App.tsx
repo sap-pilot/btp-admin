@@ -64,6 +64,7 @@ export default function App() {
               <Route path="/apps" element={<ComingSoon title="Apps" />} />
               <Route path="/destinations" element={<DestinationOverview />} />
               <Route path="/destinations/:tab" element={<DestinationOverview />} />
+              <Route path="/destinations/:region/:subdomain/:name/:destTab" element={<DestinationOverview />} />
               <Route path="/destinations/:region/:subdomain/:name" element={<DestinationOverview />} />
               <Route path="/int" element={<ComingSoon title="Integration" />} />
               <Route path="/int/dynamic-routing" element={<ComingSoon title="Dynamic Routing" />} />

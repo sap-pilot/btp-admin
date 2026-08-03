@@ -498,15 +498,17 @@ export default function TabsTable({ data, onChange, isDirty, isSaving, onReset, 
                   )}
                 </div>
                 {/* Desktop: individual buttons */}
-                <button onClick={() => addSection(ti, 'subaccountGroup')} className={`${btnGhost} shrink-0 hidden sm:inline-flex`}>
-                  <Plus className="h-3 w-3" /> Subaccount Group
-                </button>
-                <button onClick={() => addSection(ti, 'banner')} className={`${btnGhost} shrink-0 hidden sm:inline-flex`}>
-                  <Plus className="h-3 w-3" /> Banner
-                </button>
-                <button onClick={() => addSection(ti, 'table')} className={`${btnGhost} shrink-0 hidden sm:inline-flex`}>
-                  <Plus className="h-3 w-3" /> Table
-                </button>
+                <div className="hidden sm:flex items-center gap-1 shrink-0">
+                  <button onClick={() => addSection(ti, 'subaccountGroup')} className={`${btnGhost} shrink-0`}>
+                    <Plus className="h-3 w-3" /> Subaccount Group
+                  </button>
+                  <button onClick={() => addSection(ti, 'banner')} className={`${btnGhost} shrink-0`}>
+                    <Plus className="h-3 w-3" /> Banner
+                  </button>
+                  <button onClick={() => addSection(ti, 'table')} className={`${btnGhost} shrink-0`}>
+                    <Plus className="h-3 w-3" /> Table
+                  </button>
+                </div>
                 <button onClick={() => deleteTab(ti)} className={`${btnGhost} shrink-0 ml-1`} title="Delete tab">
                   <X className="h-3.5 w-3.5" />
                 </button>

@@ -10,6 +10,7 @@ import { initGeo } from './services/geoService.js';
 import { closeBrowser } from './services/status/browserCheckService.js';
 import healthRouter from './routes/health.js';
 import apiRouter from './routes/api.js';
+import syncRouter from './routes/sync.js';
 import statusApiRouter from './routes/status.js';
 import configRouter from './routes/config.js';
 import settingsRouter from './routes/settings.js';
@@ -37,6 +38,7 @@ app.use('/api/status', statusApiRouter);
 app.use('/api/config', configRouter);
 app.use('/api/settings', settingsRouter);
 app.use('/api/destinations', destRouter);
+app.use('/api/sync', syncRouter);
 app.use('/api', apiRouter);
 
 try {
@@ -50,7 +52,7 @@ app.use(errorHandler);
 const server = app.listen(config.PORT, () => {
   logger.info({ port: config.PORT }, 'btp-admin server started');
   if (config.SYNC_PROTECTION_OFF) {
-    logger.warn('SYNC_PROTECTION_OFF is active — /api/browse and /api/batch-download require no authentication');
+    logger.warn('SYNC_PROTECTION_OFF is active — /api/sync/browse and /api/sync/batch require no authentication');
   }
   void refreshLastUpdated();
   void initGeo();

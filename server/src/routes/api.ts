@@ -1,11 +1,10 @@
 import { Router } from 'express';
-import { readRawResponseFile, readRootFile, readConfigFile, readDestFile, readResponseFile, readScreenshotFile, readConsoleLogFile, readContentFile, browseResponseFiles, formatBrowseT, parseBrowseT } from '../services/localStoreService.js';
-import { buildZip } from '../services/zipBuilder.js';
-import { syncFromRemote, handleDownloadTrigger, registerCallback, type SyncStats } from '../services/syncService.js';
+import { readRawResponseFile, readResponseFile, readScreenshotFile, readConsoleLogFile, readContentFile } from '../services/localStoreService.js';
+import { syncFromRemote, type SyncStats } from '../services/syncService.js';
 import { config } from '../config.js';
 import { logger } from '../logger.js';
 import { getXsuaaConfig, readSessionFromRequest } from '../services/authService.js';
-import { requireAuth, requireAdmin, requireSyncAuth, requireSyncAuthOrOpen } from '../middleware/requireAuth.js';
+import { requireAuth, requireAdmin } from '../middleware/requireAuth.js';
 import type { AuthRequest } from '../middleware/requireAuth.js';
 import { userLabel } from '../services/authService.js';
 import { subscribe } from '../services/liveEvents.js';
@@ -65,119 +64,6 @@ router.post('/sync', requireAuth, async (req, res, next) => {
     logger.info({ from: req.ip, user, force: !!force }, 'On-demand sync triggered');
     const stats: SyncStats = await syncFromRemote(config.SYNC_REMOTE, { selfBaseUrl: config.SELF_URL, force: !!force });
     res.json({ ok: !stats.error && !stats.busy, ...stats });
-  } catch (err) {
-    next(err);
-  }
-});
-
-router.post('/batch-download', requireSyncAuthOrOpen, async (req, res, next) => {
-  try {
-    const { paths } = req.body as { paths?: unknown };
-    const rejectBatch = (status: number, error: string) => {
-      logger.debug({ from: req.ip, status, error }, 'batch-download rejected');
-      res.status(status).json({ error });
-    };
-    if (!Array.isArray(paths) || paths.length === 0) {
-      rejectBatch(400, 'paths must be a non-empty array');
-      return;
-    }
-    if (paths.length > 500) {
-      rejectBatch(400, 'paths exceeds maximum of 500');
-      return;
-    }
-    for (const p of paths) {
-      if (typeof p !== 'string' || p.includes('..') || p.startsWith('/') || p.startsWith('\\')) {
-        rejectBatch(400, `invalid path: ${String(p)}`);
-        return;
-      }
-      const parts = p.split('/');
-      if (parts.length === 1) {
-        if (!/^[a-zA-Z0-9][a-zA-Z0-9_.-]*\.(json|md)$/.test(parts[0]!)) {
-          rejectBatch(400, `invalid root filename: ${p}`);
-          return;
-        }
-      } else if (parts[0] === 'dest') {
-        // dest paths are 4 segments: dest/{region}/{subdomain}/{filename}
-        if (parts.length !== 4 || !parts[1] || !parts[2] || !parts[3]) {
-          rejectBatch(400, `invalid dest path: ${p}`);
-          return;
-        }
-      } else if (parts.length !== 2 || !parts[0] || !parts[1]) {
-        rejectBatch(400, `path must be filename or folder/filename: ${p}`);
-        return;
-      }
-    }
-
-    const entries: { name: string; data: Buffer }[] = [];
-    for (const p of paths as string[]) {
-      try {
-        const slash = p.indexOf('/');
-        let data: Buffer;
-        if (slash === -1) {
-          data = await readRootFile(p);
-        } else {
-          const folder   = p.slice(0, slash);
-          const rest     = p.slice(slash + 1);
-          if (folder === 'conf') {
-            data = await readConfigFile(rest);
-          } else if (folder === 'dest') {
-            data = await readDestFile(rest);
-          } else {
-            data = await readRawResponseFile(folder, rest);
-          }
-        }
-        entries.push({ name: p, data });
-      } catch {
-        // skip files pruned since browse was called
-      }
-    }
-
-    const zip = buildZip(entries);
-    res.set('Content-Type', 'application/zip');
-    res.set('Content-Disposition', 'attachment; filename="batch.zip"');
-    res.send(zip);
-  } catch (err) {
-    next(err);
-  }
-});
-
-router.get('/download-trigger', requireSyncAuth, (req, res) => {
-  void req;
-  handleDownloadTrigger();
-  res.json({ ok: true });
-});
-
-router.get('/browse', requireSyncAuthOrOpen, async (req, res, next) => {
-  try {
-    const rawSince = req.query['since'];
-    let sinceMs: number | undefined;
-    if (typeof rawSince === 'string' && rawSince) {
-      if (/^\d{8}-\d{6}$/.test(rawSince)) {
-        // New format: yyyyMMdd-HHmmss UTC
-        const parsed = parseBrowseT(rawSince);
-        if (parsed > 0) sinceMs = parsed;
-      } else {
-        // Legacy: bare Unix-ms timestamp from older consumers
-        const n = parseInt(rawSince, 10);
-        if (n > 0) sinceMs = n;
-      }
-    }
-
-    const rawCallback = req.query['callback'];
-    if (typeof rawCallback === 'string') {
-      try {
-        const parsed = new URL(rawCallback);
-        if (parsed.protocol === 'https:' || parsed.protocol === 'http:') {
-          registerCallback(rawCallback);
-        }
-      } catch { /* invalid URL — ignore */ }
-    }
-
-    // Floor to second precision before the FS scan so browseT aligns with
-    // second-precision file mtimes and can be used directly as the next ?since=.
-    const browseT = formatBrowseT(Math.floor(Date.now() / 1000) * 1000);
-    const folders = await browseResponseFiles(sinceMs);
-    res.json({ folders, browseT });
   } catch (err) {
     next(err);
   }
