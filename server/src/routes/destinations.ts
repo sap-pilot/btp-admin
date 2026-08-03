@@ -30,8 +30,8 @@ router.get('/status', requireAdmin, async (req, res, next) => {
     const autoGlobalMs = getAutoGlobalRefreshMs();
     const autoSaMs     = getAutoSubaccountRefreshMs();
 
-    // Auto-trigger a global refresh in the background if threshold exceeded
-    if (globalTs === null || (Date.now() - globalTs) > autoGlobalMs) {
+    // Auto-trigger a global refresh in the background if threshold exceeded (0 = disabled)
+    if (autoGlobalMs > 0 && (globalTs === null || (Date.now() - globalTs) > autoGlobalMs)) {
       void refreshDestinations(username, 'auto').catch(() => {});
     }
 
