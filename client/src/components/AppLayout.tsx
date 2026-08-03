@@ -53,13 +53,15 @@ export default function AppLayout() {
 
   useEffect(() => { writeCookie(collapsed); }, [collapsed]);
 
-  // Settings are always fetched regardless of auth state (public menus visible before login)
+  // Fetch settings on mount and whenever auth state changes (login → get gated data; logout → revert to public).
+  // Skip while auth is still loading to avoid a redundant public-only fetch before login state is known.
   useEffect(() => {
+    if (auth.loading) return;
     fetch('/api/settings')
       .then(r => r.json() as Promise<{ ok: boolean; data: SettingsData }>)
       .then(({ data }) => setSettings(data))
       .catch(() => setSettings({ homepage: { cockpit: { idp: '', host: '' }, mainSubscriptions: [] }, menus: [] }));
-  }, [settingsKey]);
+  }, [settingsKey, auth.loading, auth.loggedIn]);
 
   const refreshSettings = useCallback(() => setSettingsKey(k => k + 1), []);
 
