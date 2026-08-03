@@ -48,21 +48,31 @@ export function registerCallback(url: string): void {
   logger.info({ url }, 'Sync callback registered');
 }
 
+// Debounce handle: multiple rapid notifyCallbacks() calls (e.g. one per file write
+// during a health check cycle) are coalesced into a single HTTP notification.
+let notifyDebounceHandle: NodeJS.Timeout | null = null;
+const NOTIFY_DEBOUNCE_MS = 500;
+
 export function notifyCallbacks(): void {
   if (registeredCallbacks.size === 0) return;
-  const headers = syncKeyHeader();
-  for (const url of registeredCallbacks) {
-    fetchRaw(url, headers)
-      .then(() => logger.debug({ url }, 'Sync callback notified'))
-      .catch(err => {
-        if (err instanceof HttpError) {
-          registeredCallbacks.delete(url);
-          logger.warn({ url, status: err.statusCode }, 'Sync callback HTTP error — deregistered; remote will re-register on next sync');
-        } else {
-          logger.warn({ url, err }, 'Failed to notify sync callback (network error — keeping registered)');
-        }
-      });
-  }
+  if (notifyDebounceHandle) return; // already scheduled — coalesce
+  notifyDebounceHandle = setTimeout(() => {
+    notifyDebounceHandle = null;
+    if (registeredCallbacks.size === 0) return;
+    const headers = syncKeyHeader();
+    for (const url of registeredCallbacks) {
+      fetchRaw(url, headers)
+        .then(() => logger.debug({ url }, 'Sync callback notified'))
+        .catch(err => {
+          if (err instanceof HttpError) {
+            registeredCallbacks.delete(url);
+            logger.warn({ url, status: err.statusCode }, 'Sync callback HTTP error — deregistered; remote will re-register on next sync');
+          } else {
+            logger.warn({ url, err }, 'Failed to notify sync callback (network error — keeping registered)');
+          }
+        });
+    }
+  }, NOTIFY_DEBOUNCE_MS);
 }
 
 // ── Sync state ────────────────────────────────────────────────────────────────

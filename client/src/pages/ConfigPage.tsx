@@ -314,7 +314,6 @@ export default function ConfigPage() {
     if (!file) return;
     e.target.value = '';
 
-    // Parse the file first
     let data: Record<string, unknown>;
     try {
       data = JSON.parse(await file.text()) as Record<string, unknown>;
@@ -323,7 +322,6 @@ export default function ConfigPage() {
       return;
     }
 
-    // Identify which recognised keys are in the import
     const hasSubaccounts = Array.isArray(data['subaccounts']);
     const hasTabs        = Array.isArray(data['tabs']);
     const hasSettings    = !!data['settings'] && typeof data['settings'] === 'object' && !Array.isArray(data['settings']);
@@ -332,40 +330,29 @@ export default function ConfigPage() {
       return;
     }
 
-    // Check which local files exist
-    let localExists: { subaccounts: boolean; tabs: boolean; settings: boolean };
-    try {
-      const r = await fetch('/api/config/local-exists');
-      const j = await r.json() as { ok: boolean; data: typeof localExists };
-      if (!j.ok) throw new Error();
-      localExists = j.data;
-    } catch {
-      setError('Failed to check local config status');
-      return;
+    // Build a summary of what the import contains and what will be cleared
+    const lines: string[] = ['All three local config files will be completely replaced:'];
+    if (hasSubaccounts) {
+      lines.push(`• Subaccounts: ${(data['subaccounts'] as unknown[]).length} entries`);
+    } else {
+      lines.push('• Subaccounts: not in file — will be cleared');
+    }
+    if (hasTabs) {
+      const tabs = data['tabs'] as Array<{ sections?: unknown[] }>;
+      const totalSections = tabs.reduce((n, t) => n + (Array.isArray(t.sections) ? t.sections.length : 0), 0);
+      lines.push(`• Tabs: ${tabs.length} tabs / ${totalSections} sections`);
+    } else {
+      lines.push('• Tabs: not in file — will be cleared');
+    }
+    if (hasSettings) {
+      lines.push('• Settings: homepage + menus');
+    } else {
+      lines.push('• Settings: not in file — will be reset to defaults');
     }
 
-    // Build confirmation message if any local config will be overwritten
-    const willOverwrite: string[] = [];
-    if (hasSubaccounts && localExists.subaccounts) willOverwrite.push('Subaccounts');
-    if (hasTabs        && localExists.tabs)        willOverwrite.push('Tabs');
-    if (hasSettings    && localExists.settings)    willOverwrite.push('Settings');
-
-    if (willOverwrite.length > 0) {
-      const parts: string[] = [`Will overwrite local: ${willOverwrite.join(', ')}.`];
-      if (hasSubaccounts) parts.push(`Subaccounts: ${(data['subaccounts'] as unknown[]).length} entries`);
-      if (hasTabs) {
-        const tabs = data['tabs'] as Array<{ sections?: unknown[] }>;
-        const totalSections = tabs.reduce((n, t) => n + (Array.isArray(t.sections) ? t.sections.length : 0), 0);
-        parts.push(`Tabs: ${tabs.length} tabs / ${totalSections} sections`);
-      }
-      if (hasSettings) parts.push('Settings: homepage + menus');
-      setImportDialogBody(parts.join('\n'));
-      setPendingImportData(data);
-      setShowImportDialog(true);
-      return;
-    }
-
-    await doImport(data);
+    setImportDialogBody(lines.join('\n'));
+    setPendingImportData(data);
+    setShowImportDialog(true);
   }
 
   async function doImport(data: Record<string, unknown>) {
@@ -615,7 +602,7 @@ export default function ConfigPage() {
           <AlertDialogHeader>
             <AlertDialogTitle>Refresh all subaccounts?</AlertDialogTitle>
             <AlertDialogDescription>
-              This will re-fetch subaccount data from BTP CLI / CF API and merge with your local edits. Any new data will overwrite existing values for matching subaccounts. Are you certain?
+              This will re-fetch subaccount data from SAP BTP and CF API, then merge it with your local config matched by subaccount ID. User-editable fields (alias, group IDs, position, homepage/destinations/AOD flags) are preserved; all other fields are updated from the API. Are you certain?
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -629,19 +616,19 @@ export default function ConfigPage() {
       <AlertDialog open={showImportDialog}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Overwrite local configuration?</AlertDialogTitle>
+            <AlertDialogTitle>Replace all local configuration?</AlertDialogTitle>
             <AlertDialogDescription asChild>
               <div className="space-y-1.5 text-sm">
                 {importDialogBody.split('\n').map((line, i) => (
                   <p key={i} className="text-muted-foreground">{line}</p>
                 ))}
-                <p className="text-muted-foreground pt-1">All local config will be overwritten. Changes will be written to the Change Log. Are you sure?</p>
+                <p className="text-muted-foreground pt-1">All changes will be diffed and recorded in the Change Log. This cannot be undone.</p>
               </div>
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel onClick={() => { setShowImportDialog(false); setPendingImportData(null); }}>Cancel</AlertDialogCancel>
-            <AlertDialogAction onClick={() => { if (pendingImportData) void doImport(pendingImportData); }}>Yes, I confirm</AlertDialogAction>
+            <AlertDialogAction onClick={() => { if (pendingImportData) void doImport(pendingImportData); }}>Yes, replace all</AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>

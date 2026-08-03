@@ -91,23 +91,25 @@ router.post('/import', requireAdmin, async (req, res, next) => {
     const data = body as Record<string, unknown>;
     const user = reqUser(req);
 
-    // subaccounts.json is stored as { subaccounts: [...], globalAccounts: [...] }
-    // so the exported value may be that object rather than a bare array
+    // Import always replaces ALL three config files; keys absent from the payload
+    // are treated as empty (subaccounts/tabs → [], settings → defaults).
+    // changelog.md is never touched except to append the diff entries below.
+
     const rawSa = data['subaccounts'];
-    const saList = Array.isArray(rawSa)
-      ? rawSa
+    const saList: SubaccountEntry[] = Array.isArray(rawSa)
+      ? rawSa as SubaccountEntry[]
       : (rawSa && typeof rawSa === 'object' && Array.isArray((rawSa as Record<string, unknown>)['subaccounts']))
-        ? (rawSa as Record<string, unknown>)['subaccounts']
-        : null;
-    if (Array.isArray(saList)) {
-      await importSubaccounts(saList as SubaccountEntry[], user);
-    }
-    if (Array.isArray(data['tabs'])) {
-      await importTabs(data['tabs'], user);
-    }
-    if (data['settings'] && typeof data['settings'] === 'object' && !Array.isArray(data['settings'])) {
-      await importSettings(data['settings'], user);
-    }
+        ? (rawSa as Record<string, unknown>)['subaccounts'] as SubaccountEntry[]
+        : [];
+
+    await importSubaccounts(saList, user);
+    await importTabs(Array.isArray(data['tabs']) ? data['tabs'] : [], user);
+    await importSettings(
+      (data['settings'] && typeof data['settings'] === 'object' && !Array.isArray(data['settings']))
+        ? data['settings']
+        : {},
+      user,
+    );
 
     res.json({ ok: true });
   } catch (err) { next(err); }
