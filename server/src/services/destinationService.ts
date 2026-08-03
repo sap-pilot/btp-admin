@@ -630,7 +630,7 @@ export async function refreshDestinations(username = 'system'): Promise<RefreshR
     issues,
   });
 
-  if (refreshed > 0 || deleted > 0) {
+  if (created > 0 || updated > 0 || deleted > 0) {
     notifyCallbacks();
     emit('dest', { ts: Date.now() });
   }
@@ -720,7 +720,7 @@ export async function refreshSubaccountDestinations(region: string, subdomain: s
   const refreshed = issues.length === 0 ? 1 : 0;
   emitImmediate('refresh-destinations', { type: 'done', refreshed, total, received, created, updated, deleted, issues });
 
-  if (refreshed > 0 || deleted > 0) {
+  if (created > 0 || updated > 0 || deleted > 0) {
     notifyCallbacks();
     emit('dest', { ts: Date.now() });
   }
@@ -968,7 +968,7 @@ export async function saveDestinationEntry(
 
   await mkdir(join(LOCAL_DEST_DIR, region, subdomain), { recursive: true });
   await writeFile(jsonPath, JSON.stringify(merged, null, 2), 'utf-8');
-  notifyCallbacks();
+  if (diffLines.length > 0) notifyCallbacks();
   emit('dest', { region, subdomain, name, ts: Date.now() });
 }
 
