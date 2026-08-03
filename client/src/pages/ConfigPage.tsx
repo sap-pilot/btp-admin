@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router';
-import { Download, Eye, PanelLeft, Upload } from 'lucide-react';
+import { Building2, Clock, Download, Eye, Layers, PanelLeft, Settings, Upload } from 'lucide-react';
 import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
@@ -52,8 +52,10 @@ export default function ConfigPage() {
   const settingsSaveTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
   // Changelog state (lazy-loaded)
-  const [changelog,        setChangelog]      = useState<string | null>(null);
-  const [isLoadingChangelog, setIsLoadingCl] = useState(false);
+  const [changelog,            setChangelog]        = useState<string | null>(null);
+  const [isLoadingChangelog,   setIsLoadingCl]      = useState(false);
+  const [archivedCls,          setArchivedCls]      = useState<string[]>([]);
+  const [selectedChangelogFile, setSelectedChangelogFile] = useState<string | null>(null);
 
   const [error,       setError]       = useState('');
   const [isImporting, setIsImporting] = useState(false);
@@ -72,13 +74,23 @@ export default function ConfigPage() {
   const dragRef  = useRef<{ startX: number; startW: number } | null>(null);
   const bodyRef  = useRef<HTMLDivElement>(null);
 
-  function fetchChangelog() {
+  function fetchChangelog(file: string | null = null) {
     setIsLoadingCl(true);
-    void fetch('/api/config/changelog')
+    const url = file
+      ? `/api/config/changelog?file=${encodeURIComponent(file)}`
+      : '/api/config/changelog';
+    void fetch(url)
       .then(r => r.text())
       .then(text => setChangelog(text))
       .catch(() => setChangelog(''))
       .finally(() => setIsLoadingCl(false));
+  }
+
+  function fetchArchivedList() {
+    void fetch('/api/config/changelogs')
+      .then(r => r.json() as Promise<{ ok: boolean; files: string[] }>)
+      .then(({ ok, files }) => { if (ok) setArchivedCls(files); })
+      .catch(() => {});
   }
 
   function fetchSettings() {
@@ -89,7 +101,10 @@ export default function ConfigPage() {
   }
 
   useEffect(() => {
-    if (activeTab === 'changelog' && changelog === null) fetchChangelog();
+    if (activeTab === 'changelog' && changelog === null) {
+      fetchChangelog();
+      fetchArchivedList();
+    }
   }, [activeTab]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
@@ -159,7 +174,7 @@ export default function ConfigPage() {
       if (!settingsDirty) {
         void fetchSettings();
       }
-      if (curTab === 'changelog') fetchChangelog();
+      if (curTab === 'changelog') { fetchChangelog(); fetchArchivedList(); }
     });
     return () => es.close();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
@@ -420,7 +435,7 @@ export default function ConfigPage() {
   // ── Render ────────────────────────────────────────────────────────────────────
 
   const tabCls = (t: Tab) =>
-    `px-4 py-2 text-sm transition-colors border-b-2 ${
+    `flex items-center gap-1.5 px-2.5 sm:px-4 py-2 text-sm transition-colors border-b-2 ${
       activeTab === t
         ? 'border-primary text-foreground font-medium'
         : 'border-transparent text-muted-foreground hover:text-foreground'
@@ -479,19 +494,23 @@ export default function ConfigPage() {
 
       {/* Tab bar */}
       <div className="flex items-center border-b border-border shrink-0 px-2">
-        <button className={tabCls('subaccounts')} onClick={() => goTab('subaccounts')}>
-          Subaccounts
-          {totalSas > 0 && <span className="ml-1.5 text-[10px] text-muted-foreground">({totalSas})</span>}
+        <button className={tabCls('subaccounts')} onClick={() => goTab('subaccounts')} title="Subaccounts">
+          <Building2 className="h-3.5 w-3.5 sm:hidden" />
+          <span className="hidden sm:inline">Subaccounts</span>
+          {totalSas > 0 && <span className="hidden sm:inline text-[10px] text-muted-foreground">({totalSas})</span>}
         </button>
-        <button className={tabCls('tabs')} onClick={() => goTab('tabs')}>
-          Tabs
-          {totalGroups > 0 && <span className="ml-1.5 text-[10px] text-muted-foreground">({totalGroups})</span>}
+        <button className={tabCls('tabs')} onClick={() => goTab('tabs')} title="Tabs">
+          <Layers className="h-3.5 w-3.5 sm:hidden" />
+          <span className="hidden sm:inline">Tabs</span>
+          {totalGroups > 0 && <span className="hidden sm:inline text-[10px] text-muted-foreground">({totalGroups})</span>}
         </button>
-        <button className={tabCls('settings')} onClick={() => goTab('settings')}>
-          Settings
+        <button className={tabCls('settings')} onClick={() => goTab('settings')} title="Settings">
+          <Settings className="h-3.5 w-3.5 sm:hidden" />
+          <span className="hidden sm:inline">Settings</span>
         </button>
-        <button className={tabCls('changelog')} onClick={() => { if (changelog === null) fetchChangelog(); goTab('changelog'); }}>
-          History
+        <button className={tabCls('changelog')} onClick={() => { if (changelog === null) { fetchChangelog(); fetchArchivedList(); } goTab('changelog'); }} title="History">
+          <Clock className="h-3.5 w-3.5 sm:hidden" />
+          <span className="hidden sm:inline">History</span>
         </button>
       </div>
 
@@ -549,8 +568,25 @@ export default function ConfigPage() {
           <div className="flex flex-col h-full">
             <div className="flex items-center gap-2 px-3 py-2 border-b border-border shrink-0">
               <span className="text-xs text-muted-foreground flex-1">Config change history — updated on Refresh / Save</span>
+              {archivedCls.length > 0 && (
+                <select
+                  value={selectedChangelogFile ?? ''}
+                  onChange={e => {
+                    const val = e.target.value || null;
+                    setSelectedChangelogFile(val);
+                    fetchChangelog(val);
+                  }}
+                  className="h-7 px-2 text-xs border border-border rounded bg-background text-foreground outline-none focus:ring-1 focus:ring-ring"
+                  title="Browse archived changelogs"
+                >
+                  <option value="">Current</option>
+                  {archivedCls.map(f => (
+                    <option key={f} value={f}>{f}</option>
+                  ))}
+                </select>
+              )}
               <button
-                onClick={fetchChangelog}
+                onClick={() => fetchChangelog(selectedChangelogFile)}
                 disabled={isLoadingChangelog}
                 className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded text-xs font-medium border border-border hover:bg-accent hover:text-accent-foreground transition-colors disabled:opacity-50"
               >

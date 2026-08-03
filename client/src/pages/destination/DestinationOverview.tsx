@@ -307,7 +307,8 @@ export default function DestinationOverview() {
         <button onClick={toggle} className="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-accent/50 transition-colors" title="Toggle sidebar">
           <PanelLeft className="h-4 w-4" />
         </button>
-        <span className="text-sm font-semibold">Destination Overview</span>
+        <span className="text-sm font-semibold sm:hidden">Destinations</span>
+        <span className="text-sm font-semibold hidden sm:inline">Destination Overview</span>
 
         {/* Compare button + dropdown */}
         <div className="relative ml-auto" ref={compareDropdownRef}>
@@ -321,7 +322,11 @@ export default function DestinationOverview() {
               className={`${btnOutline} rounded-none border-0 gap-1.5 border-r border-border`}
             >
               <GitCompare className="h-3.5 w-3.5" />
-              Compare {selectedDests.length > 0 && `(${selectedDests.length})`}
+              <span className="hidden sm:inline">Compare </span>
+              {selectedDests.length > 0 && (
+                <span className="sm:hidden text-[10px] font-bold leading-none">{selectedDests.length}</span>
+              )}
+              <span className="hidden sm:inline">{selectedDests.length > 0 && `(${selectedDests.length})`}</span>
             </button>
             <button
               onClick={() => setShowCompareDropdown(v => !v)}
@@ -376,7 +381,7 @@ export default function DestinationOverview() {
             onChange={e => setFilterInput(e.target.value)}
             onKeyDown={handleFilterKeyDown}
             placeholder="Full-text search …"
-            className="h-8 pl-7 pr-[4.5rem] text-xs border border-border rounded bg-background text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring w-[240px]"
+            className="h-8 pl-7 pr-[4.5rem] text-xs border border-border rounded bg-background text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring w-[140px] sm:w-[240px]"
           />
           <div className="absolute right-1.5 flex items-center gap-1">
             {isSearching && <RefreshCw className="h-3 w-3 animate-spin text-muted-foreground shrink-0" />}
@@ -395,9 +400,9 @@ export default function DestinationOverview() {
           </div>
         </div>
 
-        <button onClick={() => setShowRefreshDialog(true)} disabled={isRefreshing} className={btnOutline}>
+        <button onClick={() => setShowRefreshDialog(true)} disabled={isRefreshing} className={btnOutline} title={isRefreshing ? 'Refreshing…' : 'Refresh all destinations'}>
           <RefreshCw className={`h-3.5 w-3.5 ${isRefreshing ? 'animate-spin' : ''}`} />
-          {isRefreshing ? 'Refreshing…' : 'Refresh'}
+          <span className="hidden sm:inline">{isRefreshing ? 'Refreshing…' : 'Refresh'}</span>
         </button>
       </div>
 

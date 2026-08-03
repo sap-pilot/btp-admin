@@ -107,13 +107,15 @@ export default function Home() {
         >
           <PanelLeft className="h-4 w-4" />
         </button>
-        <span className="text-sm font-medium">Home</span>
-        <div className="ml-auto flex items-center gap-3">
+        <div className="flex flex-col justify-center min-w-0">
+          <span className="text-sm font-medium leading-tight">Home</span>
           {lastUpdated != null && (
-            <span className="text-[11px] text-muted-foreground/60 shrink-0">
-              Last updated at {new Date(lastUpdated).toLocaleString()}
+            <span className="text-[10px] text-muted-foreground/50 leading-tight">
+              Updated at {new Date(lastUpdated).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' })}
             </span>
           )}
+        </div>
+        <div className="ml-auto flex items-center gap-3">
           {totalY > 0 && (
             <div className="relative flex items-center">
               <Search className="absolute left-2 h-3 w-3 text-muted-foreground/60 pointer-events-none" />

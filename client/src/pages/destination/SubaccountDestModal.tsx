@@ -892,12 +892,11 @@ export default function SubaccountDestModal({ org, allNames, initialName, onClos
               </>
             )}
           </span>
-          <div className="ml-auto flex items-center gap-1.5 shrink-0">
+          <div className="ml-auto flex items-center gap-1 shrink-0">
             {(() => {
-              const btnBase    = 'inline-flex items-center gap-1.5 px-3 py-1.5 rounded text-xs font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed';
+              const btnBase    = 'inline-flex items-center gap-1.5 px-2 sm:px-3 py-1.5 rounded text-xs font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed';
               const btnOutline = `${btnBase} border border-border hover:bg-accent hover:text-accent-foreground`;
               const exportCount = selectedNames.size;
-              const exportLabel = exportCount > 1 ? `Export (${exportCount})` : 'Export';
               const exportTitle = exportCount > 1
                 ? `Download ${exportCount} selected destinations as {region}_{subdomain}_multi_destinations.json`
                 : 'Download destination JSON — Ctrl/⌘+click or Shift+click to select multiple for bulk export';
@@ -910,7 +909,7 @@ export default function SubaccountDestModal({ org, allNames, initialName, onClos
                     title="Create a new destination from scratch"
                   >
                     <Plus className="h-3.5 w-3.5" />
-                    Create
+                    <span className="hidden sm:inline">Create</span>
                   </button>
                   <button
                     onClick={() => fileInputRef.current?.click()}
@@ -919,7 +918,7 @@ export default function SubaccountDestModal({ org, allNames, initialName, onClos
                     title="Import single or multiple destinations into this subaccount. New destinations will be created, existing destinations will be updated."
                   >
                     <Upload className="h-3.5 w-3.5" />
-                    {isImporting ? 'Importing…' : 'Import'}
+                    <span className="hidden sm:inline">{isImporting ? 'Importing…' : 'Import'}</span>
                   </button>
                   <button
                     onClick={handleExport}
@@ -928,7 +927,8 @@ export default function SubaccountDestModal({ org, allNames, initialName, onClos
                     title={exportTitle}
                   >
                     <Download className="h-3.5 w-3.5" />
-                    {exportLabel}
+                    <span className="hidden sm:inline">{exportCount > 1 ? `Export (${exportCount})` : 'Export'}</span>
+                    {exportCount > 1 && <span className="sm:hidden text-[10px] font-bold leading-none">{exportCount}</span>}
                   </button>
                   <button
                     onClick={() => void handleRefresh()}
@@ -939,8 +939,8 @@ export default function SubaccountDestModal({ org, allNames, initialName, onClos
                     title="Force-refresh destinations from the Destination API"
                   >
                     {refreshStatus === 'refreshed'
-                      ? <><Check className="h-3.5 w-3.5" /> Refreshed</>
-                      : <><RefreshCw className={`h-3.5 w-3.5 ${refreshStatus === 'refreshing' ? 'animate-spin' : ''}`} /> {refreshStatus === 'refreshing' ? 'Refreshing…' : 'Refresh'}</>
+                      ? <><Check className="h-3.5 w-3.5" /><span className="hidden sm:inline"> Refreshed</span></>
+                      : <><RefreshCw className={`h-3.5 w-3.5 ${refreshStatus === 'refreshing' ? 'animate-spin' : ''}`} /><span className="hidden sm:inline"> {refreshStatus === 'refreshing' ? 'Refreshing…' : 'Refresh'}</span></>
                     }
                   </button>
                   <div className="w-px h-4 bg-border mx-0.5" />
@@ -1013,7 +1013,7 @@ export default function SubaccountDestModal({ org, allNames, initialName, onClos
 
           {/* Right panel */}
           <div className="flex-1 flex flex-col min-w-0">
-            <div className="flex items-center border-b border-border shrink-0 px-2">
+            <div className="flex items-center border-b border-border shrink-0 px-2 min-h-[44px]">
               <button
                 onClick={() => setShowList(v => !v)}
                 className={`p-1.5 mr-1 rounded transition-colors ${showList ? 'text-muted-foreground hover:text-foreground hover:bg-accent' : 'bg-accent text-foreground'}`}

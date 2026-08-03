@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useEffect, useState } from 'react';
+import { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
 import { Outlet } from 'react-router';
 import { PanelLeft } from 'lucide-react';
 import AppSidebar from './AppSidebar';
@@ -44,14 +44,27 @@ export function useSettings(): SettingsCtx {
 // ─── Layout ───────────────────────────────────────────────────────────────────
 
 export default function AppLayout() {
-  const [collapsed, setCollapsed]       = useState(readCookie);
+  // Always start collapsed; restored from cookie only after login (or immediately if auth disabled).
+  // Only manual toggles write to the cookie — programmatic collapse on logout does not.
+  const [collapsed, setCollapsed]       = useState(true);
   const [settings, setSettings]         = useState<SettingsData | null>(null);
   const [settingsKey, setSettingsKey]   = useState(0);
   const auth = useAuth();
 
   const gated = !auth.loading && auth.enabled && !auth.loggedIn;
 
-  useEffect(() => { writeCookie(collapsed); }, [collapsed]);
+  const prevLoggedInRef = useRef<boolean | null>(null);
+  useEffect(() => {
+    if (auth.loading) return;
+    const loggedIn = !auth.enabled || auth.loggedIn;
+    if (prevLoggedInRef.current === loggedIn) return;
+    prevLoggedInRef.current = loggedIn;
+    if (loggedIn) {
+      setCollapsed(readCookie());
+    } else {
+      setCollapsed(true);
+    }
+  }, [auth.loading, auth.loggedIn, auth.enabled]);
 
   // Fetch settings on mount and whenever auth state changes (login → get gated data; logout → revert to public).
   // Skip while auth is still loading to avoid a redundant public-only fetch before login state is known.
@@ -65,11 +78,19 @@ export default function AppLayout() {
 
   const refreshSettings = useCallback(() => setSettingsKey(k => k + 1), []);
 
+  const toggle = useCallback(() => {
+    setCollapsed(c => {
+      const next = !c;
+      writeCookie(next);
+      return next;
+    });
+  }, []);
+
   // Hold render until auth state is known to avoid flash of wrong layout
   if (auth.loading) return null;
 
   return (
-    <SidebarContext.Provider value={{ collapsed, toggle: () => setCollapsed(c => !c) }}>
+    <SidebarContext.Provider value={{ collapsed, toggle }}>
       <SettingsContext.Provider value={{ settings, refreshSettings }}>
         <div className="flex h-screen overflow-hidden bg-background text-foreground">
           <AppSidebar />
@@ -78,7 +99,7 @@ export default function AppLayout() {
               <div className="flex flex-col h-full">
                 <div className="flex items-center gap-2 border-b border-border px-4 min-h-[52px] shrink-0">
                   <button
-                    onClick={() => setCollapsed(c => !c)}
+                    onClick={toggle}
                     className="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-accent/50 transition-colors shrink-0"
                     title="Toggle sidebar"
                   >

@@ -180,7 +180,7 @@ export default function AppSidebar() {
               )}
             </div>
             <a
-              href="https://github.com/sap-pilot/btp-admin/blob/main/CHANGELOG.md"
+              href="https://github.com/sap-pilot/btp-admin/releases"
               target="_blank"
               rel="noopener noreferrer"
               className="text-[10px] text-sidebar-foreground/50 leading-tight truncate hover:text-sidebar-foreground transition-colors"

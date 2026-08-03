@@ -1,6 +1,6 @@
 # Changelog
 
-## [v1.2.0] - 2026-08-02
+## [v1.2.0](https://github.com/sap-pilot/btp-admin/releases/tag/v1.2.0) - 2026-08-02
 
 ### Added
 
@@ -80,7 +80,7 @@
 - **`homepage.json` and `/api/homepage` route** — home page fully driven by `tabs.json`, `subaccounts.json`, `settings.json`, and `cockpit-menu.json`; route, service, and SSE `homepage` topic removed
 - **Themes section from Config → Settings** — moved to User Settings modal (sidebar › button or user dropdown)
 
-## [v1.1.0] - 2026-07-28
+## [v1.1.0](https://github.com/sap-pilot/btp-admin/releases/tag/v1.1.0) - 2026-07-28
 
 ### Added
 - **`browseT` in `/api/browse` response** — server captures a `yyyyMMdd-HHmmss` UTC timestamp before the filesystem scan and returns it as `browseT`; consumer sends it verbatim as `?since=` on the next call, eliminating the overlap-window calculation; human-readable format makes browse URLs directly inspectable; legacy numeric `browseTs` field handled transparently

@@ -8,7 +8,7 @@ import { readTabs, saveTabs, tabsFileExists, importTabs } from '../services/tabs
 import type { TabEntry } from '../services/tabsService.js';
 import { settingsFileExists, importSettings } from '../services/settingsService.js';
 import { getLastUpdated } from '../services/lastUpdatedService.js';
-import { readConfigChangelog } from '../services/configChangelogService.js';
+import { listArchivedChangelogs, readArchivedChangelog, readConfigChangelog } from '../services/configChangelogService.js';
 
 const router = Router();
 
@@ -126,11 +126,19 @@ router.get('/cockpit-menu', (_req, res) => {
   } catch { res.json(null); }
 });
 
-router.get('/changelog', requireAdmin, async (_req, res, next) => {
+router.get('/changelog', requireAdmin, async (req, res, next) => {
   try {
-    const text = await readConfigChangelog();
+    const file = (req.query as Record<string, string>)['file'];
+    const text = file ? await readArchivedChangelog(file) : await readConfigChangelog();
     res.setHeader('Content-Type', 'text/plain; charset=utf-8');
     res.send(text);
+  } catch (err) { next(err); }
+});
+
+router.get('/changelogs', requireAdmin, async (_req, res, next) => {
+  try {
+    const files = await listArchivedChangelogs();
+    res.json({ ok: true, files });
   } catch (err) { next(err); }
 });
 
