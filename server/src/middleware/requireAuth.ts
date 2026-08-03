@@ -1,10 +1,70 @@
 import type { Request, Response, NextFunction } from 'express';
 import { createHmac, timingSafeEqual } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import { getXsuaaConfig, readSessionFromRequest } from '../services/authService.js';
 import type { SessionPayload } from '../services/authService.js';
-import { getSyncKey } from '../services/configService.js';
+import { getSyncKey, getSyncNoIpProtection, getSyncWhitelistIPs, getSyncInternalIpWhitelist } from '../services/configService.js';
 import { config } from '../config.js';
 import { logger } from '../logger.js';
+
+// --- IP whitelist helpers (CIDR matching, no external deps) ---
+
+function normalizeIp(ip: string): string {
+  return ip.startsWith('::ffff:') ? ip.slice(7) : ip;
+}
+
+function ipToU32(ip: string): number {
+  const parts = ip.split('.');
+  if (parts.length !== 4) return -1;
+  let n = 0;
+  for (const p of parts) {
+    const b = parseInt(p, 10);
+    if (isNaN(b) || b < 0 || b > 255) return -1;
+    n = ((n << 8) | b) >>> 0;
+  }
+  return n;
+}
+
+function ipMatchesCidr(ip: string, cidr: string): boolean {
+  const slash = cidr.indexOf('/');
+  if (slash < 0) return ip === cidr;
+  const base  = cidr.slice(0, slash);
+  const bits  = parseInt(cidr.slice(slash + 1), 10);
+  if (isNaN(bits) || bits < 0 || bits > 32) return false;
+  const mask    = bits === 0 ? 0 : (~0 << (32 - bits)) >>> 0;
+  const ipNum   = ipToU32(ip);
+  const baseNum = ipToU32(base);
+  return ipNum >= 0 && (ipNum & mask) === (baseNum & mask);
+}
+
+function isIpAllowed(rawIp: string, list: string[]): boolean {
+  const ip = normalizeIp(rawIp);
+  return list.some(entry => ipMatchesCidr(ip, entry));
+}
+
+// Lazy-loaded from ./config/btp-endpoints.json (relative to server CWD) — cached for process lifetime
+let _btpEgressIPs: string[] | null = null;
+function getBtpEgressIPs(): string[] {
+  if (_btpEgressIPs !== null) return _btpEgressIPs;
+  try {
+    const data = JSON.parse(readFileSync('./config/btp-endpoints.json', 'utf-8')) as {
+      region?: Record<string, { egressIPs?: Record<string, string[]> }>;
+    };
+    const ips: string[] = [];
+    for (const region of Object.values(data.region ?? {})) {
+      for (const block of Object.values(region.egressIPs ?? {})) {
+        ips.push(...block);
+      }
+    }
+    _btpEgressIPs = ips;
+    logger.info({ count: ips.length }, 'BTP egress IP whitelist loaded from btp-endpoints.json');
+  } catch {
+    _btpEgressIPs = [];
+  }
+  return _btpEgressIPs;
+}
+
+// ---------------------------------------------------------------
 
 export interface AuthRequest extends Request {
   authSession?: SessionPayload;
@@ -47,6 +107,20 @@ export function requireSyncAuth(req: Request, res: Response, next: NextFunction)
   // Loopback: always allow for local dev
   const ip = req.ip ?? req.socket.remoteAddress ?? '';
   if (ip === '127.0.0.1' || ip === '::1' || ip === '::ffff:127.0.0.1') { next(); return; }
+
+  // IP whitelist: when btp-endpoints.json is present and SYNC_NO_IP_PROTECTION is not set,
+  // only allow IPs from BTP egress ranges plus SYNC_WHITELIST_IPS.
+  if (!getSyncNoIpProtection()) {
+    const whitelist = [...getBtpEgressIPs(), ...getSyncWhitelistIPs(), ...getSyncInternalIpWhitelist()];
+    if (whitelist.length > 0) {
+      if (!isIpAllowed(ip, whitelist)) {
+        logger.warn({ ip, path: req.path },
+          'Sync request blocked: IP not in BTP egress whitelist — set SYNC_NO_IP_PROTECTION=true to disable, or add to SYNC_WHITELIST_IPS');
+        res.status(403).json({ error: 'Forbidden: request origin IP is not in the allowed whitelist' });
+        return;
+      }
+    }
+  }
 
   // HMAC peer-sync: signature must be valid
   const ts  = req.headers['x-sync-ts'];

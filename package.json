@@ -24,7 +24,8 @@
     "test": "npm run test --workspace=client && npm run test --workspace=server",
     "logs": "cf logs btp-admin | grep --line-buffered -v -E '\\[RTR|\\[API|\\[CELL|\\[PROXY|\\[STG' | node scripts/format-logs.mjs",
     "logs-idle": "cf logs btp-admin-idle | grep --line-buffered -v -E '\\[RTR|\\[API|\\[CELL|\\[PROXY|\\[STG' | node scripts/format-logs.mjs",
-    "logs-recent": "cf logs btp-admin --recent | grep --line-buffered -v -E '\\[RTR|\\[API|\\[CELL|\\[PROXY|\\[STG' | node scripts/format-logs.mjs"
+    "logs-recent": "cf logs btp-admin --recent | grep --line-buffered -v -E '\\[RTR|\\[API|\\[CELL|\\[PROXY|\\[STG' | node scripts/format-logs.mjs",
+    "parse-btp-endpoints": "node scripts/parse-btp-endpoints.mjs"
   },
   "devDependencies": {
     "undici": "^8.9.0"
