@@ -5,7 +5,7 @@ import { homedir } from 'node:os';
 import { config } from '../config.js';
 import { logger } from '../logger.js';
 import { getOrRefreshToken, fetchWithRateLimit } from './cfLoginService.js';
-import { getRestrictedIds, getDestinationRefreshDeltaMs } from './configService.js';
+import { getRestrictedIds, getAutoSubaccountRefreshMs } from './configService.js';
 import { readSubaccounts, type SubaccountEntry } from './subaccountsService.js';
 import { notifyCallbacks } from './syncService.js';
 import { emit, emitImmediate } from './liveEvents.js';
@@ -18,6 +18,11 @@ const LOCAL_DEST_DIR = join(config.LOCAL_STORE_DIR, 'dest');
 // In-memory record of when each subaccount's destinations were last successfully fetched from the API.
 // Keyed by "${region}/${subdomain}". Resets on server restart (intentional: first open after restart always refreshes).
 const lastRefreshTs = new Map<string, number>();
+
+// Timestamp of the last completed global (all-subaccounts) refresh. Null until the first refresh runs.
+let globalRefreshTs: number | null = null;
+
+export function getGlobalRefreshTs(): number | null { return globalRefreshTs; }
 
 async function getLocalDestinationNames(region: string, subdomain: string): Promise<string[]> {
   const destDir = join(LOCAL_DEST_DIR, region, subdomain);
@@ -630,6 +635,8 @@ export async function refreshDestinations(username = 'system'): Promise<RefreshR
     issues,
   });
 
+  globalRefreshTs = Date.now();
+
   if (created > 0 || updated > 0 || deleted > 0) {
     notifyCallbacks();
     emit('dest', { ts: Date.now() });
@@ -748,7 +755,7 @@ export async function getSubaccountDestinationNames(
   force      = false,
 ): Promise<SubaccountDestNamesResult> {
   const key   = `${region}/${subdomain}`;
-  const delta = getDestinationRefreshDeltaMs();
+  const delta = getAutoSubaccountRefreshMs();
   const last  = lastRefreshTs.get(key) ?? 0;
   const stale = force || (Date.now() - last > delta);
 

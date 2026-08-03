@@ -318,7 +318,7 @@ function SubaccountGroupSection({ section, subaccounts, cockpitMenu, cockpit, ma
                 Subscriptions
               </th>
               {cols.map(sa => {
-                const label = [section.groupId, sa.alias].filter(Boolean).join(' ');
+                const label = sa.alias || sa.subaccountName || sa.subdomain;
                 return (
                   <th key={sa.subaccountId} className={`text-center text-xs font-medium px-3 py-2 min-w-[110px] border-l border-border text-muted-foreground${sa.restricted ? ' relative overflow-hidden' : ''}`}>
                     {sa.restricted && (

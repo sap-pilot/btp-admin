@@ -12,11 +12,35 @@ import {
   exportDestination,
   saveDestinationEntry,
   getDestinationChangelog,
+  getGlobalRefreshTs,
 } from '../services/destinationService.js';
+import { getAutoGlobalRefreshMs, getAutoSubaccountRefreshMs } from '../services/configService.js';
 
 const router = Router();
 
 const RESTRICTED = { ok: false, error: 'Access to this subaccount is restricted' } as const;
+
+router.get('/status', requireAdmin, async (req, res, next) => {
+  try {
+    const authReq  = req as AuthRequest;
+    const username = authReq.authSession?.email || authReq.authSession?.firstName || 'system';
+    const globalTs = getGlobalRefreshTs();
+    const autoGlobalMs = getAutoGlobalRefreshMs();
+    const autoSaMs     = getAutoSubaccountRefreshMs();
+
+    // Auto-trigger a global refresh in the background if threshold exceeded
+    if (globalTs === null || (Date.now() - globalTs) > autoGlobalMs) {
+      void refreshDestinations(username).catch(() => {});
+    }
+
+    res.json({
+      ok:                       true,
+      globalRefreshTs:          globalTs,
+      autoGlobalRefreshHrs:     autoGlobalMs / 3_600_000,
+      autoSubaccountRefreshMins: autoSaMs   / 60_000,
+    });
+  } catch (err) { next(err); }
+});
 
 router.get('/search', requireAdmin, async (req, res, next) => {
   try {

@@ -7,7 +7,7 @@ import type { TabEntry } from '@/components/config/TabsTable';
 import type { SubaccountEntry } from '@/components/config/SubaccountsTable';
 
 export default function Home() {
-  const { toggle }    = useSidebar();
+  const { toggle, collapsed } = useSidebar();
   const navigate      = useNavigate();
   const { tab: tabParam } = useParams<{ tab?: string }>();
   const { settings }  = useSettings();
@@ -107,7 +107,7 @@ export default function Home() {
         >
           <PanelLeft className="h-4 w-4" />
         </button>
-        <div className="flex flex-col justify-center min-w-0">
+        <div className={`flex flex-col justify-center min-w-0 ${!collapsed ? 'hidden sm:flex' : ''}`}>
           <span className="text-sm font-medium leading-tight">Home</span>
           {lastUpdated != null && (
             <span className="text-[10px] text-muted-foreground/50 leading-tight">
@@ -123,8 +123,8 @@ export default function Home() {
                 type="text"
                 value={filterQuery}
                 onChange={e => setFilterQuery(e.target.value)}
-                placeholder="Filter subaccounts…"
-                className="h-7 pl-6 pr-[4.5rem] text-xs border border-border rounded bg-background text-foreground placeholder:text-muted-foreground/50 focus:outline-none focus:ring-1 focus:ring-ring w-[200px]"
+                placeholder="Search"
+                className="h-7 pl-6 pr-[4.5rem] text-xs border border-border rounded bg-background text-foreground placeholder:text-muted-foreground/50 focus:outline-none focus:ring-1 focus:ring-ring w-[160px]"
               />
               <div className="absolute right-1.5 flex items-center gap-0.5">
                 {filterQuery && (

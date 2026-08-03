@@ -238,17 +238,17 @@ export default function SubaccountsTable({
           )}
         </div>
         <div className="flex items-center gap-1.5 shrink-0">
-          <button onClick={onRefresh} disabled={isRefreshing || isSaving} className={btnOutline}>
+          <button onClick={onRefresh} disabled={isRefreshing || isSaving} className={btnOutline} title={isRefreshing ? 'Refreshing…' : 'Refresh'}>
             <RefreshCw className={`h-3.5 w-3.5 ${isRefreshing ? 'animate-spin' : ''}`} />
-            {isRefreshing ? 'Refreshing…' : 'Refresh'}
+            <span className="hidden sm:inline">{isRefreshing ? 'Refreshing…' : 'Refresh'}</span>
           </button>
-          <button onClick={onReset} disabled={!isDirty || isRefreshing || isSaving} className={btnOutline}>
+          <button onClick={onReset} disabled={!isDirty || isRefreshing || isSaving} className={btnOutline} title="Reset">
             <RotateCcw className="h-3.5 w-3.5" />
-            Reset
+            <span className="hidden sm:inline">Reset</span>
           </button>
-          <button onClick={onSave} disabled={!isDirty || isRefreshing || isSaving} className={btnPrimary}>
+          <button onClick={onSave} disabled={!isDirty || isRefreshing || isSaving} className={btnPrimary} title={isSaving ? 'Saving…' : 'Save'}>
             <Save className="h-3.5 w-3.5" />
-            {isSaving ? 'Saving…' : 'Save'}
+            <span className="hidden sm:inline">{isSaving ? 'Saving…' : 'Save'}</span>
           </button>
         </div>
       </div>

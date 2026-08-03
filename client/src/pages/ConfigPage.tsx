@@ -20,7 +20,7 @@ export default function ConfigPage() {
   const { tab: tabParam } = useParams<{ tab: string }>();
   const navigate          = useNavigate();
   const [searchParams]    = useSearchParams();
-  const { toggle }        = useSidebar();
+  const { toggle, collapsed } = useSidebar();
   const { refreshSettings } = useSettings();
   const activeTab: Tab    = VALID_TABS.has(tabParam as Tab) ? (tabParam as Tab) : 'subaccounts';
   const initialSection    = searchParams.get('section') ?? undefined;
@@ -451,7 +451,7 @@ export default function ConfigPage() {
         <button onClick={toggle} className="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-accent/50 transition-colors" title="Toggle sidebar">
           <PanelLeft className="h-4 w-4" />
         </button>
-        <span className="text-sm font-semibold">Configuration</span>
+        <span className={`text-sm font-semibold${!collapsed ? ' hidden sm:block' : ''}`}>Configuration</span>
         <div className="ml-auto flex items-center gap-1.5">
           {(() => {
             const btn = 'inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded text-xs font-medium border border-border hover:bg-accent hover:text-accent-foreground transition-colors disabled:opacity-50 disabled:cursor-not-allowed';
@@ -464,7 +464,7 @@ export default function ConfigPage() {
                 title="Import combined-config.json — overwrites all local config files"
               >
                 <Upload className="h-3.5 w-3.5" />
-                {isImporting ? 'Importing…' : 'Import'}
+                <span className="hidden sm:inline">{isImporting ? 'Importing…' : 'Import'}</span>
               </button>
               <a
                 href="/api/config/export"
@@ -473,7 +473,7 @@ export default function ConfigPage() {
                 title="Export all config files as combined-config.json"
               >
                 <Download className="h-3.5 w-3.5" />
-                Export
+                <span className="hidden sm:inline">Export</span>
               </a>
               <button
                 onClick={handlePreviewToggle}
@@ -481,7 +481,7 @@ export default function ConfigPage() {
                 title="Toggle home page preview panel"
               >
                 <Eye className="h-3.5 w-3.5" />
-                Preview
+                <span className="hidden sm:inline">Preview</span>
               </button>
             </>);
           })()}

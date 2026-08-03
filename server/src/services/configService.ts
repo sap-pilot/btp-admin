@@ -112,3 +112,31 @@ export function getDestinationRefreshDeltaMs(): number {
   }
   return 600_000;
 }
+
+/**
+ * Per-subaccount proactive refresh threshold in milliseconds.
+ * DESTINATIONS_AUTO_SUBACCOUNT_REFRESH_MINS takes precedence; falls back to
+ * DESTINATION_REFRESH_DELAY_SECONDS (seconds); default 10 minutes.
+ */
+export function getAutoSubaccountRefreshMs(): number {
+  const mins = process.env.DESTINATIONS_AUTO_SUBACCOUNT_REFRESH_MINS ?? getConfig().variables?.['DESTINATIONS_AUTO_SUBACCOUNT_REFRESH_MINS'];
+  if (mins) {
+    const n = parseFloat(mins);
+    if (!isNaN(n) && n > 0) return n * 60_000;
+  }
+  return getDestinationRefreshDeltaMs();
+}
+
+/**
+ * Global (all-subaccounts) auto-refresh threshold in milliseconds.
+ * DESTINATION_AUTO_GLOBAL_REFRESH_HRS supports fractional values (e.g. 1.5 = 90 min).
+ * Env var takes precedence over config.json → variables. Default: 6 hours.
+ */
+export function getAutoGlobalRefreshMs(): number {
+  const raw = process.env.DESTINATION_AUTO_GLOBAL_REFRESH_HRS ?? getConfig().variables?.['DESTINATION_AUTO_GLOBAL_REFRESH_HRS'];
+  if (raw) {
+    const n = parseFloat(raw);
+    if (!isNaN(n) && n > 0) return n * 3_600_000;
+  }
+  return 6 * 3_600_000;
+}

@@ -107,11 +107,11 @@ export default function SettingsPanel({ data, onChange, isDirty, isSaving, onRes
           <span className="text-sm font-medium flex-1">
             {activeNav === 'homepage' ? 'Homepage' : 'Menus'}
           </span>
-          <button onClick={onReset} disabled={!isDirty || isSaving} className={btnOutline}>
-            <RotateCcw className="h-3.5 w-3.5" /> Reset
+          <button onClick={onReset} disabled={!isDirty || isSaving} className={btnOutline} title="Reset">
+            <RotateCcw className="h-3.5 w-3.5" /><span className="hidden sm:inline"> Reset</span>
           </button>
-          <button onClick={onSave} disabled={!isDirty || isSaving} className={btnPrimary}>
-            <Save className="h-3.5 w-3.5" /> {isSaving ? 'Saving…' : 'Save'}
+          <button onClick={onSave} disabled={!isDirty || isSaving} className={btnPrimary} title={isSaving ? 'Saving…' : 'Save'}>
+            <Save className="h-3.5 w-3.5" /><span className="hidden sm:inline"> {isSaving ? 'Saving…' : 'Save'}</span>
           </button>
         </div>
 

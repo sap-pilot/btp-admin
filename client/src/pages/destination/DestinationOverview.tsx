@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { useParams, useNavigate } from 'react-router';
-import { ChevronDown, GitCompare, PanelLeft, RefreshCw, Search, X } from 'lucide-react';
+import { ChevronDown, GitCompare, Globe, PanelLeft, RefreshCw, Search, X } from 'lucide-react';
 import { useSidebar } from '@/components/AppLayout';
 import type { SubaccountEntry } from '@/components/config/SubaccountsTable';
 import type { TabEntry, TabSection } from '@/components/config/TabsTable';
@@ -92,7 +92,7 @@ const CAT_META = {
 // ─── Component ───────────────────────────────────────────────────────────────
 
 export default function DestinationOverview() {
-  const { toggle } = useSidebar();
+  const { toggle, collapsed } = useSidebar();
   const { tab: tabParam, region: regionParam, subdomain: subdomainParam, name: nameParam } = useParams<{
     tab?: string; region?: string; subdomain?: string; name?: string;
   }>();
@@ -101,8 +101,9 @@ export default function DestinationOverview() {
   const [tabEntries,   setTabEntries]   = useState<TabEntry[]>([]);
   const [saData,       setSaData]       = useState<SubaccountEntry[]>([]);
   const [destData,     setDestData]     = useState<DestData>({});
-  const [isRefreshing, setIsRefreshing] = useState(false);
-  const [progress,     setProgress]     = useState<RefreshProgress | null>(null);
+  const [isRefreshing,    setIsRefreshing]    = useState(false);
+  const [progress,        setProgress]        = useState<RefreshProgress | null>(null);
+  const [globalRefreshTs, setGlobalRefreshTs] = useState<number | null>(null);
   const [modal,        setModal]        = useState<ModalState | null>(null);
   const [showRefreshDialog, setShowRefreshDialog] = useState(false);
 
@@ -121,6 +122,14 @@ export default function DestinationOverview() {
   const deepLinkOpened   = useRef(false);
   const autoHideTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  async function fetchStatus() {
+    try {
+      const res  = await fetch('/api/destinations/status');
+      const json = await res.json() as { ok: boolean; globalRefreshTs: number | null };
+      if (json.ok) setGlobalRefreshTs(json.globalRefreshTs);
+    } catch { /* ignore */ }
+  }
+
   async function loadData() {
     const [tabsRes, sasRes, destsRes] = await Promise.all([
       fetch('/api/config/tabs'),
@@ -135,7 +144,10 @@ export default function DestinationOverview() {
     if (dests.ok) setDestData(dests.data);
   }
 
-  useEffect(() => { void loadData().catch(() => {}); }, []);
+  useEffect(() => {
+    void loadData().catch(() => {});
+    void fetchStatus();
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     const es = new EventSource('/api/events?dest=1');
@@ -233,6 +245,7 @@ export default function DestinationOverview() {
         setProgress({ type: 'done', total: 0, received: 0, errors: [json.error ?? 'Refresh failed'] });
       }
       await loadData();
+      void fetchStatus();
     } catch (err) {
       setProgress({ type: 'done', total: 0, received: 0, errors: [err instanceof Error ? err.message : 'Refresh failed'] });
     } finally {
@@ -307,8 +320,15 @@ export default function DestinationOverview() {
         <button onClick={toggle} className="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-accent/50 transition-colors" title="Toggle sidebar">
           <PanelLeft className="h-4 w-4" />
         </button>
-        <span className="text-sm font-semibold sm:hidden">Destinations</span>
-        <span className="text-sm font-semibold hidden sm:inline">Destination Overview</span>
+        {collapsed && <Globe className="h-4 w-4 sm:hidden text-muted-foreground" aria-label="Destinations" />}
+        <div className="hidden sm:flex flex-col justify-center min-w-0">
+          <span className="text-sm font-semibold leading-tight">Destination Overview</span>
+          {globalRefreshTs !== null && (
+            <span className="text-[10px] text-muted-foreground/50 leading-tight">
+              Updated at {new Date(globalRefreshTs).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+            </span>
+          )}
+        </div>
 
         {/* Compare button + dropdown */}
         <div className="relative ml-auto" ref={compareDropdownRef}>
@@ -380,7 +400,7 @@ export default function DestinationOverview() {
             value={filterInput}
             onChange={e => setFilterInput(e.target.value)}
             onKeyDown={handleFilterKeyDown}
-            placeholder="Full-text search …"
+            placeholder="Full-text search"
             className="h-8 pl-7 pr-[4.5rem] text-xs border border-border rounded bg-background text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring w-[140px] sm:w-[240px]"
           />
           <div className="absolute right-1.5 flex items-center gap-1">
