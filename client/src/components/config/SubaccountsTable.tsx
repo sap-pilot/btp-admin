@@ -10,6 +10,7 @@ export interface ServiceInstanceEntry {
   serviceOfferingName: string;
   servicePlanId:       string;
   instanceName:        string;
+  id:                  string;
   url:                 string;
   spaceId:             string;
 }
