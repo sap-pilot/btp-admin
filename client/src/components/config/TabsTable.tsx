@@ -282,18 +282,14 @@ export default function TabsTable({ data, onChange, isDirty, isSaving, onReset, 
         >
           {gripEl}
           {badge('Banner', 'bg-amber-500/10 text-amber-600 dark:text-amber-400')}
-          <div className="relative flex-1 min-w-0">
-            <input
-              className={`${inpCls} w-full`}
+          <div className="flex-1 min-w-0">
+            <textarea
+              className={`${inpCls} w-full resize-y leading-snug`}
+              rows={2}
               value={sec.message}
-              placeholder="Message"
+              placeholder="Message (markdown supported)"
               onChange={e => updateSectionAt(ti, si, s => ({ ...s, message: e.target.value } as TabSection))}
             />
-            {!sec.message && (
-              <span className="absolute right-0 top-1/2 -translate-y-1/2 text-[10px] text-muted-foreground/40 pointer-events-none select-none whitespace-nowrap">
-                markdown syntax is supported
-              </span>
-            )}
           </div>
           <select
             value={sec.backgroundColor}
