@@ -608,6 +608,9 @@ The server uses [pino](https://getpino.io) with colorized pretty-print output.
 | `MAX_RESPONSE_STORAGE_DAYS` | `3` | Response files (JSON + PNG) older than this many days are automatically deleted. Housekeeping runs once on startup then every 24 hours. Set to `0` to disable. Also controls the furthest date selectable in the UI's Date Range picker. |
 | `REQUEST_TIMEOUT_MS` | `30000` | Default HTTP request timeout in milliseconds for standard endpoint checks. A check that exceeds this limit is recorded with status `504` and the response filename ends in `_504.json`. Per-endpoint `timeout` in `config.json` overrides this value for that endpoint only. |
 | `SYNC_PROTECTION_OFF` | — | When set to any non-empty value (e.g. `true`, `1`), `GET /api/sync/browse` and `POST /api/sync/batch` skip all HMAC authentication (including the SYNC_KEY requirement). Useful for key rotation or bootstrapping a backup instance. Unset after the initial sync completes. |
+| `SYNC_NO_IP_PROTECTION` | `false` | Set to `true` or `1` to disable IP whitelisting for sync endpoints. When unset (the default), sync requests from IPs not in the BTP egress list (or `SYNC_WHITELIST_IPS`) are rejected with 403 — but only if `server/config/btp-endpoints.json` is present. |
+| `SYNC_WHITELIST_IPS` | — | Comma-separated list of extra IPs or CIDR blocks to allow on sync endpoints, in addition to the BTP egress IPs in `btp-endpoints.json`. Example: `10.0.0.1,192.168.1.0/24`. Can also be set in `config.json → variables`. |
+| `SYNC_INTERNAL_IP_WHITELIST` | `192.168.0.0/16,10.0.0.0/8,172.16.0.0/12` | Comma-separated CIDRs for internal/private network ranges always allowed on sync endpoints. Defaults to the RFC 1918 private ranges. Set to an empty string to disable. Can also be set in `config.json → variables`. |
 | `CF_USERNAME` | — | SAP BTP user email for CF API login and BTP account discovery (required for subaccount refresh and destination refresh) |
 | `CF_PASSWORD` | — | SAP BTP user password (same credential used for CF API and BTP account discovery) |
 | `RESTRICTED_SUBACCOUNT_IDS` | — | Comma-separated list of **subaccount IDs** whose destinations and AOD features are completely blocked. Matching subaccounts always have `manageDestinations` and `useAOD` forced to `false` in every API response regardless of stored config, and are visually marked as **Restricted** in the Config → Subaccounts table, the Subaccount Detail modal, and the Home page column headers. Any attempt to resolve CF service credentials or discover service keys for a restricted subaccount is rejected server-side and logged as a warning. Can also be set in `config.json → variables`. |
@@ -702,6 +705,37 @@ While active, `GET /api/browse` and `POST /api/batch-download` on that instance 
 
 > [!WARNING]
 > Unset `SYNC_PROTECTION_OFF` and restart the producer as soon as the consumer has finished its initial sync.
+
+### Sync IP Whitelisting
+
+An additional layer of defence: when `server/config/btp-endpoints.json` is present, sync endpoints (`/api/sync/*`) reject requests from IPs that are not in SAP BTP's published egress IP ranges (unless `SYNC_NO_IP_PROTECTION` is set). Loopback requests (`127.0.0.1`, `::1`) are always allowed.
+
+**Step 1 — download the SAP CF endpoints CSV**
+
+1. Go to [SAP Help Portal — Regions and API Endpoints for Cloud Foundry](https://help.sap.com/docs/btp/sap-business-technology-platform/regions-and-api-endpoints-available-for-cloud-foundry-environment)
+2. Click **Download → CSV → Download all data on all pages**
+3. Save the file locally (e.g. `~/Downloads/sap-cf-endpoints.csv`)
+
+**Step 2 — generate `btp-endpoints.json`**
+
+```bash
+npm run parse-btp-endpoints ~/Downloads/sap-cf-endpoints.csv
+```
+
+This writes `server/config/btp-endpoints.json` with egress and ingress IPs for every BTP CF region. Re-run whenever SAP updates the IP ranges.
+
+**Configuration**
+
+| Variable | Description |
+|----------|-------------|
+| `SYNC_NO_IP_PROTECTION` | Set to `true` or `1` to disable IP checking entirely (e.g. for local dev without `btp-endpoints.json`). Default: off. |
+| `SYNC_WHITELIST_IPS` | Comma-separated extra IPs or CIDR blocks to allow in addition to BTP egress IPs. Example: `203.0.113.5,10.0.0.0/8`. |
+| `SYNC_INTERNAL_IP_WHITELIST` | Comma-separated CIDRs for internal/private network ranges. Default: `192.168.0.0/16,10.0.0.0/8,172.16.0.0/12`. Set to empty string to disable. |
+
+All variables can be set as environment variables or under `config.json → variables`. Environment variables take precedence.
+
+> [!NOTE]
+> IP whitelisting is only active when `server/config/btp-endpoints.json`, `SYNC_WHITELIST_IPS`, or `SYNC_INTERNAL_IP_WHITELIST` contributes at least one entry to the allowlist. Without any entries, no IP check is performed regardless of `SYNC_NO_IP_PROTECTION`. HMAC authentication (`SYNC_KEY`) remains independent and is enforced separately.
 
 ## Gzip Compression
 
