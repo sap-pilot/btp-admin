@@ -175,20 +175,29 @@ interface FetchResult {
   buf: Buffer;
   transferred: number;
   decompressed: number;
+  headers: Record<string, string | string[] | undefined>;
 }
 
 function fetchRaw(url: string, extraHeaders: Record<string, string> = {}): Promise<FetchResult> {
   const get = url.startsWith('https://') ? httpsGet : httpGet;
+  const reqHeaders = { 'Accept-Encoding': 'gzip', ...extraHeaders };
   return new Promise((resolve, reject) => {
-    const req = get(url, { headers: { 'Accept-Encoding': 'gzip', ...extraHeaders } }, (res) => {
-      if (res.statusCode === 401) {
-        res.resume();
-        reject(new SyncAuthError(url));
-        return;
-      }
-      if (res.statusCode && res.statusCode >= 400) {
-        res.resume();
-        reject(new HttpError(res.statusCode, url));
+    const req = get(url, { headers: reqHeaders }, (res) => {
+      if (res.statusCode === 401 || (res.statusCode && res.statusCode >= 400)) {
+        const code = res.statusCode!;
+        const resHeaders = res.headers as Record<string, string | string[] | undefined>;
+        const errChunks: Buffer[] = [];
+        res.on('data', (c: Buffer) => errChunks.push(c));
+        res.on('error', () => reject(code === 401 ? new SyncAuthError(url) : new HttpError(code, url)));
+        res.on('end', () => {
+          (async () => {
+            const raw = Buffer.concat(errChunks);
+            const buf = res.headers['content-encoding'] === 'gzip' ? await gunzipAsync(raw) : raw;
+            const resBody = buf.toString('utf-8').slice(0, 500);
+            logger.debug({ url, reqHeaders, statusCode: code, resHeaders, resBody }, 'Sync HTTP error response');
+            reject(code === 401 ? new SyncAuthError(url) : new HttpError(code, url));
+          })().catch(() => reject(code === 401 ? new SyncAuthError(url) : new HttpError(code, url)));
+        });
         return;
       }
       const chunks: Buffer[] = [];
@@ -200,7 +209,7 @@ function fetchRaw(url: string, extraHeaders: Record<string, string> = {}): Promi
           const transferred = raw.length;
           const buf =
             res.headers['content-encoding'] === 'gzip' ? await gunzipAsync(raw) : raw;
-          resolve({ buf, transferred, decompressed: buf.length });
+          resolve({ buf, transferred, decompressed: buf.length, headers: res.headers as Record<string, string | string[] | undefined> });
         })().catch(reject);
       });
     });
@@ -225,14 +234,21 @@ function fetchPost(url: string, body: string, extraHeaders: Record<string, strin
         },
       },
       (res) => {
-        if (res.statusCode === 401) {
-          res.resume();
-          reject(new SyncAuthError(url));
-          return;
-        }
-        if (res.statusCode && res.statusCode >= 400) {
-          res.resume();
-          reject(new HttpError(res.statusCode, url));
+        if (res.statusCode === 401 || (res.statusCode && res.statusCode >= 400)) {
+          const code = res.statusCode!;
+          const resHeaders = res.headers as Record<string, string | string[] | undefined>;
+          const errChunks: Buffer[] = [];
+          res.on('data', (c: Buffer) => errChunks.push(c));
+          res.on('error', () => reject(code === 401 ? new SyncAuthError(url) : new HttpError(code, url)));
+          res.on('end', () => {
+            (async () => {
+              const raw = Buffer.concat(errChunks);
+              const buf = res.headers['content-encoding'] === 'gzip' ? await gunzipAsync(raw) : raw;
+              const resBody = buf.toString('utf-8').slice(0, 500);
+              logger.debug({ url, reqBody: body.slice(0, 200), reqHeaders: { 'Content-Type': 'application/json', ...extraHeaders }, statusCode: code, resHeaders, resBody }, 'Sync HTTP error response');
+              reject(code === 401 ? new SyncAuthError(url) : new HttpError(code, url));
+            })().catch(() => reject(code === 401 ? new SyncAuthError(url) : new HttpError(code, url)));
+          });
           return;
         }
         const chunks: Buffer[] = [];
@@ -244,7 +260,7 @@ function fetchPost(url: string, body: string, extraHeaders: Record<string, strin
             const transferred = raw.length;
             const buf =
               res.headers['content-encoding'] === 'gzip' ? await gunzipAsync(raw) : raw;
-            resolve({ buf, transferred, decompressed: buf.length });
+            resolve({ buf, transferred, decompressed: buf.length, headers: res.headers as Record<string, string | string[] | undefined> });
           })().catch(reject);
         });
       },
@@ -353,12 +369,21 @@ async function executeSync(
     const browseQs = browseParams.toString();
     const browseUrl = browseQs ? `${remoteBase}/api/browse?${browseQs}` : `${remoteBase}/api/browse`;
 
-    const { buf: browseBuf } = await fetchRaw(browseUrl, syncKeyHeader());
-    const rawBrowse = JSON.parse(browseBuf.toString('utf-8')) as {
+    const { buf: browseBuf, headers: browseHeaders } = await fetchRaw(browseUrl, syncKeyHeader());
+    let rawBrowse: {
       folders: Record<string, (string | BrowseFile)[]>;
-      browseT?: string;    // new: yyyyMMdd-HHmmss UTC string
-      browseTs?: number;   // legacy: Unix-ms number from older producers
+      browseT?: string;
+      browseTs?: number;
     };
+    try {
+      rawBrowse = JSON.parse(browseBuf.toString('utf-8')) as typeof rawBrowse;
+    } catch (parseErr) {
+      logger.debug(
+        { url: browseUrl, headers: browseHeaders, body: browseBuf.toString('utf-8').slice(0, 500) },
+        'Browse response is not valid JSON',
+      );
+      throw parseErr;
+    }
     // Prefer new browseT string; convert legacy browseTs number if present
     const remoteBrowseT = rawBrowse.browseT
       ?? (rawBrowse.browseTs ? formatBrowseT(rawBrowse.browseTs) : undefined);

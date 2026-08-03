@@ -29,7 +29,7 @@ logger.info({ configFile: config.CONFIG_FILE, services: cfg.services.length }, '
 
 app.use('/health', healthRouter);
 app.use(authRouter);
-// API responses must never be cached — prevents 304s on repeated /api/download requests
+// API responses must never be cached — prevents 304s on repeated /api/view requests
 app.use('/api', (_req, res, next) => { res.setHeader('Cache-Control', 'no-store'); next(); });
 // Global session auth: all /api/* require login when XSUAA is bound (exceptions in requireSessionGlobal)
 app.use('/api', requireSessionGlobal);
