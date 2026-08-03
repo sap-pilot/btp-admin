@@ -526,7 +526,77 @@ export interface RefreshResult {
   errors:    string[];
 }
 
-export async function refreshDestinations(username = 'system'): Promise<RefreshResult> {
+interface DestChange { region: string; subdomain: string; name: string; action: 'created' | 'updated' | 'deleted' }
+
+function formatChangelogTs(d: Date): string {
+  const p = (n: number) => String(n).padStart(2, '0');
+  return `${d.getUTCFullYear()}${p(d.getUTCMonth() + 1)}${p(d.getUTCDate())}-${p(d.getUTCHours())}${p(d.getUTCMinutes())}${p(d.getUTCSeconds())}`;
+}
+
+async function writeGlobalChangelog(
+  username:  string,
+  mode:      'auto' | 'manual',
+  refreshed: number,
+  total:     number,
+  received:  number,
+  created:   number,
+  updated:   number,
+  deleted:   number,
+  isDelta:   boolean,
+  changes:   DestChange[],
+): Promise<void> {
+  await mkdir(LOCAL_DEST_DIR, { recursive: true });
+  const changelogPath = join(LOCAL_DEST_DIR, 'changelog.md');
+
+  // Rotate if > 2 MB
+  try {
+    const info = await stat(changelogPath);
+    if (info.size > 2 * 1024 * 1024) {
+      const archiveName = `changelog.${formatChangelogTs(new Date())}.md`;
+      await rename(changelogPath, join(LOCAL_DEST_DIR, archiveName));
+      logger.info({ archiveName }, 'Rotated global changelog');
+    }
+  } catch { /* file may not exist yet */ }
+
+  const modeLabel = mode === 'auto' ? 'Auto' : 'Manual';
+  const dateStr   = new Date().toISOString().replace('T', ' ').slice(0, 19) + ' UTC';
+  const summary   = `Refresh ${refreshed}/${total} subaccounts, received ${received} destinations, created ${created}, updated ${updated} and deleted ${deleted} destinations`;
+
+  let entry = `## [${modeLabel}] global refresh triggered by <${username}> at ${dateStr}\n\n${summary}`;
+
+  if (isDelta && changes.length > 0) {
+    for (const c of changes) {
+      const histPath = `/destinations/${encodeURIComponent(c.region)}/${encodeURIComponent(c.subdomain)}/${encodeURIComponent(c.name)}/history`;
+      entry += `\n- ${c.action}: ${c.region}.${c.subdomain} -> ${c.name} ([History](${histPath}))`;
+    }
+  }
+
+  entry += '\n\n';
+
+  const prev = existsSync(changelogPath) ? await readFile(changelogPath, 'utf-8') : '';
+  await writeFile(changelogPath, entry + prev, 'utf-8');
+}
+
+export async function getGlobalChangelog(): Promise<{ data: string; archivedFiles: string[] }> {
+  try {
+    const changelogPath = join(LOCAL_DEST_DIR, 'changelog.md');
+    const data          = existsSync(changelogPath) ? await readFile(changelogPath, 'utf-8') : '';
+    const files         = existsSync(LOCAL_DEST_DIR) ? await readdir(LOCAL_DEST_DIR) : [];
+    const archivedFiles = files
+      .filter(f => /^changelog\.\d{8}-\d{6}\.md$/.test(f))
+      .sort()
+      .reverse();
+    return { data, archivedFiles };
+  } catch { return { data: '', archivedFiles: [] }; }
+}
+
+export async function getGlobalChangelogFile(filename: string): Promise<string> {
+  if (!/^changelog\.\d{8}-\d{6}\.md$/.test(filename)) throw Object.assign(new Error('Invalid filename'), { status: 400 });
+  try { return await readFile(join(LOCAL_DEST_DIR, filename), 'utf-8'); }
+  catch { return ''; }
+}
+
+export async function refreshDestinations(username = 'system', mode: 'auto' | 'manual' = 'auto'): Promise<RefreshResult> {
   const allSas    = await readSubaccounts();
   const targetSas = allSas
     .filter(sa => sa.manageDestinations)
@@ -539,12 +609,21 @@ export async function refreshDestinations(username = 'system'): Promise<RefreshR
     return { refreshed: 0, received: 0, created: 0, updated: 0, deleted: 0, errors: [] };
   }
 
+  // Delta mode: dest/ already has subaccount subdirs → track per-destination changes.
+  // Initial mode (no subdirs, e.g. server startup): skip the list to avoid noise.
+  let isDeltaMode = false;
+  try {
+    const destEntries = await readdir(LOCAL_DEST_DIR, { withFileTypes: true });
+    isDeltaMode = destEntries.some(e => e.isDirectory());
+  } catch { /* dest/ doesn't exist yet */ }
+
   const { orgs: keyStore, planGuids } = await loadKeyStore();
   const tokenStore = await loadTokenStore();
 
   // Warnings and errors collected during the run, keyed with location for display
   const issues: string[] = [];
   const cfLoginFailed = new Set<string>();
+  const destChanges: DestChange[] = [];
   let refreshed = 0, received = 0, created = 0, updated = 0, deleted = 0;
 
   emit('refresh-destinations', { type: 'progress', current: 0, total, name: 'Initializing…', received: 0 });
@@ -590,8 +669,8 @@ export async function refreshDestinations(username = 'system'): Promise<RefreshR
         if (!name) continue;
         apiNames.add(name);
         const result = await persistDestination(destDir, name, d, username);
-        if (result === 'created') created++;
-        else if (result === 'updated') updated++;
+        if (result === 'created') { created++; destChanges.push({ region: sa.region, subdomain: sa.subdomain, name, action: 'created' }); }
+        else if (result === 'updated') { updated++; destChanges.push({ region: sa.region, subdomain: sa.subdomain, name, action: 'updated' }); }
       }
       received += apiNames.size;
 
@@ -609,6 +688,7 @@ export async function refreshDestinations(username = 'system'): Promise<RefreshR
         await rename(join(destDir, fname), join(destDir, `${destName}.deleted.json`));
         logger.info({ location, destination: destName }, `${location}/${destName} is deleted`);
         deleted++;
+        destChanges.push({ region: sa.region, subdomain: sa.subdomain, name: destName, action: 'deleted' });
       }
 
       logger.info({ location, count: apiNames.size }, `Destinations refreshed for ${location}`);
@@ -637,10 +717,12 @@ export async function refreshDestinations(username = 'system'): Promise<RefreshR
 
   globalRefreshTs = Date.now();
 
-  if (created > 0 || updated > 0 || deleted > 0) {
-    notifyCallbacks();
-    emit('dest', { ts: Date.now() });
-  }
+  await writeGlobalChangelog(username, mode, refreshed, total, received, created, updated, deleted, isDeltaMode, destChanges).catch(
+    err => logger.error({ err }, 'Failed to write global changelog'),
+  );
+
+  notifyCallbacks();
+  emit('dest', { ts: Date.now() });
 
   return { refreshed, received, created, updated, deleted, errors: issues };
 }

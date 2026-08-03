@@ -4,7 +4,7 @@ const LOCAL_STORE_DIR = process.env.LOCAL_STORE_DIR ?? './localStore';
 const SYNC_REMOTE = process.env.SYNC_REMOTE ?? '';
 const SYNC_REMOTE_BATCH_SIZE = Math.max(1, parseInt(process.env.SYNC_REMOTE_BATCH_SIZE ?? '200', 10));
 const SYNC_INTERVAL = Math.max(0, parseInt(process.env.SYNC_INTERVAL ?? '300', 10));
-const MAX_RESPONSE_STORAGE_DAYS = Math.max(0, parseInt(process.env.MAX_RESPONSE_STORAGE_DAYS ?? '7', 10));
+const MAX_RESPONSE_STORAGE_DAYS = Math.max(0, parseInt(process.env.MAX_RESPONSE_STORAGE_DAYS ?? '3', 10));
 const REQUEST_TIMEOUT_MS = Math.max(1000, parseInt(process.env.REQUEST_TIMEOUT_MS ?? '30000', 10));
 /** When set to any non-empty value, /api/browse and /api/batch-download skip HMAC/XSUAA validation entirely. */
 const SYNC_PROTECTION_OFF = !!(process.env['SYNC_PROTECTION_OFF']);

@@ -305,8 +305,26 @@ export async function browseResponseFiles(since?: number): Promise<Record<string
 
   try {
     // dest/{region}/{subdomain}/ — returned as folder keys "dest/{region}/{subdomain}"
+    // Also includes root-level .md files (changelog, archives) under folder key "dest"
     const destBase = join(storeDir, 'dest');
     const destRegions = await readdir(destBase, { withFileTypes: true });
+
+    // Root-level .md files in dest/ (changelog.md, changelog.*.md)
+    const destRootFiles: BrowseFile[] = [];
+    for (const e of destRegions) {
+      if (!e.isFile() || !e.name.endsWith('.md')) continue;
+      try {
+        const info = await stat(join(destBase, e.name));
+        if (!since || since <= 0 || info.mtimeMs >= since) {
+          destRootFiles.push({ name: e.name, mtime: info.mtimeMs });
+        }
+      } catch { /* skip */ }
+    }
+    if (destRootFiles.length > 0) {
+      destRootFiles.sort((a, b) => a.name.localeCompare(b.name));
+      result['dest'] = destRootFiles;
+    }
+
     await Promise.all(
       destRegions.filter(e => e.isDirectory()).map(async (regionEntry) => {
         try {

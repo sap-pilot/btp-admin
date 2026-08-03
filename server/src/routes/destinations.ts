@@ -13,6 +13,8 @@ import {
   saveDestinationEntry,
   getDestinationChangelog,
   getGlobalRefreshTs,
+  getGlobalChangelog,
+  getGlobalChangelogFile,
 } from '../services/destinationService.js';
 import { getAutoGlobalRefreshMs, getAutoSubaccountRefreshMs } from '../services/configService.js';
 
@@ -30,7 +32,7 @@ router.get('/status', requireAdmin, async (req, res, next) => {
 
     // Auto-trigger a global refresh in the background if threshold exceeded
     if (globalTs === null || (Date.now() - globalTs) > autoGlobalMs) {
-      void refreshDestinations(username).catch(() => {});
+      void refreshDestinations(username, 'auto').catch(() => {});
     }
 
     res.json({
@@ -73,8 +75,21 @@ router.post('/refresh', requireAdmin, async (req, res, next) => {
   try {
     const authReq  = req as AuthRequest;
     const username = authReq.authSession?.email || authReq.authSession?.firstName || 'admin';
-    const result   = await refreshDestinations(username);
+    const result   = await refreshDestinations(username, 'manual');
     res.json({ ok: true, result });
+  } catch (err) { next(err); }
+});
+
+router.get('/global-changelog', requireAdmin, async (req, res, next) => {
+  try {
+    const file = typeof req.query['file'] === 'string' ? req.query['file'] : undefined;
+    if (file) {
+      const data = await getGlobalChangelogFile(file);
+      res.json({ ok: true, data });
+    } else {
+      const result = await getGlobalChangelog();
+      res.json({ ok: true, ...result });
+    }
   } catch (err) { next(err); }
 });
 

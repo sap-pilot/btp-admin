@@ -295,7 +295,7 @@ async function downloadBatch(
   filePaths: string[],
   remoteMtimes: Map<string, number>,
 ): Promise<{ transferred: number; decompressed: number }> {
-  const url = `${remoteBase}/api/batch-download`;
+  const url = `${remoteBase}/api/sync/batch`;
   const { buf: zip, transferred } = await fetchPost(url, JSON.stringify({ paths: filePaths }), syncKeyHeader());
   const entries = extractZip(zip);
 
@@ -364,7 +364,7 @@ async function executeSync(
   selfBaseUrl: string | undefined,
   since: string | undefined,  // yyyyMMdd-HHmmss UTC, or undefined for a full sync
 ): Promise<SyncStats> {
-  const callbackUrl = selfBaseUrl ? `${selfBaseUrl}/api/download-trigger` : undefined;
+  const callbackUrl = selfBaseUrl ? `${selfBaseUrl}/api/sync/trigger` : undefined;
   logger.info({ remote: remoteBase, since: since ?? 'full', hasCallback: !!callbackUrl }, 'Sync starting');
   const start = Date.now();
 
@@ -377,7 +377,7 @@ async function executeSync(
     if (since) browseParams.set('since', since);
     if (callbackUrl) browseParams.set('callback', callbackUrl);
     const browseQs = browseParams.toString();
-    const browseUrl = browseQs ? `${remoteBase}/api/browse?${browseQs}` : `${remoteBase}/api/browse`;
+    const browseUrl = browseQs ? `${remoteBase}/api/sync/browse?${browseQs}` : `${remoteBase}/api/sync/browse`;
 
     const { buf: browseBuf, headers: browseHeaders } = await fetchRaw(browseUrl, syncKeyHeader());
     let rawBrowse: {

@@ -28,6 +28,7 @@ export interface SubaccountDestModalProps {
   org:               SubaccountEntry;
   allNames:          string[];
   initialName?:      string;
+  initialTab?:       Tab;
   onClose:           () => void;
   selectedDests?:    SelectedDest[];
   onToggleCompare?:  (d: SelectedDest) => void;
@@ -546,7 +547,7 @@ function TestTab() {
 
 // ─── Main modal ───────────────────────────────────────────────────────────────
 
-export default function SubaccountDestModal({ org, allNames, initialName, onClose, selectedDests, onToggleCompare }: SubaccountDestModalProps) {
+export default function SubaccountDestModal({ org, allNames, initialName, initialTab, onClose, selectedDests, onToggleCompare }: SubaccountDestModalProps) {
   const auth     = useAuth();
   const username = auth.email || auth.firstName || 'admin';
 
@@ -562,7 +563,7 @@ export default function SubaccountDestModal({ org, allNames, initialName, onClos
   const [lastClickName, setLastClickName] = useState(initialName ?? allNames[0] ?? '');
 
   // Right panel
-  const [activeTab, setActiveTab] = useState<Tab>('properties');
+  const [activeTab, setActiveTab] = useState<Tab>(initialTab ?? 'properties');
 
   // Properties (existing destination)
   const [serverProps, setServerProps] = useState<DestProp[]>([]);
@@ -603,7 +604,6 @@ export default function SubaccountDestModal({ org, allNames, initialName, onClos
   // Load destination on primary selection change
   useEffect(() => {
     if (!selectedName) return;
-    
     void loadDest(selectedName);
     if (activeTab === 'changelog') void loadChangelog(selectedName);
   }, [selectedName]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -635,14 +635,15 @@ export default function SubaccountDestModal({ org, allNames, initialName, onClos
     return () => clearTimeout(searchTimer.current);
   }, [searchQuery, localAllNames, org.region, org.subdomain]);
 
-  // Sync browser URL with selected destination
+  // Sync browser URL with selected destination and active tab
   useEffect(() => {
     if (!selectedName) return;
+    const tabSuffix = activeTab === 'changelog' ? '/history' : activeTab === 'test' ? '/test' : '';
     history.replaceState(
       null, '',
-      `/destinations/${encodeURIComponent(org.region)}/${encodeURIComponent(org.subdomain)}/${encodeURIComponent(selectedName)}`,
+      `/destinations/${encodeURIComponent(org.region)}/${encodeURIComponent(org.subdomain)}/${encodeURIComponent(selectedName)}${tabSuffix}`,
     );
-  }, [selectedName, org.region, org.subdomain]);
+  }, [selectedName, activeTab, org.region, org.subdomain]);
 
   // Proactive destination load on mount — refreshes from API if data is stale
   useEffect(() => {
