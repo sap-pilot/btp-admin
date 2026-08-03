@@ -54,9 +54,26 @@ export default function SettingsPanel({ data, onChange, isDirty, isSaving, onRes
   const visibleItems = NAV_ITEMS.filter(n => !q || n.label.toLowerCase().includes(q));
 
   return (
-    <div className="flex h-full">
-      {/* Left nav */}
-      <div className="w-48 shrink-0 border-r border-border flex flex-col">
+    <div className="flex flex-col sm:flex-row h-full">
+      {/* Mobile: horizontal tab bar */}
+      <div className="flex sm:hidden border-b border-border shrink-0 overflow-x-auto">
+        {NAV_ITEMS.map(n => (
+          <button
+            key={n.id}
+            onClick={() => setActiveNav(n.id)}
+            className={`px-4 py-2 text-sm border-b-2 whitespace-nowrap transition-colors ${
+              activeNav === n.id
+                ? 'border-primary text-foreground font-medium'
+                : 'border-transparent text-muted-foreground hover:text-foreground'
+            }`}
+          >
+            {n.label}
+          </button>
+        ))}
+      </div>
+
+      {/* Desktop: left nav panel */}
+      <div className="hidden sm:flex sm:flex-col sm:w-48 sm:shrink-0 sm:border-r border-border">
         <div className="p-2 border-b border-border">
           <input
             type="text"
