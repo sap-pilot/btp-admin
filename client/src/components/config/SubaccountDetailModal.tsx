@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import { ChevronDown, ShieldBan, X } from 'lucide-react';
+import { useState, useEffect } from 'react';
+import { ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown, Filter, ShieldBan, X } from 'lucide-react';
 import * as DialogPrimitive from '@radix-ui/react-dialog';
 import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator,
@@ -128,7 +128,17 @@ const thCls = 'text-left px-2 py-1.5 text-[10px] font-medium text-muted-foregrou
 const tdCls = 'px-2 py-1.5 border-b border-border text-xs';
 
 export default function SubaccountDetailModal({ sa, onClose, cockpit, cockpitMenu }: Props) {
-  const [activeTab, setActiveTab] = useState<ModalTab>('info');
+  const [activeTab, setActiveTab]     = useState<ModalTab>('info');
+  const [svcFilter, setSvcFilter]     = useState('');
+  const [subFilter, setSubFilter]     = useState('');
+  const [svcExpanded, setSvcExpanded] = useState<Set<string>>(new Set());
+
+  useEffect(() => {
+    if (!sa) return;
+    setSvcFilter('');
+    setSubFilter('');
+    setSvcExpanded(new Set(sa.serviceInstances.map(svc => svc.spaceId ?? '')));
+  }, [sa]);
 
   const tabCls = (t: ModalTab) =>
     `px-3 py-2 text-xs font-medium transition-colors border-b-2 -mb-px ${
@@ -136,6 +146,8 @@ export default function SubaccountDetailModal({ sa, onClose, cockpit, cockpitMen
         ? 'border-primary text-foreground'
         : 'border-transparent text-muted-foreground hover:text-foreground'
     }`;
+
+  const btnOutline = 'inline-flex items-center gap-1 px-2 py-1 rounded text-xs font-medium border border-border hover:bg-accent hover:text-accent-foreground transition-colors disabled:opacity-50 disabled:cursor-not-allowed';
 
   return (
     <DialogPrimitive.Root open={sa !== null} onOpenChange={v => { if (!v) onClose(); }}>
@@ -212,181 +224,306 @@ export default function SubaccountDetailModal({ sa, onClose, cockpit, cockpitMen
                 </button>
               </div>
 
-              {/* Tab content — fills remaining modal height */}
-              <div className="flex-1 overflow-auto">
+              {/* Tab content */}
+              <div className="flex-1 min-h-0 flex flex-col">
 
                 {/* ── Subaccount & Org ── */}
                 {activeTab === 'info' && (
-                  <div className="p-4 space-y-4">
-                    {/* Identity grid */}
-                    <div className="grid grid-cols-2 gap-3">
-                      <Field label="Subaccount ID"       value={sa.subaccountId}                mono />
-                      <Field label="Global Account GUID" value={sa.globalAccountGUID}           mono />
-                      <Field label="Global Account Name"      value={sa.globalAccountName}                />
-                      <Field label="Global Account Subdomain" value={sa.globalAccountSubdomain} mono />
-                      <Field label="Region"              value={sa.region}                      mono />
-                      <Field label="Subdomain"           value={sa.subdomain}                   mono />
-                      <Field label="Org Name"            value={sa.org?.orgName ?? ''}               />
-                      <Field label="Org ID"              value={sa.org?.orgId   ?? ''}          mono />
-                      <Field label="Group IDs"           value={sa.groupIds}                         />
-                      <Field label="Alias"               value={sa.alias}                            />
-                    </div>
-
-                    {/* Flags */}
-                    <div className="flex gap-4">
-                      {([
-                        { label: 'In Homepage',         val: sa.inHomepage },
-                        { label: 'Manage Destinations', val: sa.manageDestinations },
-                        { label: 'Use AOD',             val: sa.useAOD },
-                      ] as const).map(({ label, val }) => (
-                        <div key={label} className="flex items-center gap-1.5">
-                          <span className={`w-2 h-2 rounded-full ${val ? 'bg-green-500' : 'bg-muted-foreground/30'}`} />
-                          <span className="text-xs text-muted-foreground">{label}</span>
-                        </div>
-                      ))}
-                    </div>
-
-                    {/* CF Spaces — full width */}
-                    {sa.org && sa.org.spaces.length > 0 && (
-                      <div>
-                        <h3 className="text-xs font-semibold text-foreground border-b border-border pb-1 mb-2">
-                          CF Spaces
-                        </h3>
-                        <table className="w-full border-collapse text-xs">
-                          <thead>
-                            <tr className="bg-muted/30">
-                              <th className={thCls}>Space Name</th>
-                              <th className={`${thCls} font-mono`}>Space ID</th>
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {sa.org.spaces.map(s => {
-                              const spaceUrl = cockpit?.host
-                                ? `${ensureHttps(cockpit.host)}/#/globalaccount/${sa.globalAccountGUID}/subaccount/${sa.subaccountId}/space/${s.spaceId}`
-                                : undefined;
-                              return (
-                                <tr key={s.spaceId} className="hover:bg-muted/20">
-                                  <td className={tdCls}>
-                                    {spaceUrl
-                                      ? <a href={spaceUrl} target="_blank" rel="noopener noreferrer" className="hover:underline hover:text-primary transition-colors">{s.spaceName}</a>
-                                      : s.spaceName
-                                    }
-                                  </td>
-                                  <td className={`${tdCls} font-mono text-muted-foreground`}>{s.spaceId}</td>
-                                </tr>
-                              );
-                            })}
-                          </tbody>
-                        </table>
+                  <div className="flex-1 overflow-auto">
+                    <div className="p-4 space-y-4">
+                      {/* Identity grid */}
+                      <div className="grid grid-cols-2 gap-3">
+                        <Field label="Subaccount ID"       value={sa.subaccountId}                mono />
+                        <Field label="Global Account GUID" value={sa.globalAccountGUID}           mono />
+                        <Field label="Global Account Name"      value={sa.globalAccountName}                />
+                        <Field label="Global Account Subdomain" value={sa.globalAccountSubdomain} mono />
+                        <Field label="Region"              value={sa.region}                      mono />
+                        <Field label="Subdomain"           value={sa.subdomain}                   mono />
+                        <Field label="Org Name"            value={sa.org?.orgName ?? ''}               />
+                        <Field label="Org ID"              value={sa.org?.orgId   ?? ''}          mono />
+                        <Field label="Group IDs"           value={sa.groupIds}                         />
+                        <Field label="Alias"               value={sa.alias}                            />
                       </div>
-                    )}
+
+                      {/* Flags */}
+                      <div className="flex gap-4">
+                        {([
+                          { label: 'In Homepage',         val: sa.inHomepage },
+                          { label: 'Manage Destinations', val: sa.manageDestinations },
+                          { label: 'Use AOD',             val: sa.useAOD },
+                        ] as const).map(({ label, val }) => (
+                          <div key={label} className="flex items-center gap-1.5">
+                            <span className={`w-2 h-2 rounded-full ${val ? 'bg-green-500' : 'bg-muted-foreground/30'}`} />
+                            <span className="text-xs text-muted-foreground">{label}</span>
+                          </div>
+                        ))}
+                      </div>
+
+                      {/* CF Spaces — full width */}
+                      {sa.org && sa.org.spaces.length > 0 && (
+                        <div>
+                          <h3 className="text-xs font-semibold text-foreground border-b border-border pb-1 mb-2">
+                            CF Spaces
+                          </h3>
+                          <table className="w-full border-collapse text-xs">
+                            <thead>
+                              <tr className="bg-muted/30">
+                                <th className={thCls}>Space Name</th>
+                                <th className={`${thCls} font-mono`}>Space ID</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {sa.org.spaces.map(s => {
+                                const spaceUrl = cockpit?.host
+                                  ? `${ensureHttps(cockpit.host)}/#/globalaccount/${sa.globalAccountGUID}/subaccount/${sa.subaccountId}/space/${s.spaceId}`
+                                  : undefined;
+                                return (
+                                  <tr key={s.spaceId} className="hover:bg-muted/20">
+                                    <td className={tdCls}>
+                                      {spaceUrl
+                                        ? <a href={spaceUrl} target="_blank" rel="noopener noreferrer" className="hover:underline hover:text-primary transition-colors">{s.spaceName}</a>
+                                        : s.spaceName
+                                      }
+                                    </td>
+                                    <td className={`${tdCls} font-mono text-muted-foreground`}>{s.spaceId}</td>
+                                  </tr>
+                                );
+                              })}
+                            </tbody>
+                          </table>
+                        </div>
+                      )}
+                    </div>
                   </div>
                 )}
 
                 {/* ── Subscriptions ── */}
-                {activeTab === 'subscriptions' && (
-                  sa.subscriptions.length > 0 ? (
-                    <table className="w-full border-collapse text-xs">
-                      <thead className="sticky top-0 z-10">
-                        <tr className="bg-muted/30">
-                          <th className={thCls}>Application</th>
-                          <th className={thCls}>URL</th>
-                          <th className={`${thCls} text-center`}>Customer Dev</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {sa.subscriptions.map((sub, i) => (
-                          <tr key={i} className="hover:bg-muted/20">
-                            <td className={tdCls}>{sub.displayName}</td>
-                            <td className={`${tdCls} font-mono text-[11px]`}>
-                              <a href={sub.url} target="_blank" rel="noreferrer" className="text-primary hover:underline break-all">
-                                {sub.url}
-                              </a>
-                            </td>
-                            <td className={`${tdCls} text-center`}>
-                              {sub.customerDeveloped
-                                ? <span className="text-green-600 dark:text-green-400 font-medium">Yes</span>
-                                : <span className="text-muted-foreground/40">—</span>}
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  ) : (
-                    <p className="text-xs text-muted-foreground px-3 py-8 text-center">No subscriptions.</p>
-                  )
-                )}
+                {activeTab === 'subscriptions' && (() => {
+                  const q        = subFilter.toLowerCase().trim();
+                  const filtered = sa.subscriptions.filter(sub =>
+                    !q ||
+                    sub.displayName.toLowerCase().includes(q) ||
+                    sub.url.toLowerCase().includes(q)
+                  );
+                  return (
+                    <>
+                      <div className="shrink-0 flex items-center gap-2 px-2 py-2 border-b border-border">
+                        <div className="relative flex-1 min-w-0">
+                          <Filter className="absolute left-2 top-1/2 -translate-y-1/2 h-3 w-3 text-muted-foreground/50 pointer-events-none" />
+                          <input
+                            type="text"
+                            placeholder="Filter subscriptions…"
+                            value={subFilter}
+                            onChange={e => setSubFilter(e.target.value)}
+                            className="w-full h-7 pl-7 pr-7 text-xs bg-transparent border border-border rounded outline-none focus:border-primary placeholder:text-muted-foreground/50"
+                          />
+                          {subFilter && (
+                            <button onClick={() => setSubFilter('')} className="absolute right-1 top-1/2 -translate-y-1/2 p-0.5 rounded text-muted-foreground hover:text-foreground transition-colors" aria-label="Clear filter">
+                              <X className="h-3 w-3" />
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                      <div className="flex-1 overflow-auto">
+                        {filtered.length > 0 ? (
+                          <table className="w-full border-collapse text-xs">
+                            <thead className="sticky top-0 z-10">
+                              <tr className="bg-muted/30">
+                                <th className={thCls}>Application</th>
+                                <th className={thCls}>URL</th>
+                                <th className={`${thCls} text-center`}>Customer Dev</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {filtered.map((sub, i) => (
+                                <tr key={i} className="hover:bg-muted/20">
+                                  <td className={tdCls}>{sub.displayName}</td>
+                                  <td className={`${tdCls} font-mono text-[11px]`}>
+                                    <a href={sub.url} target="_blank" rel="noreferrer" className="text-primary hover:underline break-all">
+                                      {sub.url}
+                                    </a>
+                                  </td>
+                                  <td className={`${tdCls} text-center`}>
+                                    {sub.customerDeveloped
+                                      ? <span className="text-green-600 dark:text-green-400 font-medium">Yes</span>
+                                      : <span className="text-muted-foreground/40">—</span>}
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        ) : (
+                          <p className="text-xs text-muted-foreground px-3 py-8 text-center">
+                            {sa.subscriptions.length === 0 ? 'No subscriptions.' : 'No subscriptions match the filter.'}
+                          </p>
+                        )}
+                      </div>
+                    </>
+                  );
+                })()}
 
                 {/* ── Service Instances ── */}
-                {activeTab === 'services' && (
-                  sa.serviceInstances.length > 0 ? (
-                    <table className="w-full border-collapse text-xs">
-                      <thead className="sticky top-0 z-10">
-                        <tr className="bg-muted/30">
-                          <th className={thCls}>Space / Instance</th>
-                          <th className={thCls}>Service</th>
-                          <th className={thCls}>Dashboard</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {(() => {
-                          const groups = sa.serviceInstances.reduce<Record<string, typeof sa.serviceInstances>>((acc, svc) => {
-                            (acc[svc.spaceId ?? ''] ??= []).push(svc);
-                            return acc;
-                          }, {});
-                          return Object.entries(groups)
-                            .sort(([a], [b]) => {
-                              const nameA = sa.org?.spaces.find(s => s.spaceId === a)?.spaceName ?? a;
-                              const nameB = sa.org?.spaces.find(s => s.spaceId === b)?.spaceName ?? b;
-                              return nameA.localeCompare(nameB);
-                            })
-                            .flatMap(([spaceId, instances]) => {
-                              const spaceName = (sa.org?.spaces.find(s => s.spaceId === spaceId)?.spaceName ?? spaceId) || 'Unknown Space';
-                              const spaceUrl  = cockpit && sa.org && spaceId
-                                ? buildSpaceInstUrl(sa, cockpit, spaceId)
-                                : undefined;
-                              return [
-                                <tr key={`sp-${spaceId}`} className="bg-muted/10">
-                                  <td colSpan={3} className="px-2 py-1 border-b border-border text-xs font-medium text-foreground">
-                                    {spaceUrl
-                                      ? <a href={spaceUrl} target="_blank" rel="noopener noreferrer" className="hover:underline hover:text-primary transition-colors">{spaceName}</a>
-                                      : spaceName
-                                    }
-                                  </td>
-                                </tr>,
-                                ...instances.map((svc, i) => {
-                                  const instUrl = cockpit && sa.org && spaceId && svc.id
-                                    ? buildInstanceDetailUrl(sa, cockpit, spaceId, svc.id)
-                                    : undefined;
-                                  return (
-                                    <tr key={`${spaceId}-${i}`} className="hover:bg-muted/20">
-                                      <td className={`${tdCls} pl-6`}>
-                                        {instUrl
-                                          ? <a href={instUrl} target="_blank" rel="noopener noreferrer" className="hover:underline hover:text-primary transition-colors">{svc.instanceName}</a>
-                                          : svc.instanceName
-                                        }
-                                      </td>
-                                      <td className={tdCls}>
-                                        {(svc.serviceOfferingName || svc.servicePlanId)
-                                          ? <span className="font-mono text-[10px] text-muted-foreground">{svc.serviceOfferingName || svc.servicePlanId}</span>
-                                          : <span className="text-muted-foreground/40">—</span>
-                                        }
-                                      </td>
-                                      <td className={`${tdCls} font-mono text-[11px]`}>
-                                        <a href={svc.url} target="_blank" rel="noreferrer" className="text-primary hover:underline break-all">{svc.url}</a>
-                                      </td>
-                                    </tr>
-                                  );
-                                }),
-                              ];
-                            });
-                        })()}
-                      </tbody>
-                    </table>
-                  ) : (
-                    <p className="text-xs text-muted-foreground px-3 py-8 text-center">No service instances.</p>
-                  )
-                )}
+                {activeTab === 'services' && (() => {
+                  const q           = svcFilter.toLowerCase().trim();
+                  const isFiltering = q.length > 0;
+
+                  const allGroups = Object.entries(
+                    sa.serviceInstances.reduce<Record<string, typeof sa.serviceInstances>>((acc, svc) => {
+                      (acc[svc.spaceId ?? ''] ??= []).push(svc);
+                      return acc;
+                    }, {})
+                  ).sort(([a], [b]) => {
+                    const nameA = (sa.org?.spaces.find(s => s.spaceId === a)?.spaceName ?? a) || '';
+                    const nameB = (sa.org?.spaces.find(s => s.spaceId === b)?.spaceName ?? b) || '';
+                    return nameA.localeCompare(nameB);
+                  });
+
+                  type Group = { spaceId: string; spaceName: string; instances: typeof sa.serviceInstances };
+                  const filteredGroups: Group[] = allGroups
+                    .map(([spaceId, instances]) => {
+                      const spaceName = (sa.org?.spaces.find(s => s.spaceId === spaceId)?.spaceName ?? spaceId) || 'Unknown Space';
+                      if (!q) return { spaceId, spaceName, instances };
+                      const spaceMatch = spaceName.toLowerCase().includes(q);
+                      if (spaceMatch) return { spaceId, spaceName, instances };
+                      const matched = instances.filter(svc =>
+                        svc.instanceName.toLowerCase().includes(q) ||
+                        (svc.serviceOfferingName ?? '').toLowerCase().includes(q) ||
+                        (svc.servicePlanId ?? '').toLowerCase().includes(q)
+                      );
+                      return matched.length > 0 ? { spaceId, spaceName, instances: matched } : null;
+                    })
+                    .filter((g): g is Group => g !== null);
+
+                  const allSpaceIds = allGroups.map(([id]) => id);
+
+                  function toggleSvc(spaceId: string) {
+                    setSvcExpanded(prev => {
+                      const next = new Set(prev);
+                      next.has(spaceId) ? next.delete(spaceId) : next.add(spaceId);
+                      return next;
+                    });
+                  }
+
+                  return (
+                    <>
+                      {/* Toolbar */}
+                      <div className="shrink-0 flex items-center gap-2 px-2 py-2 border-b border-border">
+                        <div className="relative flex-1 min-w-0">
+                          <Filter className="absolute left-2 top-1/2 -translate-y-1/2 h-3 w-3 text-muted-foreground/50 pointer-events-none" />
+                          <input
+                            type="text"
+                            placeholder="Filter spaces / instances…"
+                            value={svcFilter}
+                            onChange={e => setSvcFilter(e.target.value)}
+                            className="w-full h-7 pl-7 pr-7 text-xs bg-transparent border border-border rounded outline-none focus:border-primary placeholder:text-muted-foreground/50"
+                          />
+                          {svcFilter && (
+                            <button onClick={() => setSvcFilter('')} className="absolute right-1 top-1/2 -translate-y-1/2 p-0.5 rounded text-muted-foreground hover:text-foreground transition-colors" aria-label="Clear filter">
+                              <X className="h-3 w-3" />
+                            </button>
+                          )}
+                        </div>
+                        <button
+                          onClick={() => setSvcExpanded(new Set(allSpaceIds))}
+                          disabled={isFiltering}
+                          className={btnOutline}
+                          title="Expand all"
+                        >
+                          <ChevronsUpDown className="h-3.5 w-3.5" />
+                          <span className="hidden sm:inline">Expand</span>
+                        </button>
+                        <button
+                          onClick={() => setSvcExpanded(new Set())}
+                          disabled={isFiltering}
+                          className={btnOutline}
+                          title="Collapse all"
+                        >
+                          <ChevronsDownUp className="h-3.5 w-3.5" />
+                          <span className="hidden sm:inline">Collapse</span>
+                        </button>
+                      </div>
+
+                      {/* Tree table */}
+                      <div className="flex-1 overflow-auto">
+                        {filteredGroups.length > 0 ? (
+                          <table className="w-full border-collapse text-xs">
+                            <thead className="sticky top-0 z-10">
+                              <tr className="bg-muted/30">
+                                <th className={thCls}>Space / Instance</th>
+                                <th className={thCls}>Service</th>
+                                <th className={thCls}>Dashboard</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {filteredGroups.flatMap(({ spaceId, spaceName, instances }) => {
+                                const isExpanded = isFiltering || svcExpanded.has(spaceId);
+                                const spaceUrl = cockpit && sa.org && spaceId
+                                  ? buildSpaceInstUrl(sa, cockpit, spaceId)
+                                  : undefined;
+                                return [
+                                  <tr
+                                    key={`sp-${spaceId}`}
+                                    className="bg-muted/20 hover:bg-muted/30 cursor-pointer select-none"
+                                    onClick={() => { if (!isFiltering) toggleSvc(spaceId); }}
+                                  >
+                                    <td colSpan={3} className="px-2 py-1.5 border-b border-border">
+                                      <div className="flex items-center gap-1.5">
+                                        <span className="shrink-0 text-muted-foreground">
+                                          {isExpanded
+                                            ? <ChevronDown className="h-3.5 w-3.5" />
+                                            : <ChevronRight className="h-3.5 w-3.5" />
+                                          }
+                                        </span>
+                                        <span className="font-medium text-foreground">
+                                          {spaceUrl
+                                            ? <a href={spaceUrl} target="_blank" rel="noopener noreferrer" className="hover:underline hover:text-primary transition-colors" onClick={e => e.stopPropagation()}>{spaceName}</a>
+                                            : spaceName
+                                          }
+                                        </span>
+                                        <span className="text-[10px] text-muted-foreground shrink-0">({instances.length})</span>
+                                      </div>
+                                    </td>
+                                  </tr>,
+                                  ...(isExpanded ? instances.map((svc, i) => {
+                                    const instUrl = cockpit && sa.org && spaceId && svc.id
+                                      ? buildInstanceDetailUrl(sa, cockpit, spaceId, svc.id)
+                                      : undefined;
+                                    return (
+                                      <tr key={`${spaceId}-${i}`} className="hover:bg-muted/20">
+                                        <td className={`${tdCls} pl-7`}>
+                                          {instUrl
+                                            ? <a href={instUrl} target="_blank" rel="noopener noreferrer" className="hover:underline hover:text-primary transition-colors">{svc.instanceName}</a>
+                                            : svc.instanceName
+                                          }
+                                        </td>
+                                        <td className={tdCls}>
+                                          {(svc.serviceOfferingName || svc.servicePlanId)
+                                            ? <span className="font-mono text-[10px] text-muted-foreground">{svc.serviceOfferingName || svc.servicePlanId}</span>
+                                            : <span className="text-muted-foreground/40">—</span>
+                                          }
+                                        </td>
+                                        <td className={`${tdCls} font-mono text-[11px]`}>
+                                          <a href={svc.url} target="_blank" rel="noreferrer" className="text-primary hover:underline break-all">{svc.url}</a>
+                                        </td>
+                                      </tr>
+                                    );
+                                  }) : []),
+                                ];
+                              })}
+                            </tbody>
+                          </table>
+                        ) : (
+                          <p className="text-xs text-muted-foreground px-3 py-8 text-center">
+                            {sa.serviceInstances.length === 0
+                              ? 'No service instances.'
+                              : 'No service instances match the filter.'
+                            }
+                          </p>
+                        )}
+                      </div>
+                    </>
+                  );
+                })()}
 
               </div>
             </>

@@ -136,25 +136,53 @@ function normalizeSubaccountPositions(data: SubaccountEntry[]): SubaccountEntry[
   return sorted.map((s, idx) => ({ ...s, pos: idx + 1 }));
 }
 
+function mergeOrg(
+  existingOrg: SubaccountEntry['org'],
+  freshOrg:    SubaccountEntry['org'],
+): SubaccountEntry['org'] {
+  if (!freshOrg) return existingOrg; // CF access lost — keep existing
+  if (!existingOrg || existingOrg.orgId !== freshOrg.orgId) return freshOrg;
+  // Same org: update orgName (CF rename), merge spaces additively, update spaceName
+  const existingSpaceIds = new Set(existingOrg.spaces.map(s => s.spaceId));
+  const mergedSpaces = existingOrg.spaces.map(s => {
+    const fs = freshOrg.spaces.find(f => f.spaceId === s.spaceId);
+    return fs ? { ...s, spaceName: fs.spaceName } : s;
+  });
+  for (const fs of freshOrg.spaces) {
+    if (!existingSpaceIds.has(fs.spaceId)) mergedSpaces.push(fs);
+  }
+  return { orgId: freshOrg.orgId, orgName: freshOrg.orgName, spaces: mergedSpaces };
+}
+
 function mergeSubaccounts(existing: SubaccountEntry[], fresh: SubaccountEntry[]): SubaccountEntry[] {
   type Editable = Pick<SubaccountEntry, 'alias' | 'groupIds' | 'pos' | 'inHomepage' | 'manageDestinations' | 'useAOD'>;
-  const editableById = new Map<string, Editable>();
+  type Preserved = Editable & { org: SubaccountEntry['org'] };
+  const preservedById = new Map<string, Preserved>();
   for (const s of existing) {
-    editableById.set(s.subaccountId, {
+    preservedById.set(s.subaccountId, {
       alias:              s.alias,
       groupIds:           s.groupIds,
       pos:                s.pos,
       inHomepage:         s.inHomepage         ?? false,
       manageDestinations: s.manageDestinations ?? false,
       useAOD:             s.useAOD             ?? false,
+      org:                s.org,
     });
   }
 
+  const maxExistingPos = existing.reduce((m, s) => Math.max(m, s.pos), 0);
+  let nextNewPos = maxExistingPos + 1;
+
   const seenIds = new Set<string>();
-  const merged: SubaccountEntry[] = fresh.map((s, i) => {
+  const merged: SubaccountEntry[] = fresh.map(s => {
     seenIds.add(s.subaccountId);
-    const prev = editableById.get(s.subaccountId);
-    return prev ? { ...s, ...prev } : { ...s, pos: i };
+    const prev = preservedById.get(s.subaccountId);
+    if (prev) {
+      const { org: existingOrg, ...editableFields } = prev;
+      return { ...s, ...editableFields, org: mergeOrg(existingOrg, s.org) };
+    }
+    // New subaccount — append after all existing by assigning pos beyond current max
+    return { ...s, pos: nextNewPos++ };
   });
 
   // Keep subaccounts from existing that did not appear in fresh (temporary access loss)
@@ -306,7 +334,7 @@ export async function refreshSubaccounts(user = 'system', force = false): Promis
       globalAccountGUID:      saRaw.globalAccountGUID,
       globalAccountName:      gaMap.get(saRaw.globalAccountGUID)?.displayName ?? '',
       globalAccountSubdomain: gaMap.get(saRaw.globalAccountGUID)?.subdomain   ?? '',
-      subdomain:              saRaw.subdomain,
+      subdomain:              saRaw.subdomain.toLowerCase(),
       subaccountId:       saRaw.guid,
       subaccountName:     saRaw.displayName,
       groupIds:           '',
