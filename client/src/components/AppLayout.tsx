@@ -58,7 +58,7 @@ export default function AppLayout() {
     fetch('/api/settings')
       .then(r => r.json() as Promise<{ ok: boolean; data: SettingsData }>)
       .then(({ data }) => setSettings(data))
-      .catch(() => null);
+      .catch(() => setSettings({ homepage: { cockpit: { idp: '', host: '' }, mainSubscriptions: [] }, menus: [] }));
   }, [settingsKey]);
 
   const refreshSettings = useCallback(() => setSettingsKey(k => k + 1), []);

@@ -144,16 +144,16 @@ export default function Home() {
       </div>
 
       <div className="flex-1 overflow-auto">
-        {loading && (
+        {(loading || settings === null) && (
           <div className="flex items-center justify-center h-full text-sm text-muted-foreground">Loading…</div>
         )}
-        {!loading && !homepage && (
+        {!loading && settings !== null && !homepage && (
           <div className="flex flex-col items-center justify-center h-full gap-2 text-muted-foreground">
             <p className="text-sm">No tabs configured.</p>
             <p className="text-xs">Add tabs in <strong>Config → Tabs</strong>.</p>
           </div>
         )}
-        {!loading && homepage && (
+        {!loading && settings !== null && homepage && (
           <HomepageContent
             data={homepage}
             activeTab={displayTab}
