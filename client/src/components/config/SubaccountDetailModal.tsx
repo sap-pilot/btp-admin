@@ -52,9 +52,13 @@ function ensureHttps(host: string): string {
   return /^https?:\/\//i.test(host) ? host : `https://${host}`;
 }
 
+function stripProtocol(host: string): string {
+  return host.replace(/^https?:\/\//i, '');
+}
+
 function buildCtx(sa: SubaccountEntry, cockpit: { idp: string; host: string }): Record<string, string> {
   return {
-    'homepage.cockpit.host': cockpit.host ? ensureHttps(cockpit.host) : '',
+    'homepage.cockpit.host': cockpit.host ? stripProtocol(cockpit.host) : '',
     'homepage.cockpit.idp':  cockpit.idp,
     cockpitRegion:           deriveCockpitRegion(sa.region),
     globalAccountGUID:       sa.globalAccountGUID,
@@ -179,28 +183,30 @@ export default function SubaccountDetailModal({ sa, onClose, cockpit, cockpitMen
                   )}
                 </div>
                 {cockpit && cockpitMenu && (() => {
-                  const ctx    = buildCtx(sa, cockpit);
-                  const url    = cockpitMenu.url ? resolveUrl(cockpitMenu.url, ctx) : undefined;
-                  const spaces = sa.org?.spaces ?? [];
+                  const ctx     = buildCtx(sa, cockpit);
+                  const url     = cockpitMenu.url ? resolveUrl(cockpitMenu.url, ctx) : undefined;
+                  const spaces  = sa.org?.spaces ?? [];
+                  const hasSubs = cockpitMenu.submenus && cockpitMenu.submenus.length > 0;
+                  const btnBase = 'flex items-center text-xs py-1 text-muted-foreground hover:bg-accent hover:text-foreground transition-colors';
                   return (
-                    <DropdownMenu>
-                      <DropdownMenuTrigger asChild>
-                        <button className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border border-border hover:bg-accent hover:text-foreground transition-colors shrink-0 text-muted-foreground">
-                          Open Cockpit <ChevronDown className="h-3 w-3 opacity-60 shrink-0" />
-                        </button>
-                      </DropdownMenuTrigger>
-                      <DropdownMenuContent align="end" className="max-h-[min(70vh,420px)] overflow-y-auto">
-                        {url && (
-                          <>
-                            <DropdownMenuItem className="text-xs cursor-pointer font-semibold" asChild>
-                              <a href={url} target="_blank" rel="noopener noreferrer">Open Cockpit</a>
-                            </DropdownMenuItem>
-                            {cockpitMenu.submenus?.length ? <DropdownMenuSeparator /> : null}
-                          </>
-                        )}
-                        {cockpitMenu.submenus ? renderMenuItems(cockpitMenu.submenus, ctx, spaces) : null}
-                      </DropdownMenuContent>
-                    </DropdownMenu>
+                    <div className="inline-flex rounded border border-border shrink-0 overflow-hidden">
+                      {url
+                        ? <a href={url} target="_blank" rel="noopener noreferrer" className={`${btnBase} px-2 ${hasSubs ? 'border-r border-border' : ''}`}>Open Cockpit</a>
+                        : hasSubs ? <span className={`${btnBase} px-2 border-r border-border`}>Cockpit</span> : null
+                      }
+                      {hasSubs && (
+                        <DropdownMenu>
+                          <DropdownMenuTrigger asChild>
+                            <button className={`${btnBase} px-1.5`}>
+                              <ChevronDown className="h-3 w-3 opacity-60" />
+                            </button>
+                          </DropdownMenuTrigger>
+                          <DropdownMenuContent align="end" className="max-h-[min(70vh,420px)] overflow-y-auto">
+                            {renderMenuItems(cockpitMenu.submenus!, ctx, spaces)}
+                          </DropdownMenuContent>
+                        </DropdownMenu>
+                      )}
+                    </div>
                   );
                 })()}
                 <button
