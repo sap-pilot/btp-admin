@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import {
-  Check, Download, Eye, EyeOff, GitCompare, Lock, PanelLeft, Plus, RefreshCw, RotateCcw, Save, Search, Send, Trash2, Upload, X,
+  Download, Eye, EyeOff, GitCompare, Lock, PanelLeft, Plus, RefreshCw, RotateCcw, Save, Search, Send, Trash2, Upload, X,
 } from 'lucide-react';
 import { useAuth } from '@/hooks/useAuth';
 import type { SubaccountEntry } from '@/components/config/SubaccountsTable';
@@ -29,6 +29,7 @@ export interface SubaccountDestModalProps {
   allNames:          string[];
   initialName?:      string;
   initialTab?:       Tab;
+  initialShowList?:  boolean;
   onClose:           () => void;
   selectedDests?:    SelectedDest[];
   onToggleCompare?:  (d: SelectedDest) => void;
@@ -50,7 +51,7 @@ const DEFAULT_CREATE_PROPS: DestProp[] = [
 
 function isSensitive(key: string): boolean {
   const k = key.toLowerCase();
-  return k.includes('secret') || k.includes('password') || k.includes('credential');
+  return k.includes('secret') || k.includes('password') || k.includes('passwd') || k.includes('credential');
 }
 
 function toProps(data: Record<string, unknown>, sensitiveFields: string[]): DestProp[] {
@@ -547,7 +548,7 @@ function TestTab() {
 
 // ─── Main modal ───────────────────────────────────────────────────────────────
 
-export default function SubaccountDestModal({ org, allNames, initialName, initialTab, onClose, selectedDests, onToggleCompare }: SubaccountDestModalProps) {
+export default function SubaccountDestModal({ org, allNames, initialName, initialTab, initialShowList, onClose, selectedDests, onToggleCompare }: SubaccountDestModalProps) {
   const auth     = useAuth();
   const username = auth.email || auth.firstName || 'admin';
 
@@ -573,7 +574,7 @@ export default function SubaccountDestModal({ org, allNames, initialName, initia
   const [isImporting, setIsImporting] = useState(false);
 
   // Left-panel visibility toggle
-  const [showList, setShowList] = useState(true);
+  const [showList, setShowList] = useState(initialShowList ?? true);
 
   // Create mode (new destination from scratch)
   const [isCreating,    setIsCreating]    = useState(false);
@@ -586,11 +587,10 @@ export default function SubaccountDestModal({ org, allNames, initialName, initia
   const [changelog,          setChangelog]          = useState('');
   const [isLoadingChangelog, setIsLoadingChangelog] = useState(false);
 
-  // Per-subaccount refresh
-  type RefreshStatus = 'idle' | 'refreshing' | 'refreshed';
-  const [refreshStatus, setRefreshStatus] = useState<RefreshStatus>('idle');
-  const [refreshError,  setRefreshError]  = useState('');
-  const refreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Per-subaccount refresh progress
+  type SubProgress = { type: 'refreshing' | 'done' | 'error'; created?: number; updated?: number; deleted?: number; received?: number; errors?: string[] };
+  const [subProgress, setSubProgress] = useState<SubProgress | null>(null);
+  const subProgressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Save banner
   const [saveBanner,     setSaveBanner]     = useState<SaveBanner | null>(null);
@@ -645,28 +645,24 @@ export default function SubaccountDestModal({ org, allNames, initialName, initia
     );
   }, [selectedName, activeTab, org.region, org.subdomain]);
 
-  // Proactive destination load on mount — refreshes from API if data is stale
+  // Proactive destination load on mount — silently loads local data; only shows
+  // progress banner if an actual API refresh ran (stale data) or an error occurred.
   useEffect(() => {
     void (async () => {
-      setRefreshStatus('refreshing');
       try {
         const res  = await fetch(`/api/destinations/${enc(org.region)}/${enc(org.subdomain)}`);
-        const json = await res.json() as { ok: boolean; names: string[]; refreshed: boolean; errors: string[] };
+        const json = await res.json() as { ok: boolean; names: string[]; refreshed: boolean; errors: string[]; created?: number; updated?: number; deleted?: number; received?: number };
         if (!json.ok) {
-          setRefreshError((json.errors ?? []).join('; ') || 'Failed to load destinations');
-          setRefreshStatus('idle');
+          setSubProgress({ type: 'error', errors: json.errors?.length ? json.errors : ['Failed to load destinations'] });
           return;
         }
         if (json.names.length > 0) setLocalAllNames(json.names);
         if (json.refreshed) {
-          setRefreshStatus('refreshed');
-          refreshTimerRef.current = setTimeout(() => setRefreshStatus('idle'), 2000);
-        } else {
-          setRefreshStatus('idle');
+          setSubProgress({ type: 'done', created: json.created ?? 0, updated: json.updated ?? 0, deleted: json.deleted ?? 0, received: json.received });
+          subProgressTimerRef.current = setTimeout(() => setSubProgress(null), 3000);
         }
       } catch (err) {
-        setRefreshError(String(err));
-        setRefreshStatus('idle');
+        setSubProgress({ type: 'error', errors: [String(err)] });
       }
     })();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
@@ -677,8 +673,8 @@ export default function SubaccountDestModal({ org, allNames, initialName, initia
     document.addEventListener('keydown', onKey);
     return () => {
       document.removeEventListener('keydown', onKey);
-      if (bannerTimerRef.current)  clearTimeout(bannerTimerRef.current);
-      if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current);
+      if (bannerTimerRef.current)      clearTimeout(bannerTimerRef.current);
+      if (subProgressTimerRef.current) clearTimeout(subProgressTimerRef.current);
     };
   }, [onClose]);
 
@@ -846,25 +842,22 @@ export default function SubaccountDestModal({ org, allNames, initialName, initia
   }
 
   async function handleRefresh() {
-    if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current);
-    setRefreshStatus('refreshing');
-    setRefreshError('');
+    if (subProgressTimerRef.current) clearTimeout(subProgressTimerRef.current);
+    setSubProgress({ type: 'refreshing' });
     try {
       const res  = await fetch(`/api/destinations/${enc(org.region)}/${enc(org.subdomain)}?force=1`);
-      const json = await res.json() as { ok: boolean; names: string[]; refreshed: boolean; errors: string[] };
+      const json = await res.json() as { ok: boolean; names: string[]; refreshed: boolean; errors: string[]; created?: number; updated?: number; deleted?: number; received?: number };
       if (!res.ok || !json.ok) {
-        setRefreshError((json.errors ?? []).join('; ') || `HTTP ${res.status}`);
-        setRefreshStatus('idle');
+        setSubProgress({ type: 'error', errors: json.errors?.length ? json.errors : [`HTTP ${res.status}`] });
         return;
       }
       if (json.names.length > 0) setLocalAllNames(json.names);
       if (selectedName) await loadDest(selectedName);
       if (activeTab === 'changelog' && selectedName) await loadChangelog(selectedName);
-      setRefreshStatus('refreshed');
-      refreshTimerRef.current = setTimeout(() => setRefreshStatus('idle'), 2000);
+      setSubProgress({ type: 'done', created: json.created ?? 0, updated: json.updated ?? 0, deleted: json.deleted ?? 0, received: json.received });
+      subProgressTimerRef.current = setTimeout(() => setSubProgress(null), 3000);
     } catch (err) {
-      setRefreshError(String(err));
-      setRefreshStatus('idle');
+      setSubProgress({ type: 'error', errors: [String(err)] });
     }
   }
 
@@ -933,16 +926,12 @@ export default function SubaccountDestModal({ org, allNames, initialName, initia
                   </button>
                   <button
                     onClick={() => void handleRefresh()}
-                    disabled={refreshStatus === 'refreshing' || isSaving || isImporting}
-                    className={refreshStatus === 'refreshed'
-                      ? `${btnBase} bg-green-500/10 border border-green-500/30 text-green-600 dark:text-green-400`
-                      : btnOutline}
+                    disabled={subProgress?.type === 'refreshing' || isSaving || isImporting}
+                    className={btnOutline}
                     title="Force-refresh destinations from the Destination API"
                   >
-                    {refreshStatus === 'refreshed'
-                      ? <><Check className="h-3.5 w-3.5" /><span className="hidden sm:inline"> Refreshed</span></>
-                      : <><RefreshCw className={`h-3.5 w-3.5 ${refreshStatus === 'refreshing' ? 'animate-spin' : ''}`} /><span className="hidden sm:inline"> {refreshStatus === 'refreshing' ? 'Refreshing…' : 'Refresh'}</span></>
-                    }
+                    <RefreshCw className={`h-3.5 w-3.5 ${subProgress?.type === 'refreshing' ? 'animate-spin' : ''}`} />
+                    <span className="hidden sm:inline">{subProgress?.type === 'refreshing' ? 'Refreshing…' : 'Refresh'}</span>
                   </button>
                   <div className="w-px h-4 bg-border mx-0.5" />
                 </>
@@ -954,13 +943,33 @@ export default function SubaccountDestModal({ org, allNames, initialName, initia
           </div>
         </div>
 
-        {/* Refresh error banner */}
-        {refreshError && (
-          <div className="px-4 py-2 bg-destructive/5 border-b border-destructive/20 text-destructive text-xs flex items-center gap-2 shrink-0">
-            <span className="flex-1">{refreshError}</span>
-            <button onClick={() => setRefreshError('')} className="shrink-0 p-0.5 rounded hover:bg-destructive/10 transition-colors">
-              <X className="h-3 w-3" />
-            </button>
+        {/* Sub-refresh progress banner */}
+        {subProgress && (
+          <div className={`relative px-4 py-2 border-b text-xs flex items-center justify-center gap-2 shrink-0 overflow-hidden ${
+            subProgress.type === 'error' ? 'bg-amber-500/5 border-amber-500/20 text-amber-700 dark:text-amber-400'
+            : subProgress.type === 'done' ? 'bg-green-500/5 border-green-500/20 text-green-700 dark:text-green-400'
+            : 'bg-muted/30 border-border text-muted-foreground'
+          }`}>
+            {subProgress.type === 'refreshing' && (
+              <div className="absolute bottom-0 left-0 h-0.5 bg-primary/40 animate-pulse w-full" />
+            )}
+            <span className="text-center">
+              {subProgress.type === 'refreshing' && 'Refreshing subaccount destinations…'}
+              {subProgress.type === 'done' && (
+                (subProgress.created ?? 0) === 0 && (subProgress.updated ?? 0) === 0 && (subProgress.deleted ?? 0) === 0
+                  ? 'Refreshed — no change since last check'
+                  : `Refreshed — created ${subProgress.created ?? 0}, updated ${subProgress.updated ?? 0}, deleted ${subProgress.deleted ?? 0} destinations since last check`
+              )}
+              {subProgress.type === 'error' && (subProgress.errors ?? []).join('; ')}
+            </span>
+            {subProgress.type !== 'refreshing' && (
+              <button
+                onClick={() => { if (subProgressTimerRef.current) clearTimeout(subProgressTimerRef.current); setSubProgress(null); }}
+                className="absolute right-2 shrink-0 p-0.5 rounded hover:opacity-70 transition-opacity"
+              >
+                <X className="h-3 w-3" />
+              </button>
+            )}
           </div>
         )}
 
@@ -976,8 +985,17 @@ export default function SubaccountDestModal({ org, allNames, initialName, initia
                   value={searchQuery}
                   onChange={e => setSearchQuery(e.target.value)}
                   placeholder="Search destinations…"
-                  className="w-full h-7 pl-7 pr-2 text-xs border border-border rounded bg-background focus:outline-none focus:ring-1 focus:ring-ring placeholder:text-muted-foreground/50"
+                  className={`w-full h-7 pl-7 text-xs border border-border rounded bg-background focus:outline-none focus:ring-1 focus:ring-ring placeholder:text-muted-foreground/50 ${searchQuery ? 'pr-6' : 'pr-2'}`}
                 />
+                {searchQuery && (
+                  <button
+                    onClick={() => setSearchQuery('')}
+                    className="absolute right-1.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors p-0.5"
+                    tabIndex={-1}
+                  >
+                    <X className="h-3 w-3" />
+                  </button>
+                )}
               </div>
             </div>
             <div ref={listRef} className="flex-1 overflow-auto py-1">
