@@ -126,13 +126,13 @@ function renderMd(text: string | null | undefined): React.ReactNode {
   );
 }
 
-function ensureHttps(host: string): string {
-  return /^https?:\/\//i.test(host) ? host : `https://${host}`;
+function stripProtocol(host: string): string {
+  return host.replace(/^https?:\/\//i, '');
 }
 
 function buildCtx(sa: SubaccountEntry, cockpit: { idp: string; host: string }): Record<string, string> {
   return {
-    'homepage.cockpit.host': cockpit.host ? ensureHttps(cockpit.host) : '',
+    'homepage.cockpit.host': cockpit.host ? stripProtocol(cockpit.host) : '',
     'homepage.cockpit.idp':  cockpit.idp,
     cockpitRegion:           deriveCockpitRegion(sa.region),
     globalAccountGUID:       sa.globalAccountGUID,
