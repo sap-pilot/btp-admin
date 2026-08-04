@@ -15,6 +15,7 @@ import {
   getGlobalRefreshTs,
   getGlobalChangelog,
   getGlobalChangelogFile,
+  searchGlobalChangelogs,
 } from '../services/destinationService.js';
 import { getAutoGlobalRefreshMs, getAutoSubaccountRefreshMs } from '../services/configService.js';
 
@@ -95,6 +96,14 @@ router.get('/global-changelog', requireAdmin, async (req, res, next) => {
       const result = await getGlobalChangelog();
       res.json({ ok: true, ...result });
     }
+  } catch (err) { next(err); }
+});
+
+router.get('/global-changelog/search', requireAdmin, async (req, res, next) => {
+  try {
+    const q = typeof req.query['q'] === 'string' ? req.query['q'] : '';
+    const result = await searchGlobalChangelogs(q);
+    res.json({ ok: true, ...result });
   } catch (err) { next(err); }
 });
 

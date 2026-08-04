@@ -34,7 +34,7 @@ function utcTimestamp(): string {
   const d = new Date();
   const p = (n: number) => String(n).padStart(2, '0');
   return `${d.getUTCFullYear()}-${p(d.getUTCMonth() + 1)}-${p(d.getUTCDate())} ` +
-         `${p(d.getUTCHours())}:${p(d.getUTCMinutes())}:${p(d.getUTCSeconds())}`;
+         `${p(d.getUTCHours())}:${p(d.getUTCMinutes())}:${p(d.getUTCSeconds())} UTC`;
 }
 
 function rotationTimestamp(): string {
@@ -74,5 +74,25 @@ export async function appendConfigChangelog(
   emit('root',   { files: ['conf/changelog.md'], ts });
   emit('config', { files: ['changelog.md'], ts });
   logger.info({ action, user, filename }, 'config changelog updated');
+}
+
+export async function searchConfigChangelogs(query: string): Promise<{ files: string[]; matchCount: number }> {
+  if (!query.trim()) return { files: [], matchCount: 0 };
+  const lq = query.toLowerCase();
+
+  const allFiles: string[] = ['', ...await listArchivedChangelogs()];
+  const matched: string[] = [];
+  let totalMatches = 0;
+
+  for (const f of allFiles) {
+    const text = f === '' ? await readConfigChangelog() : await readArchivedChangelog(f);
+    const count = text.toLowerCase().split(lq).length - 1;
+    if (count > 0) {
+      matched.push(f);
+      totalMatches += count;
+    }
+  }
+
+  return { files: matched, matchCount: totalMatches };
 }
 

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router';
-import { Building2, Clock, Download, Eye, Layers, PanelLeft, Settings, Upload } from 'lucide-react';
+import { Building2, Clock, Download, Eye, Layers, PanelLeft, Search, Settings, Upload, X } from 'lucide-react';
 import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
@@ -56,6 +56,9 @@ export default function ConfigPage() {
   const [isLoadingChangelog,   setIsLoadingCl]      = useState(false);
   const [archivedCls,          setArchivedCls]      = useState<string[]>([]);
   const [selectedChangelogFile, setSelectedChangelogFile] = useState<string | null>(null);
+  const [clSearch,             setClSearch]         = useState('');
+  const [clSearchResults,      setClSearchResults]  = useState<{ files: string[]; matchCount: number } | null>(null);
+  const [clSearching,          setClSearching]      = useState(false);
 
   const [error,       setError]       = useState('');
   const [isImporting, setIsImporting] = useState(false);
@@ -570,37 +573,84 @@ export default function ConfigPage() {
         {activeTab === 'changelog' && (
           <div className="flex flex-col h-full">
             <div className="flex items-center gap-2 px-3 py-2 border-b border-border shrink-0">
-              <span className="text-xs text-muted-foreground flex-1">Config change history — updated on Refresh / Save</span>
-              {archivedCls.length > 0 && (
-                <select
-                  value={selectedChangelogFile ?? ''}
-                  onChange={e => {
-                    const val = e.target.value || null;
-                    setSelectedChangelogFile(val);
-                    fetchChangelog(val);
+              <div className="relative flex-1">
+                <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground pointer-events-none" />
+                <input
+                  type="text"
+                  value={clSearch}
+                  onChange={e => setClSearch(e.target.value)}
+                  onKeyDown={e => {
+                    if (e.key === 'Enter' && clSearch.trim()) {
+                      setClSearching(true);
+                      fetch(`/api/config/changelog/search?q=${encodeURIComponent(clSearch.trim())}`)
+                        .then(r => r.json() as Promise<{ ok: boolean; files: string[]; matchCount: number }>)
+                        .then(data => {
+                          if (!data.ok) return;
+                          setClSearchResults(data);
+                          if (data.files.length === 1) {
+                            const f = data.files[0]!;
+                            setSelectedChangelogFile(f || null);
+                            fetchChangelog(f || null);
+                          }
+                        })
+                        .catch(() => {})
+                        .finally(() => setClSearching(false));
+                    } else if (e.key === 'Escape') {
+                      setClSearch('');
+                      setClSearchResults(null);
+                    }
                   }}
-                  className="h-7 px-2 text-xs border border-border rounded bg-background text-foreground outline-none focus:ring-1 focus:ring-ring"
-                  title="Browse archived changelogs"
-                >
-                  <option value="">Current</option>
-                  {archivedCls.map(f => (
-                    <option key={f} value={f}>{f}</option>
-                  ))}
-                </select>
-              )}
+                  placeholder="Search history…"
+                  className={`w-full h-7 pl-7 ${clSearch ? 'pr-6' : 'pr-3'} text-xs border border-border rounded bg-background text-foreground outline-none focus:ring-1 focus:ring-ring placeholder:text-muted-foreground`}
+                />
+                {clSearch && clSearchResults && (
+                  <span className="absolute right-7 top-1/2 -translate-y-1/2 text-xs text-muted-foreground pointer-events-none">
+                    {clSearchResults.matchCount} match{clSearchResults.matchCount !== 1 ? 'es' : ''} in {clSearchResults.files.length} file{clSearchResults.files.length !== 1 ? 's' : ''}
+                  </span>
+                )}
+                {clSearch && (
+                  <button
+                    onClick={() => { setClSearch(''); setClSearchResults(null); }}
+                    className="absolute right-1 top-1/2 -translate-y-1/2 h-4 w-4 flex items-center justify-center text-muted-foreground hover:text-foreground"
+                    tabIndex={-1}
+                    aria-label="Clear search"
+                  >
+                    <X className="h-3 w-3" />
+                  </button>
+                )}
+              </div>
+              {(() => {
+                const selectFiles = clSearchResults ? clSearchResults.files : archivedCls.length > 0 ? ['', ...archivedCls] : null;
+                return selectFiles && selectFiles.length > 1 ? (
+                  <select
+                    value={selectedChangelogFile ?? ''}
+                    onChange={e => {
+                      const val = e.target.value || null;
+                      setSelectedChangelogFile(val);
+                      fetchChangelog(val);
+                    }}
+                    className="h-7 px-2 text-xs border border-border rounded bg-background text-foreground outline-none focus:ring-1 focus:ring-ring"
+                    title="Browse changelogs"
+                  >
+                    {selectFiles.map(f => (
+                      <option key={f} value={f}>{f || 'Current'}</option>
+                    ))}
+                  </select>
+                ) : null;
+              })()}
               <button
                 onClick={() => fetchChangelog(selectedChangelogFile)}
-                disabled={isLoadingChangelog}
+                disabled={isLoadingChangelog || clSearching}
                 className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded text-xs font-medium border border-border hover:bg-accent hover:text-accent-foreground transition-colors disabled:opacity-50"
               >
-                {isLoadingChangelog ? 'Loading…' : 'Reload'}
+                {isLoadingChangelog || clSearching ? 'Loading…' : 'Reload'}
               </button>
             </div>
             <div className="flex-1 overflow-auto p-4">
               {isLoadingChangelog && changelog === null
                 ? <p className="text-xs text-muted-foreground">Loading…</p>
                 : changelog
-                  ? <div className="font-mono text-xs leading-relaxed">{renderConfigChangelog(changelog)}</div>
+                  ? <div className="font-mono text-xs leading-relaxed">{renderConfigChangelog(changelog, clSearch && clSearchResults ? clSearch : undefined)}</div>
                   : <p className="text-xs text-muted-foreground">No changes recorded yet.</p>
               }
             </div>
@@ -691,27 +741,38 @@ export default function ConfigPage() {
   );
 }
 
-function renderConfigChangelog(text: string): React.ReactNode {
+function highlightText(text: string, query: string): React.ReactNode {
+  if (!query) return text;
+  const parts = text.split(new RegExp(`(${query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`, 'gi'));
+  return parts.map((p, i) =>
+    p.toLowerCase() === query.toLowerCase()
+      ? <mark key={i} className="bg-yellow-300/70 dark:bg-yellow-600/60 text-inherit rounded-sm">{p}</mark>
+      : p
+  );
+}
+
+function renderConfigChangelog(text: string, highlight?: string): React.ReactNode {
+  const hl = (s: string) => highlight ? highlightText(s, highlight) : s;
   return text.split('\n').map((line, i) => {
     if (line.startsWith('## ')) {
-      return <div key={i} className="font-bold mt-4 mb-1 text-foreground first:mt-0">{line.slice(3)}</div>;
+      return <div key={i} className="font-bold mt-4 mb-1 text-foreground first:mt-0">{hl(line.slice(3))}</div>;
     }
-    if (line.startsWith('+ ')) return <div key={i} className="text-green-600 dark:text-green-400">{line}</div>;
-    if (line.startsWith('- ')) return <div key={i} className="text-red-500 dark:text-red-400">{line}</div>;
-    if (line.startsWith('~ ')) return <div key={i} className="text-amber-600 dark:text-amber-400">{line}</div>;
+    if (line.startsWith('+ ')) return <div key={i} className="text-green-600 dark:text-green-400">{hl(line)}</div>;
+    if (line.startsWith('- ')) return <div key={i} className="text-red-500 dark:text-red-400">{hl(line)}</div>;
+    if (line.startsWith('~ ')) return <div key={i} className="text-amber-600 dark:text-amber-400">{hl(line)}</div>;
     if (line.startsWith('    ')) {
       const arrowIdx = line.indexOf(' → ');
       if (arrowIdx !== -1) {
         return (
           <div key={i} className="pl-4">
-            <span className="text-red-400/80">{line.slice(0, arrowIdx)}</span>
+            <span className="text-red-400/80">{hl(line.slice(0, arrowIdx))}</span>
             <span className="text-muted-foreground"> → </span>
-            <span className="text-green-500/80">{line.slice(arrowIdx + 3)}</span>
+            <span className="text-green-500/80">{hl(line.slice(arrowIdx + 3))}</span>
           </div>
         );
       }
-      return <div key={i} className="pl-4 text-muted-foreground">{line}</div>;
+      return <div key={i} className="pl-4 text-muted-foreground">{hl(line)}</div>;
     }
-    return <div key={i} className="text-muted-foreground">{line || ' '}</div>;
+    return <div key={i} className="text-muted-foreground">{hl(line) || ' '}</div>;
   });
 }
