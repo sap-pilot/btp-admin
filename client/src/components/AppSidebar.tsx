@@ -104,7 +104,7 @@ export default function AppSidebar() {
 
   useEffect(() => {
     const p = location.pathname;
-    const label = p === '/status' ? 'Status' : p === '/home' ? 'Home' : null;
+    const label = p === '/home' ? 'Home' : null;
     document.title = label ? `${label} - ${appTitle}` : appTitle;
   }, [location.pathname, appTitle]);
 

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { useParams, useNavigate, Link } from 'react-router';
+import { useParams, useNavigate, useLocation, Link } from 'react-router';
 import { ChevronDown, GitCompare, Globe, History, PanelLeft, RefreshCw, Search, X } from 'lucide-react';
 import { useSidebar } from '@/components/AppLayout';
 import type { SubaccountEntry } from '@/components/config/SubaccountsTable';
@@ -33,7 +33,7 @@ interface RefreshProgress {
 
 interface Buckets { generic: string[]; s4: string[]; cep: string[]; others: string[] }
 
-interface ModalState { sa: SubaccountEntry; allNames: string[]; initialName?: string; initialTab?: 'properties' | 'changelog' | 'test' }
+interface ModalState { sa: SubaccountEntry; allNames: string[]; initialName?: string; initialTab?: 'properties' | 'changelog' | 'test'; initialShowList?: boolean }
 
 interface DestSearchResult {
   region:     string;
@@ -133,8 +133,11 @@ export default function DestinationOverview() {
   const { tab: tabParam, region: regionParam, subdomain: subdomainParam, name: nameParam, destTab } = useParams<{
     tab?: string; region?: string; subdomain?: string; name?: string; destTab?: string;
   }>();
-  const navigate = useNavigate();
+  const navigate  = useNavigate();
+  const location  = useLocation();
+  const returnUrl = useRef<string>('/destinations');
 
+  const [isLoading,    setIsLoading]    = useState(true);
   const [tabEntries,   setTabEntries]   = useState<TabEntry[]>([]);
   const [saData,       setSaData]       = useState<SubaccountEntry[]>([]);
   const [destData,     setDestData]     = useState<DestData>({});
@@ -191,17 +194,21 @@ export default function DestinationOverview() {
   }
 
   async function loadData() {
-    const [tabsRes, sasRes, destsRes] = await Promise.all([
-      fetch('/api/config/tabs'),
-      fetch('/api/config/subaccounts'),
-      fetch('/api/destinations'),
-    ]);
-    const tabs  = await tabsRes.json()  as { ok: boolean; data: TabEntry[] };
-    const sas   = await sasRes.json()   as { ok: boolean; data: SubaccountEntry[] };
-    const dests = await destsRes.json() as { ok: boolean; data: DestData };
-    if (tabs.ok)  setTabEntries(tabs.data);
-    if (sas.ok)   setSaData(sas.data);
-    if (dests.ok) setDestData(dests.data);
+    try {
+      const [tabsRes, sasRes, destsRes] = await Promise.all([
+        fetch('/api/config/tabs'),
+        fetch('/api/config/subaccounts'),
+        fetch('/api/destinations'),
+      ]);
+      const tabs  = await tabsRes.json()  as { ok: boolean; data: TabEntry[] };
+      const sas   = await sasRes.json()   as { ok: boolean; data: SubaccountEntry[] };
+      const dests = await destsRes.json() as { ok: boolean; data: DestData };
+      if (tabs.ok)  setTabEntries(tabs.data);
+      if (sas.ok)   setSaData(sas.data);
+      if (dests.ok) setDestData(dests.data);
+    } finally {
+      setIsLoading(false);
+    }
   }
 
   useEffect(() => {
@@ -215,6 +222,7 @@ export default function DestinationOverview() {
       try {
         const data = JSON.parse(e.data as string) as Record<string, unknown>;
         if (data['type'] === 'progress' || data['type'] === 'done') {
+          if (data['scope'] === 'subaccount') return; // handled by modal
           const p = data as unknown as RefreshProgress;
           if (autoHideTimerRef.current) { clearTimeout(autoHideTimerRef.current); autoHideTimerRef.current = null; }
           setProgress(p);
@@ -239,6 +247,13 @@ export default function DestinationOverview() {
     };
   }, []);
 
+  // Track the last non-modal URL so modal close can return to the right screen
+  useEffect(() => {
+    if (!regionParam && !subdomainParam) {
+      returnUrl.current = location.pathname;
+    }
+  }, [location.pathname, regionParam, subdomainParam]);
+
   // Open modal from deep-link URL: /destinations/:region/:subdomain/:name[/:destTab]
   useEffect(() => {
     if (!regionParam || !subdomainParam) {
@@ -254,7 +269,7 @@ export default function DestinationOverview() {
     deepLinkKey.current = key;
     const names = (destData[saOrgId(sa)] ?? []).map(d => d.name).sort();
     const initialTab = destTab === 'history' ? 'changelog' : destTab === 'test' ? 'test' : 'properties';
-    setModal({ sa, allNames: names, initialName: nameParam ?? names[0], initialTab });
+    setModal({ sa, allNames: names, initialName: nameParam ?? names[0], initialTab, initialShowList: !nameParam });
   }, [regionParam, subdomainParam, nameParam, destTab, saData, destData]);
 
   // Close compare dropdown on outside click
@@ -683,8 +698,13 @@ export default function DestinationOverview() {
       {!isChangeHistory && <div className="flex-1 overflow-auto px-4 py-3 space-y-6">
         {visibleTabs.length === 0 && (
           <div className="flex flex-col items-center justify-center h-full gap-2 text-muted-foreground">
-            <p className="text-sm">No destinations configured.</p>
-            <p className="text-xs">Set <code className="bg-muted px-1 rounded">Manage Destinations</code> on subaccounts in Configuration, then click <strong>Refresh</strong>.</p>
+            {isLoading
+              ? <p className="text-sm">Loading destinations…</p>
+              : <>
+                  <p className="text-sm">No destinations configured.</p>
+                  <p className="text-xs">Set <code className="bg-muted px-1 rounded">Manage Destinations</code> on subaccounts in Configuration, then click <strong>Refresh</strong>.</p>
+                </>
+            }
           </div>
         )}
         {visibleTabs.length > 0 && isFiltered && filteredTabs.length === 0 && (
@@ -726,7 +746,7 @@ export default function DestinationOverview() {
                             <th
                               key={sa.subaccountId}
                               className="text-center text-xs font-medium px-3 py-2 min-w-[160px] border-l border-b border-border text-muted-foreground cursor-pointer hover:bg-muted/40 transition-colors"
-                              onClick={() => setModal({ sa, allNames: (destData[saOrgId(sa)] ?? []).map(d => d.name).sort() })}
+                              onClick={() => setModal({ sa, allNames: (destData[saOrgId(sa)] ?? []).map(d => d.name).sort(), initialShowList: true })}
                             >
                               <div className="flex flex-col gap-0.5 items-center">
                                 <span><Highlight text={sa.alias || sa.subaccountName} query={activeFilter} /></span>
@@ -774,7 +794,7 @@ export default function DestinationOverview() {
                                       ? (
                                         <button
                                           className="font-mono text-[11px] hover:underline text-left text-foreground"
-                                          onClick={() => setModal({ sa, allNames: allDests.map(d => d.name).sort(), initialName: name })}
+                                          onClick={() => setModal({ sa, allNames: allDests.map(d => d.name).sort(), initialName: name, initialShowList: false })}
                                         >
                                           <Highlight text={name} query={activeFilter} />
                                         </button>
@@ -817,7 +837,7 @@ export default function DestinationOverview() {
                                             ? (
                                               <button
                                                 className="font-mono text-[11px] hover:underline text-left text-foreground"
-                                                onClick={() => setModal({ sa, allNames: allDests.map(d => d.name).sort(), initialName: name })}
+                                                onClick={() => setModal({ sa, allNames: allDests.map(d => d.name).sort(), initialName: name, initialShowList: false })}
                                               >
                                                 <Highlight text={name} query={activeFilter} />
                                               </button>
@@ -848,7 +868,7 @@ export default function DestinationOverview() {
                                     return (
                                       <td key={sa.subaccountId} className={`${tdCls} text-left`}>
                                         {present
-                                          ? <button className="text-foreground font-mono text-[11px] hover:underline text-left" onClick={() => setModal({ sa, allNames: allDests.map(d => d.name).sort(), initialName: name })}><Highlight text={name} query={activeFilter} /></button>
+                                          ? <button className="text-foreground font-mono text-[11px] hover:underline text-left" onClick={() => setModal({ sa, allNames: allDests.map(d => d.name).sort(), initialName: name, initialShowList: false })}><Highlight text={name} query={activeFilter} /></button>
                                           : <span className="text-muted-foreground/30 text-[11px]">—</span>
                                         }
                                       </td>
@@ -874,7 +894,7 @@ export default function DestinationOverview() {
                                     {others.length > 0
                                       ? (
                                         <button
-                                          onClick={() => setModal({ sa, allNames: allSaNames, initialName: others[0] })}
+                                          onClick={() => setModal({ sa, allNames: allSaNames, initialName: others[0], initialShowList: false })}
                                           className="w-full flex items-center justify-between px-2 py-1 rounded bg-muted/60 text-muted-foreground hover:bg-accent hover:text-accent-foreground text-[11px] font-medium transition-colors"
                                         >
                                           <span>{others.length} destinations</span>
@@ -904,10 +924,10 @@ export default function DestinationOverview() {
           allNames={modal.allNames}
           initialName={modal.initialName}
           initialTab={modal.initialTab}
+          initialShowList={modal.initialShowList}
           onClose={() => {
             setModal(null);
-            const base = activeTabEntry ? `/destinations/${encodeURIComponent(activeTabEntry.tab)}` : '/destinations';
-            navigate(base, { replace: true });
+            navigate(returnUrl.current, { replace: true });
           }}
           selectedDests={selectedDests}
           onToggleCompare={toggleCompare}
