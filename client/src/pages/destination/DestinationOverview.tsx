@@ -91,29 +91,40 @@ const CAT_META = {
 
 // ─── Component ───────────────────────────────────────────────────────────────
 
-function parseLinks(line: string): React.ReactNode {
+function highlightText(text: string, query: string): React.ReactNode {
+  if (!query) return text;
+  const parts = text.split(new RegExp(`(${query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`, 'gi'));
+  return parts.map((p, i) =>
+    p.toLowerCase() === query.toLowerCase()
+      ? <mark key={i} className="bg-yellow-300/70 dark:bg-yellow-600/60 text-inherit rounded-sm">{p}</mark>
+      : p
+  );
+}
+
+function parseLinks(line: string, highlight?: string): React.ReactNode {
   const parts: React.ReactNode[] = [];
   const re = /\[([^\]]*)\]\(([^)]+)\)/g;
   let last = 0, k = 0, m: RegExpExecArray | null;
   while ((m = re.exec(line)) !== null) {
-    if (m.index > last) parts.push(line.slice(last, m.index));
-    parts.push(<Link key={k++} to={m[2]!} className="underline underline-offset-2 hover:text-foreground">{m[1]}</Link>);
+    if (m.index > last) parts.push(highlight ? highlightText(line.slice(last, m.index), highlight) : line.slice(last, m.index));
+    parts.push(<Link key={k++} to={m[2]!} className="underline underline-offset-2 hover:text-foreground">{highlight ? highlightText(m[1]!, highlight) : m[1]}</Link>);
     last = m.index + m[0].length;
   }
-  if (last < line.length) parts.push(line.slice(last));
-  return parts.length ? parts : line;
+  if (last < line.length) parts.push(highlight ? highlightText(line.slice(last), highlight) : line.slice(last));
+  return parts.length ? parts : (highlight ? highlightText(line, highlight) : line);
 }
 
-function renderGlobalChangelog(text: string): React.ReactNode {
+function renderGlobalChangelog(text: string, highlight?: string): React.ReactNode {
+  const pl = (s: string) => parseLinks(s, highlight);
   return text.split('\n').map((line, i) => {
     if (line.startsWith('## ')) {
-      return <div key={i} className="font-bold mt-4 mb-1 text-foreground first:mt-0">{parseLinks(line.slice(3))}</div>;
+      return <div key={i} className="font-bold mt-4 mb-1 text-foreground first:mt-0">{pl(line.slice(3))}</div>;
     }
-    if (line.startsWith('- created:')) return <div key={i} className="text-green-600 dark:text-green-400 pl-1">{parseLinks(line)}</div>;
-    if (line.startsWith('- updated:')) return <div key={i} className="text-amber-600 dark:text-amber-400 pl-1">{parseLinks(line)}</div>;
-    if (line.startsWith('- deleted:')) return <div key={i} className="text-red-500 dark:text-red-400 pl-1">{parseLinks(line)}</div>;
-    if (line.startsWith('- '))        return <div key={i} className="text-muted-foreground pl-1">{parseLinks(line)}</div>;
-    return <div key={i} className="text-muted-foreground">{line ? parseLinks(line) : ' '}</div>;
+    if (line.startsWith('- created:')) return <div key={i} className="text-green-600 dark:text-green-400 pl-1">{pl(line)}</div>;
+    if (line.startsWith('- updated:')) return <div key={i} className="text-amber-600 dark:text-amber-400 pl-1">{pl(line)}</div>;
+    if (line.startsWith('- deleted:')) return <div key={i} className="text-red-500 dark:text-red-400 pl-1">{pl(line)}</div>;
+    if (line.startsWith('- '))        return <div key={i} className="text-muted-foreground pl-1">{pl(line)}</div>;
+    return <div key={i} className="text-muted-foreground">{line ? pl(line) : ' '}</div>;
   });
 }
 
@@ -151,6 +162,9 @@ export default function DestinationOverview() {
   const [globalChangelogLoading, setGlobalChangelogLoading] = useState(false);
   const [archivedChangelogFiles, setArchivedChangelogFiles] = useState<string[]>([]);
   const [selectedArchive,        setSelectedArchive]        = useState('');
+  const [clSearch,               setClSearch]               = useState('');
+  const [clSearchResults,        setClSearchResults]        = useState<{ files: string[]; matchCount: number } | null>(null);
+  const [clSearching,            setClSearching]            = useState(false);
 
   const deepLinkKey      = useRef(''); // last URL key that opened the modal
   const autoHideTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -574,27 +588,77 @@ export default function DestinationOverview() {
       {/* Change History panel */}
       {isChangeHistory && (
         <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
-          <div className="shrink-0 px-4 py-2 border-b border-border flex items-center gap-3">
-            {archivedChangelogFiles.length > 0 && (
-              <select
-                value={selectedArchive}
-                onChange={e => {
-                  const val = e.target.value;
-                  setSelectedArchive(val);
-                  void fetchGlobalChangelog(val || undefined);
+          <div className="shrink-0 px-4 py-2 border-b border-border flex items-center gap-2">
+            <div className="relative flex-1">
+              <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground pointer-events-none" />
+              <input
+                type="text"
+                value={clSearch}
+                onChange={e => setClSearch(e.target.value)}
+                onKeyDown={e => {
+                  if (e.key === 'Enter' && clSearch.trim()) {
+                    setClSearching(true);
+                    fetch(`/api/destinations/global-changelog/search?q=${encodeURIComponent(clSearch.trim())}`)
+                      .then(r => r.json() as Promise<{ ok: boolean; files: string[]; matchCount: number }>)
+                      .then(data => {
+                        if (!data.ok) return;
+                        setClSearchResults(data);
+                        if (data.files.length === 1) {
+                          const f = data.files[0]!;
+                          setSelectedArchive(f);
+                          void fetchGlobalChangelog(f || undefined);
+                        }
+                      })
+                      .catch(() => {})
+                      .finally(() => setClSearching(false));
+                  } else if (e.key === 'Escape') {
+                    setClSearch('');
+                    setClSearchResults(null);
+                  }
                 }}
-                className="text-xs border border-border rounded px-2 py-1 bg-background text-foreground focus:outline-none focus:ring-1 focus:ring-ring"
-              >
-                <option value="">changelog.md (current)</option>
-                {archivedChangelogFiles.map(f => (
-                  <option key={f} value={f}>{f}</option>
-                ))}
-              </select>
-            )}
+                placeholder="Search history…"
+                className={`w-full h-7 pl-7 ${clSearch ? 'pr-6' : 'pr-3'} text-xs border border-border rounded bg-background text-foreground outline-none focus:ring-1 focus:ring-ring placeholder:text-muted-foreground`}
+              />
+              {clSearch && clSearchResults && (
+                <span className="absolute right-7 top-1/2 -translate-y-1/2 text-xs text-muted-foreground pointer-events-none">
+                  {clSearchResults.matchCount} match{clSearchResults.matchCount !== 1 ? 'es' : ''} in {clSearchResults.files.length} file{clSearchResults.files.length !== 1 ? 's' : ''}
+                </span>
+              )}
+              {clSearch && (
+                <button
+                  onClick={() => { setClSearch(''); setClSearchResults(null); }}
+                  className="absolute right-1 top-1/2 -translate-y-1/2 h-4 w-4 flex items-center justify-center text-muted-foreground hover:text-foreground"
+                  tabIndex={-1}
+                  aria-label="Clear search"
+                >
+                  <X className="h-3 w-3" />
+                </button>
+              )}
+            </div>
+            {(() => {
+              const selectFiles = clSearchResults
+                ? clSearchResults.files
+                : archivedChangelogFiles.length > 0 ? ['', ...archivedChangelogFiles] : null;
+              return selectFiles && selectFiles.length > 1 ? (
+                <select
+                  value={selectedArchive}
+                  onChange={e => {
+                    const val = e.target.value;
+                    setSelectedArchive(val);
+                    void fetchGlobalChangelog(val || undefined);
+                  }}
+                  className="text-xs border border-border rounded px-2 py-1 bg-background text-foreground focus:outline-none focus:ring-1 focus:ring-ring"
+                >
+                  {selectFiles.map(f => (
+                    <option key={f} value={f}>{f || 'changelog.md (current)'}</option>
+                  ))}
+                </select>
+              ) : null;
+            })()}
             <button
               onClick={() => void fetchGlobalChangelog(selectedArchive || undefined)}
-              disabled={globalChangelogLoading}
-              className="ml-auto inline-flex items-center gap-1.5 px-2 py-1 rounded text-xs border border-border hover:bg-accent transition-colors disabled:opacity-50"
+              disabled={globalChangelogLoading || clSearching}
+              className="inline-flex items-center gap-1.5 px-2 py-1 rounded text-xs border border-border hover:bg-accent transition-colors disabled:opacity-50"
               title="Reload changelog"
             >
               <RefreshCw className={`h-3 w-3 ${globalChangelogLoading ? 'animate-spin' : ''}`} />
@@ -609,7 +673,7 @@ export default function DestinationOverview() {
               <div className="text-xs text-muted-foreground text-center py-8">No global refresh has run yet. Click <strong>Refresh</strong> to generate the first changelog entry.</div>
             )}
             {!globalChangelogLoading && globalChangelog && (
-              <div className="font-mono text-xs leading-relaxed">{renderGlobalChangelog(globalChangelog)}</div>
+              <div className="font-mono text-xs leading-relaxed">{renderGlobalChangelog(globalChangelog, clSearch && clSearchResults ? clSearch : undefined)}</div>
             )}
           </div>
         </div>

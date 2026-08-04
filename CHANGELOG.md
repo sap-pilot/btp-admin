@@ -6,6 +6,11 @@
 - **`x-cf-true-client-ip` header support** — all client IP resolution (sync IP whitelisting, request logging, user action tracing, login/logout audit) now reads the `x-cf-true-client-ip` header first (case-insensitive) and falls back to the socket-level IP only when the header is absent; on SAP BTP Cloud Foundry the GoRouter injects this header with the real caller IP before forwarding, so the true client IP is always used for security decisions regardless of internal routing hops
 - **Login/logout IP logging** — user login and logout events now include the resolved client IP in the log entry alongside the existing user field
 
+### Added
+- **Config changelog UTC timestamp** — config change history entries now append ` UTC` to the timestamp (e.g. `2026-08-03 12:34:56 UTC`) for clarity
+- **Config History search** — search input with magnifying-glass icon in the Config → History tab toolbar; press Enter to search all `conf/changelog*.md` files; if exactly one file matches it is loaded automatically; if multiple match they appear in the file dropdown for selection; matching text is highlighted in the rendered changelog; results count displayed inline as muted text (`X matches in Y files`); press Escape to clear
+- **Destination Change History search** — same search behaviour for the Destination Overview → Change History tab, searching across all `dest/changelog*.md` files; results update the archived-file dropdown when multiple files match
+
 ### Changed
 - **`SYNC_INTERNAL_IP_WHITELIST` default changed to empty** — previously defaulted to `192.168.0.0/16,10.0.0.0/8,172.16.0.0/12`; on CF deployments the true client IP is always available via `x-cf-true-client-ip` so whitelisting RFC 1918 ranges is unnecessary and would mask misdirected internal traffic; for non-CF deployments where the socket IP is the real source, set this variable explicitly to the required private CIDRs
 

@@ -599,6 +599,28 @@ export async function getGlobalChangelogFile(filename: string): Promise<string> 
   catch { return ''; }
 }
 
+export async function searchGlobalChangelogs(query: string): Promise<{ files: string[]; matchCount: number }> {
+  if (!query.trim()) return { files: [], matchCount: 0 };
+  const lq = query.toLowerCase();
+
+  const { data: currentData, archivedFiles } = await getGlobalChangelog();
+  const matched: string[] = [];
+  let totalMatches = 0;
+
+  const countMatches = (text: string) => text.toLowerCase().split(lq).length - 1;
+
+  const currentCount = countMatches(currentData);
+  if (currentCount > 0) { matched.push(''); totalMatches += currentCount; }
+
+  for (const f of archivedFiles) {
+    const text = await getGlobalChangelogFile(f);
+    const count = countMatches(text);
+    if (count > 0) { matched.push(f); totalMatches += count; }
+  }
+
+  return { files: matched, matchCount: totalMatches };
+}
+
 // Parse the topmost "global refresh triggered by" timestamp from changelog text.
 // Deliberately skips "subaccount destination refresh/update" lines.
 function parseGlobalRefreshTsFromChangelog(text: string): number | null {
