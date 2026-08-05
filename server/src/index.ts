@@ -39,7 +39,7 @@ app.use('/api/status', statusApiRouter);
 app.use('/api/config', configRouter);
 app.use('/api/settings', settingsRouter);
 app.use('/api/destinations', destRouter);
-app.use('/api/rcs', rcsRouter);
+app.use('/api/role-collections', rcsRouter);
 app.use('/api/sync', syncRouter);
 app.use('/api', apiRouter);
 

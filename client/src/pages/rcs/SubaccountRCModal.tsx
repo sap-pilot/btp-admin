@@ -169,18 +169,18 @@ export default function SubaccountRCModal({
     setLoading(true);
     try {
       if (activeTab === 'details') {
-        const r = await fetch(`/api/rcs/${loc}/${encodeURIComponent(name)}`);
+        const r = await fetch(`/api/role-collections/${loc}/${encodeURIComponent(name)}`);
         const j = await r.json() as { ok: boolean; rc: RoleCollection };
         if (j.ok) setRc(j.rc);
       } else if (activeTab === 'users') {
-        const r = await fetch(`/api/rcs/${loc}/${encodeURIComponent(name)}/users`);
+        const r = await fetch(`/api/role-collections/${loc}/${encodeURIComponent(name)}/users`);
         const j = await r.json() as { ok: boolean; data: UserReference[] };
         if (j.ok) {
           setUsers(j.data);
           for (const u of j.data) if (u.origin) knownOriginsRef.current.add(u.origin);
         }
       } else if (activeTab === 'changelog') {
-        const r = await fetch(`/api/rcs/${loc}/${encodeURIComponent(name)}/changelog`);
+        const r = await fetch(`/api/role-collections/${loc}/${encodeURIComponent(name)}/changelog`);
         const j = await r.json() as { ok: boolean; data: string };
         if (j.ok) setChangelog(j.data);
       }
@@ -188,7 +188,7 @@ export default function SubaccountRCModal({
   }
 
   async function loadNames() {
-    const r = await fetch(`/api/rcs/${loc}`);
+    const r = await fetch(`/api/role-collections/${loc}`);
     const j = await r.json() as { ok: boolean; names: string[] };
     if (j.ok) { setNames(j.names); return j.names; }
     return names;
@@ -231,7 +231,7 @@ export default function SubaccountRCModal({
     clearSubProgress();
     setSubProgress({ type: 'refreshing' });
     try {
-      const r = await fetch(`/api/rcs/${loc}/refresh`, { method: 'POST' });
+      const r = await fetch(`/api/role-collections/${loc}/refresh`, { method: 'POST' });
       const j = await r.json() as { ok: boolean; result?: { created: number; updated: number; deleted: number; received: number; errors: string[] }; error?: string };
       if (!j.ok) {
         setSubProgress({ type: 'error', errors: [j.error ?? 'Refresh failed'] });
@@ -261,7 +261,7 @@ export default function SubaccountRCModal({
 
   async function handleExport() {
     if (!selectedName) return;
-    const r    = await fetch(`/api/rcs/${loc}/${encodeURIComponent(selectedName)}/export`);
+    const r    = await fetch(`/api/role-collections/${loc}/${encodeURIComponent(selectedName)}/export`);
     const blob = await r.blob();
     const url  = URL.createObjectURL(blob);
     const a    = document.createElement('a');
@@ -276,7 +276,7 @@ export default function SubaccountRCModal({
     if (!newUserEmail.trim() && !newUserName.trim()) return;
     setAddUserError('');
     try {
-      const r = await fetch(`/api/rcs/${loc}/${encodeURIComponent(selectedName)}/users`, {
+      const r = await fetch(`/api/role-collections/${loc}/${encodeURIComponent(selectedName)}/users`, {
         method:  'POST',
         headers: { 'Content-Type': 'application/json' },
         body:    JSON.stringify({
@@ -370,7 +370,7 @@ const tabCls = (active: boolean) =>
               {subProgress.type === 'refreshing' && 'Refreshing subaccount role collections…'}
               {subProgress.type === 'done' && (
                 hasNoChange
-                  ? 'Refreshed — no change since last check'
+                  ? 'Refreshed — no change'
                   : `Refreshed — created ${subProgress.created ?? 0}, updated ${subProgress.updated ?? 0}, deleted ${subProgress.deleted ?? 0} role collections since last check`
               )}
               {subProgress.type === 'error' && (subProgress.errors?.join('; ') ?? 'Error')}

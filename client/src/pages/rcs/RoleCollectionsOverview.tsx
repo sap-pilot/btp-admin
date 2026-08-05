@@ -156,7 +156,7 @@ export default function RoleCollectionsOverview() {
 
   async function fetchStatus() {
     try {
-      const r = await fetch('/api/rcs/status');
+      const r = await fetch('/api/role-collections/status');
       const j = await r.json() as { ok: boolean; globalRefreshTs: number | null };
       if (j.ok) setGlobalRefreshTs(j.globalRefreshTs);
     } catch { /* ignore */ }
@@ -167,7 +167,7 @@ export default function RoleCollectionsOverview() {
       const [tabsRes, sasRes, rcsRes] = await Promise.all([
         fetch('/api/config/tabs'),
         fetch('/api/config/subaccounts'),
-        fetch('/api/rcs/'),
+        fetch('/api/role-collections/'),
       ]);
       const tabs = await tabsRes.json() as { ok: boolean; data: TabEntry[] };
       const sas  = await sasRes.json()  as { ok: boolean; data: SubaccountEntry[] };
@@ -184,8 +184,8 @@ export default function RoleCollectionsOverview() {
     setGlobalChangelogLoading(true);
     try {
       const url = archiveFile
-        ? `/api/rcs/global-changelog?file=${encodeURIComponent(archiveFile)}`
-        : '/api/rcs/global-changelog';
+        ? `/api/role-collections/global-changelog?file=${encodeURIComponent(archiveFile)}`
+        : '/api/role-collections/global-changelog';
       const r = await fetch(url);
       const j = await r.json() as { ok: boolean; data: string; archivedFiles?: string[] };
       if (j.ok) {
@@ -214,11 +214,11 @@ export default function RoleCollectionsOverview() {
             autoHideTimerRef.current = setTimeout(() => setProgress(null), 5000);
           }
         } else {
-          void fetch('/api/rcs/')
+          void fetch('/api/role-collections/')
             .then(r => r.json() as Promise<{ ok: boolean; data: RcData }>)
             .then(({ ok, data: d }) => { if (ok) setRcData(d); })
             .catch(() => {});
-          void fetch('/api/rcs/global-changelog')
+          void fetch('/api/role-collections/global-changelog')
             .then(r => r.json() as Promise<{ ok: boolean; data: string; archivedFiles: string[] }>)
             .then(j => { if (j.ok) { setGlobalChangelog(j.data); setArchivedChangelogFiles(j.archivedFiles); } })
             .catch(() => {});
@@ -261,7 +261,7 @@ export default function RoleCollectionsOverview() {
     if (autoHideTimerRef.current) { clearTimeout(autoHideTimerRef.current); autoHideTimerRef.current = null; }
     setProgress(null);
     try {
-      const url = force ? '/api/rcs/refresh?force=true' : '/api/rcs/refresh';
+      const url = force ? '/api/role-collections/refresh?force=true' : '/api/role-collections/refresh';
       const r   = await fetch(url, { method: 'POST' });
       const j   = await r.json() as { ok: boolean; busy?: boolean; error?: string };
       if (!j.ok && !j.busy) {
@@ -463,7 +463,7 @@ export default function RoleCollectionsOverview() {
                 onKeyDown={e => {
                   if (e.key === 'Enter' && clSearch.trim()) {
                     setClSearching(true);
-                    fetch(`/api/rcs/global-changelog/search?q=${encodeURIComponent(clSearch.trim())}`)
+                    fetch(`/api/role-collections/global-changelog/search?q=${encodeURIComponent(clSearch.trim())}`)
                       .then(r => r.json() as Promise<{ ok: boolean; files: string[]; matchCount: number }>)
                       .then(d => {
                         if (!d.ok) return;
@@ -627,7 +627,7 @@ export default function RoleCollectionsOverview() {
                                 >
                                   {overviewSearch
                                     ? `View all ${matchCount} matching in modal`
-                                    : `More (${total}) Role Collections`}
+                                    : `${total} Role Collections`}
                                 </button>
                               </td>
                             ))}
