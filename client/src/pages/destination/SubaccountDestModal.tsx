@@ -1,14 +1,96 @@
 import { useEffect, useRef, useState } from 'react';
 import {
-  Download, Eye, EyeOff, GitCompare, Lock, Maximize2, Minimize2, PanelLeft, Plus, RefreshCw, RotateCcw, Save, Search, Send, Trash2, Upload, X,
+  ChevronDown, Download, Eye, EyeOff, GitCompare, Lock, Maximize2, Minimize2, PanelLeft, Plus, RefreshCw, RotateCcw, Save, Search, Send, Trash2, Upload, X,
 } from 'lucide-react';
+import {
+  DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator,
+  DropdownMenuSub, DropdownMenuSubContent, DropdownMenuSubTrigger, DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 import { useAuth } from '@/hooks/useAuth';
-import type { SubaccountEntry } from '@/components/config/SubaccountsTable';
+import { useSettings } from '@/components/AppLayout';
+import type { SubaccountEntry, SpaceEntry } from '@/components/config/SubaccountsTable';
+import type { CockpitMenuItem } from '@/components/home/HomepageContent';
 
 export interface SelectedDest {
   region:    string;
   subdomain: string;
   name:      string;
+}
+
+// ─── Cockpit URL helpers ──────────────────────────────────────────────────────
+
+function deriveCockpitRegion(region: string): string {
+  if (region.startsWith('us')) return 'amer';
+  if (region.startsWith('eu')) return region.split('-')[0]!;
+  if (region.startsWith('ap')) return 'ap21';
+  if (region.startsWith('br')) return 'br10';
+  if (region.startsWith('jp')) return 'jp10';
+  if (region.startsWith('ca')) return 'ca10';
+  if (region.startsWith('au')) return 'ap10';
+  return region;
+}
+function stripProtocol(h: string): string { return h.replace(/^https?:\/\//i, ''); }
+function resolve(tpl: string, ctx: Record<string, string>): string {
+  return tpl.replace(/\{([^}]+)\}/g, (_, k: string) => ctx[k] ?? '');
+}
+function cleanUrl(url: string): string {
+  const hi = url.indexOf('#');
+  const before = hi >= 0 ? url.slice(0, hi) : url;
+  const after  = hi >= 0 ? url.slice(hi) : '';
+  const qi = before.indexOf('?');
+  if (qi < 0) return url;
+  const base   = before.slice(0, qi);
+  const params = before.slice(qi + 1).split('&').filter(p => { const eq = p.indexOf('='); return eq < 0 || p.slice(eq + 1) !== ''; });
+  return base + (params.length ? '?' + params.join('&') : '') + after;
+}
+function resolveUrl(tpl: string, ctx: Record<string, string>): string { return cleanUrl(resolve(tpl, ctx)); }
+function buildCockpitCtx(sa: SubaccountEntry, cockpit: { idp: string; host: string }): Record<string, string> {
+  return {
+    'homepage.cockpit.host': cockpit.host ? stripProtocol(cockpit.host) : '',
+    'homepage.cockpit.idp':  cockpit.idp,
+    cockpitRegion:           deriveCockpitRegion(sa.region),
+    globalAccountGUID:       sa.globalAccountGUID,
+    subaccountId:            sa.subaccountId,
+    orgId:                   sa.org?.orgId ?? '',
+    subdomain:               sa.subdomain,
+  };
+}
+function renderMenuItems(items: CockpitMenuItem[], ctx: Record<string, string>, spaces: SpaceEntry[]): React.ReactNode[] {
+  return items.flatMap((item, i) => {
+    if (item.name === '-') return [<DropdownMenuSeparator key={`sep-${i}`} />];
+    if (item.repeatOn === 'spaces') {
+      return spaces.flatMap(sp => {
+        const spCtx = { ...ctx, spaceId: sp.spaceId, spaceName: sp.spaceName };
+        const name  = resolve(item.name, spCtx);
+        const url   = item.url ? resolveUrl(item.url, spCtx) : undefined;
+        if (item.submenus?.length) {
+          return [(<DropdownMenuSub key={sp.spaceId}>
+            <DropdownMenuSubTrigger className="text-xs">{name}</DropdownMenuSubTrigger>
+            <DropdownMenuSubContent>
+              {url && <><DropdownMenuItem className="text-xs cursor-pointer" asChild><a href={url} target="_blank" rel="noopener noreferrer">{name}</a></DropdownMenuItem><DropdownMenuSeparator /></>}
+              {renderMenuItems(item.submenus, spCtx, spaces)}
+            </DropdownMenuSubContent>
+          </DropdownMenuSub>)];
+        }
+        return url ? [<DropdownMenuItem key={sp.spaceId} className="text-xs cursor-pointer" asChild><a href={url} target="_blank" rel="noopener noreferrer">{name}</a></DropdownMenuItem>] : [];
+      });
+    }
+    const name = resolve(item.name, ctx);
+    const url  = item.url ? resolveUrl(item.url, ctx) : undefined;
+    if (item.submenus?.length) {
+      return [(<DropdownMenuSub key={i}>
+        <DropdownMenuSubTrigger className="text-xs">{name}</DropdownMenuSubTrigger>
+        <DropdownMenuSubContent>
+          {url && <><DropdownMenuItem className="text-xs cursor-pointer" asChild><a href={url} target="_blank" rel="noopener noreferrer">{name}</a></DropdownMenuItem><DropdownMenuSeparator /></>}
+          {renderMenuItems(item.submenus, ctx, spaces)}
+        </DropdownMenuSubContent>
+      </DropdownMenuSub>)];
+    }
+    return [url
+      ? <DropdownMenuItem key={i} className="text-xs cursor-pointer" asChild><a href={url} target="_blank" rel="noopener noreferrer">{name}</a></DropdownMenuItem>
+      : <DropdownMenuItem key={i} className="text-xs" disabled>{name}</DropdownMenuItem>
+    ];
+  });
 }
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -508,7 +590,9 @@ function TestTab() {
 // ─── Main modal ───────────────────────────────────────────────────────────────
 
 export default function SubaccountDestModal({ org, allNames, initialName, initialTab, initialShowList, onClose, selectedDests, onToggleCompare }: SubaccountDestModalProps) {
-  const auth     = useAuth();
+  const auth                        = useAuth();
+  const { settings, cockpitMenu }   = useSettings();
+  const cockpit                     = settings?.homepage.cockpit ?? { idp: '', host: '' };
   const username = auth.email || auth.firstName || 'admin';
 
   // Left panel
@@ -852,14 +936,39 @@ export default function SubaccountDestModal({ org, allNames, initialName, initia
 
         {/* Modal header: breadcrumb + action buttons + Maximize + X */}
         <div className="flex items-center gap-2 px-4 border-b border-border shrink-0 min-h-[44px]">
-          <span className="text-sm font-semibold min-w-0 flex items-center gap-1 truncate flex-1">
-            <span className="text-muted-foreground font-normal">{org.region}</span>
-            <span className="text-muted-foreground font-normal">›</span>
-            <span>{org.alias || org.subaccountName}</span>
-            <span className="text-muted-foreground font-normal text-xs font-mono">({org.subdomain})</span>
-            <span className="text-muted-foreground font-normal">›</span>
-            <span>Subaccount Destinations</span>
-          </span>
+          <div className="text-sm font-semibold min-w-0 flex items-center gap-1 flex-1 overflow-hidden">
+            <span className="text-muted-foreground font-normal shrink-0">{org.region} ›</span>
+            {cockpitMenu
+              ? (() => {
+                  const ctx    = buildCockpitCtx(org, cockpit);
+                  const url    = cockpitMenu.url ? resolveUrl(cockpitMenu.url, ctx) : undefined;
+                  const spaces = org.org?.spaces ?? [];
+                  const hasSubs = (cockpitMenu.submenus?.length ?? 0) > 0;
+                  return (
+                    <DropdownMenu>
+                      <DropdownMenuTrigger asChild>
+                        <button className="inline-flex items-center gap-0.5 hover:bg-accent/60 hover:text-foreground px-1 py-0.5 rounded transition-colors min-w-0 shrink truncate">
+                          <span className="truncate">{org.alias || org.subaccountName}</span>
+                          <span className="font-normal text-xs font-mono text-muted-foreground shrink-0">({org.subdomain})</span>
+                          <ChevronDown className="h-3 w-3 shrink-0 opacity-60 ml-0.5" />
+                        </button>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="start" className="max-h-[min(70vh,420px)] overflow-y-auto">
+                        {url && <>
+                          <DropdownMenuItem className="text-xs cursor-pointer" asChild>
+                            <a href={url} target="_blank" rel="noopener noreferrer">{cockpitMenu.name}</a>
+                          </DropdownMenuItem>
+                          {hasSubs && <DropdownMenuSeparator />}
+                        </>}
+                        {hasSubs && renderMenuItems(cockpitMenu.submenus!, ctx, spaces)}
+                      </DropdownMenuContent>
+                    </DropdownMenu>
+                  );
+                })()
+              : <span className="truncate">{org.alias || org.subaccountName} <span className="font-normal text-xs font-mono text-muted-foreground">({org.subdomain})</span></span>
+            }
+            <span className="text-muted-foreground font-normal shrink-0">› Subaccount Destinations</span>
+          </div>
           <div className="flex items-center gap-1 shrink-0">
             <button
               onClick={handleCreateClick}

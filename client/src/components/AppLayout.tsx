@@ -4,6 +4,7 @@ import { PanelLeft } from 'lucide-react';
 import AppSidebar from './AppSidebar';
 import { useAuth } from '@/hooks/useAuth';
 import type { SettingsData } from '@/components/config/SettingsPanel';
+import type { CockpitMenuItem } from '@/components/home/HomepageContent';
 
 const COOKIE = 'sidebar-collapsed';
 const MAX_AGE = 365 * 24 * 60 * 60; // 1 year
@@ -31,11 +32,12 @@ export function useSidebar(): SidebarCtx {
 // ─── Settings context ─────────────────────────────────────────────────────────
 
 export interface SettingsCtx {
-  settings: SettingsData | null;
+  settings:    SettingsData | null;
+  cockpitMenu: CockpitMenuItem | null;
   refreshSettings: () => void;
 }
 
-const SettingsContext = createContext<SettingsCtx>({ settings: null, refreshSettings: () => {} });
+const SettingsContext = createContext<SettingsCtx>({ settings: null, cockpitMenu: null, refreshSettings: () => {} });
 
 export function useSettings(): SettingsCtx {
   return useContext(SettingsContext);
@@ -48,6 +50,7 @@ export default function AppLayout() {
   // Only manual toggles write to the cookie — programmatic collapse on logout does not.
   const [collapsed, setCollapsed]       = useState(true);
   const [settings, setSettings]         = useState<SettingsData | null>(null);
+  const [cockpitMenu, setCockpitMenu]   = useState<CockpitMenuItem | null>(null);
   const [settingsKey, setSettingsKey]   = useState(0);
   const auth = useAuth();
 
@@ -74,6 +77,10 @@ export default function AppLayout() {
       .then(r => r.json() as Promise<{ ok: boolean; data: SettingsData }>)
       .then(({ data }) => setSettings(data))
       .catch(() => setSettings({ homepage: { cockpit: { idp: '', host: '' }, mainSubscriptions: [] }, menus: [] }));
+    fetch('/api/config/cockpit-menu')
+      .then(r => r.json() as Promise<CockpitMenuItem | null>)
+      .then(menu => setCockpitMenu(menu))
+      .catch(() => {});
   }, [settingsKey, auth.loading, auth.loggedIn]);
 
   const refreshSettings = useCallback(() => setSettingsKey(k => k + 1), []);
@@ -91,7 +98,7 @@ export default function AppLayout() {
 
   return (
     <SidebarContext.Provider value={{ collapsed, toggle }}>
-      <SettingsContext.Provider value={{ settings, refreshSettings }}>
+      <SettingsContext.Provider value={{ settings, cockpitMenu, refreshSettings }}>
         <div className="flex h-screen overflow-hidden bg-background text-foreground">
           <AppSidebar />
           <main className="flex-1 overflow-auto min-w-0">

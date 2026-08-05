@@ -518,6 +518,48 @@ export async function searchGlobalRcsChangelogs(query: string): Promise<{ files:
   return { files: matched, matchCount: total };
 }
 
+export async function searchRoleCollections(query: string): Promise<{ matches: Record<string, string[]> }> {
+  const q = query.trim().toLowerCase();
+  if (q.length < 2) return { matches: {} };
+
+  const matches: Record<string, string[]> = {};
+  const regions = await readdir(LOCAL_RC_DIR).catch(() => [] as string[]);
+
+  await Promise.all(regions.map(async region => {
+    const regionDir  = join(LOCAL_RC_DIR, region);
+    const subdomains = await readdir(regionDir).catch(() => [] as string[]);
+
+    await Promise.all(subdomains.map(async subdomain => {
+      const subDir = join(LOCAL_RC_DIR, region, subdomain);
+      const files  = await readdir(subDir).catch(() => [] as string[]);
+      const rcFiles = files.filter(f => f.endsWith('.json') && !f.endsWith('.users.json'));
+
+      const found: string[] = [];
+      await Promise.all(rcFiles.map(async f => {
+        let hit = false;
+        try {
+          const text = await readFile(join(subDir, f), 'utf-8');
+          if (text.toLowerCase().includes(q)) hit = true;
+        } catch { /* skip unreadable */ }
+
+        if (!hit) {
+          const stem = f.slice(0, -5); // strip .json
+          try {
+            const text = await readFile(join(subDir, `${stem}.users.json`), 'utf-8');
+            if (text.toLowerCase().includes(q)) hit = true;
+          } catch { /* no users file */ }
+        }
+
+        if (hit) found.push(rcFilenameToName(f));
+      }));
+
+      if (found.length > 0) matches[`${region}/${subdomain}`] = found;
+    }));
+  }));
+
+  return { matches };
+}
+
 // ─── Local data readers ───────────────────────────────────────────────────────
 
 export async function listSubaccountRCNames(region: string, subdomain: string): Promise<string[]> {
@@ -833,6 +875,7 @@ export interface SubaccountRcNamesResult {
   updated?:  number;
   deleted?:  number;
   received?: number;
+  stale?:    boolean;
 }
 
 export async function getSubaccountRcNames(
@@ -840,11 +883,17 @@ export async function getSubaccountRcNames(
   subdomain: string,
   username:  string,
   force      = false,
+  noRefresh  = false,
 ): Promise<SubaccountRcNamesResult> {
   const key   = `${region}/${subdomain}`;
   const delta = getAutoSubaccountRefreshMs();
   const last  = lastRefreshTs.get(key) ?? 0;
   const stale = force || (delta > 0 && Date.now() - last > delta);
+
+  if (noRefresh) {
+    const names = await listSubaccountRCNames(region, subdomain);
+    return { names, refreshed: false, errors: [], stale };
+  }
 
   if (stale) {
     logger.info({ location: key, force, ageSec: Math.round((Date.now() - last) / 1000) }, 'Proactive RC refresh');
