@@ -13,6 +13,7 @@ import {
   getGlobalRcsChangelog,
   getGlobalRcsChangelogFile,
   searchGlobalRcsChangelogs,
+  searchRoleCollections,
   getGlobalRcsRefreshTs,
   saveRCToLocal,
   addUserToRc,
@@ -81,6 +82,16 @@ router.get('/global-changelog/search', requireAdmin, async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
+// ── Full-text search across all RC data ───────────────────────────────────────
+
+router.get('/search', requireAdmin, async (req, res, next) => {
+  try {
+    const q      = typeof req.query['q'] === 'string' ? req.query['q'] : '';
+    const result = await searchRoleCollections(q);
+    res.json({ ok: true, ...result });
+  } catch (err) { next(err); }
+});
+
 // ── Subaccount refresh ────────────────────────────────────────────────────────
 
 router.post('/:region/:subdomain/refresh', requireAdmin, async (req, res, next) => {
@@ -99,9 +110,10 @@ router.get('/:region/:subdomain', requireAdmin, async (req, res, next) => {
   try {
     const { region, subdomain } = req.params as { region: string; subdomain: string };
     if (await isRcSubaccountRestricted(region, subdomain)) return void res.status(403).json(RESTRICTED);
-    const authReq = req as AuthRequest;
-    const force   = req.query['force'] === '1';
-    const result  = await getSubaccountRcNames(region, subdomain, sessionUser(authReq), force);
+    const authReq   = req as AuthRequest;
+    const force     = req.query['force'] === '1';
+    const noRefresh = req.query['noRefresh'] === '1';
+    const result    = await getSubaccountRcNames(region, subdomain, sessionUser(authReq), force, noRefresh);
     res.json({ ok: true, ...result });
   } catch (err) { next(err); }
 });

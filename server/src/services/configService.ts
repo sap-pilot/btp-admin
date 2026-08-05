@@ -101,12 +101,19 @@ export function getRestrictedIds(): Set<string> {
 
 /**
  * Per-subaccount proactive refresh threshold in milliseconds.
- * DESTINATIONS_AUTO_SUBACCOUNT_REFRESH_MINS replaces DESTINATION_REFRESH_DELAY_SECONDS.
+ * AUTO_SUBACCOUNT_REFRESH_MINS (new name); old names DESTINATIONS_AUTO_SUBACCOUNT_REFRESH_MINS
+ * and DESTINATION_AUTO_SUBACCOUNT_REFRESH_MINS still accepted for backward compatibility.
  * Fractional values supported (e.g. 0.5 = 30 s). Default: 10 minutes.
  * Set to 0 to disable proactive refresh entirely.
  */
 export function getAutoSubaccountRefreshMs(): number {
-  const mins = process.env.DESTINATIONS_AUTO_SUBACCOUNT_REFRESH_MINS ?? getConfig().variables?.['DESTINATIONS_AUTO_SUBACCOUNT_REFRESH_MINS'];
+  const mins =
+    process.env.AUTO_SUBACCOUNT_REFRESH_MINS ??
+    getConfig().variables?.['AUTO_SUBACCOUNT_REFRESH_MINS'] ??
+    process.env.DESTINATIONS_AUTO_SUBACCOUNT_REFRESH_MINS ??
+    getConfig().variables?.['DESTINATIONS_AUTO_SUBACCOUNT_REFRESH_MINS'] ??
+    process.env.DESTINATION_AUTO_SUBACCOUNT_REFRESH_MINS ??
+    getConfig().variables?.['DESTINATION_AUTO_SUBACCOUNT_REFRESH_MINS'];
   if (mins !== undefined && mins !== '') {
     const n = parseFloat(mins);
     return (!isNaN(n) && n > 0) ? n * 60_000 : 0;
@@ -144,11 +151,16 @@ export function getSyncWhitelistIPs(): string[] {
 
 /**
  * Global (all-subaccounts) auto-refresh threshold in milliseconds.
- * DESTINATION_AUTO_GLOBAL_REFRESH_HRS supports fractional values (e.g. 1.5 = 90 min).
- * Default: 6 hours. Set to 0 to disable auto-refresh on page open.
+ * AUTO_GLOBAL_REFRESH_HRS (new name); old name DESTINATION_AUTO_GLOBAL_REFRESH_HRS still accepted.
+ * Fractional values supported (e.g. 1.5 = 90 min). Default: 6 hours.
+ * Set to 0 to disable auto-refresh on page open.
  */
 export function getAutoGlobalRefreshMs(): number {
-  const raw = process.env.DESTINATION_AUTO_GLOBAL_REFRESH_HRS ?? getConfig().variables?.['DESTINATION_AUTO_GLOBAL_REFRESH_HRS'];
+  const raw =
+    process.env.AUTO_GLOBAL_REFRESH_HRS ??
+    getConfig().variables?.['AUTO_GLOBAL_REFRESH_HRS'] ??
+    process.env.DESTINATION_AUTO_GLOBAL_REFRESH_HRS ??
+    getConfig().variables?.['DESTINATION_AUTO_GLOBAL_REFRESH_HRS'];
   if (raw !== undefined && raw !== '') {
     const n = parseFloat(raw);
     return (!isNaN(n) && n > 0) ? n * 3_600_000 : 0;

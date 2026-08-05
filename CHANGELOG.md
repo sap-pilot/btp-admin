@@ -3,6 +3,7 @@
 ## [v1.3.0] - 2026-08-05
 
 ### Added
+- **RC global full-text search** — the Role Collections Overview search box now performs a server-side full-text search across all RC data files (`{LOCAL_STORE_DIR}/rcs/{region}/{subdomain}/*.json` and `.users.json`) rather than matching RC names only; a debounced `GET /api/role-collections/search?q=<query>` call (400 ms, minimum 2 chars) drives the table filter; while the search is in-flight the search icon is replaced by a spinner; `buildSaBuckets` and the category-filter counts both use the server result set; the search icon spinner and name highlight in the table still apply on the matched RC name cells
 - **Role Collections management** — new `/rcs` section (admin-only) for cross-subaccount XSUAA role collection browsing and user management:
   - **Role Collections Overview** (`/rcs`) — table listing all subaccounts with `manageRoles = true`; shows region, subdomain, and cached role collection count; global **Refresh** with SSE progress bar; **Change History** tab showing `rcs/changelog.md` with archive file selector and full-text search; live updates via `rcs` SSE topic
   - **Subaccount Role Collections modal** — left panel: searchable list; right panel tabs: **Details** (role references table), **Users** (live add/remove via XSUAA REST API), **Changelog** (per-RC diff log); per-subaccount **Refresh** button with progress banner; opens collapsed or expanded based on entry point
@@ -11,6 +12,9 @@
   - **Remote sync** — `rcs/` folder included in sync browse manifest and ZIP batch download; `rcs` SSE events emitted on sync completion
   - **Config → Subaccounts table** — new `Roles` checkbox column (`manageRoles` field) alongside `Destinations`; enables or disables RC management per subaccount
   - **API** — `GET/POST /api/rcs/`, `GET /api/rcs/global-changelog`, `GET /api/rcs/:region/:subdomain`, `POST /api/rcs/:region/:subdomain/refresh`, `GET/PUT /api/rcs/:region/:subdomain/:name`, `GET /api/rcs/:region/:subdomain/:name/users`, `POST /api/rcs/:region/:subdomain/:name/users`, `DELETE /api/rcs/:region/:subdomain/:name/users/:userId`, `GET /api/rcs/:region/:subdomain/:name/export`
+
+### Changed
+- **`DESTINATION_AUTO_GLOBAL_REFRESH_HRS` → `AUTO_GLOBAL_REFRESH_HRS`** and **`DESTINATIONS_AUTO_SUBACCOUNT_REFRESH_MINS` → `AUTO_SUBACCOUNT_REFRESH_MINS`** — both variables now apply to destinations and role collections alike; the old names (and the undocumented `DESTINATION_AUTO_SUBACCOUNT_REFRESH_MINS` variant that appeared in config files) are still accepted as fallbacks for backward compatibility; update `config.json → variables` and any deployment env vars to the new names
 
 ## [v1.2.3] - 2026-08-04
 

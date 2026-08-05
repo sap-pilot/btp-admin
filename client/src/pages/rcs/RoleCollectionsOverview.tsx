@@ -1,6 +1,6 @@
 import { Fragment, useEffect, useRef, useState } from 'react';
 import { useParams, useNavigate, useLocation, Link } from 'react-router';
-import { History, PanelLeft, RefreshCw, Search, ShieldCheck, X } from 'lucide-react';
+import { History, Loader2, PanelLeft, RefreshCw, Search, ShieldCheck, X } from 'lucide-react';
 import { useSidebar } from '@/components/AppLayout';
 import type { SubaccountEntry } from '@/components/config/SubaccountsTable';
 import type { TabEntry, TabSection } from '@/components/config/TabsTable';
@@ -62,20 +62,30 @@ const RC_CATS: { key: RcCategory; label: string }[] = [
   { key: 'workzone', label: 'Top Work-Zone Role Collections' },
 ];
 
-function buildSaBuckets(visibleSas: SubaccountEntry[], rcData: RcData, search: string): SaBucket[] {
+function buildSaBuckets(
+  visibleSas: SubaccountEntry[],
+  rcData: RcData,
+  search: string,
+  searchResults: Record<string, string[]> | null,
+): SaBucket[] {
   const searchLow = search.toLowerCase();
   return visibleSas.map(sa => {
-    const allRcs = rcData[`${sa.region}/${sa.subdomain}`] ?? [];
+    const key    = `${sa.region}/${sa.subdomain}`;
+    const allRcs = rcData[key] ?? [];
+    const matchSet = searchResults ? new Set(searchResults[key] ?? []) : null;
     const cats: Record<RcCategory, RcSummary[]> = { standard: [], custom: [], workzone: [] };
     for (const rc of allRcs) cats[categorizeRc(rc.name)].push(rc);
     for (const k of Object.keys(cats) as RcCategory[]) {
       cats[k] = [...cats[k]]
-        .filter(rc => !search || rc.name.toLowerCase().includes(searchLow))
+        .filter(rc => {
+          if (!search) return true;
+          return matchSet ? matchSet.has(rc.name) : rc.name.toLowerCase().includes(searchLow);
+        })
         .sort((a, b) => b.userCount - a.userCount)
         .slice(0, 5);
     }
     const matchCount = search
-      ? allRcs.filter(rc => rc.name.toLowerCase().includes(searchLow)).length
+      ? matchSet ? matchSet.size : allRcs.filter(rc => rc.name.toLowerCase().includes(searchLow)).length
       : allRcs.length;
     return { sa, cats, total: allRcs.length, matchCount };
   });
@@ -139,6 +149,9 @@ export default function RoleCollectionsOverview() {
   const [showForceRefreshDialog, setShowForceRefreshDialog] = useState(false);
   const [overviewSearch,         setOverviewSearch]         = useState('');
   const [categoryFilter,         setCategoryFilter]         = useState<'all' | RcCategory>('all');
+  const [searchResults,          setSearchResults]          = useState<Record<string, string[]> | null>(null);
+  const [searchLoading,          setSearchLoading]          = useState(false);
+  const searchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Global changelog
   const [globalChangelog,        setGlobalChangelog]        = useState('');
@@ -282,6 +295,29 @@ export default function RoleCollectionsOverview() {
     setModal({ sa, allNames: names, initialName: name, initialShowList: showList });
   }
 
+  useEffect(() => {
+    if (searchTimerRef.current) clearTimeout(searchTimerRef.current);
+    const q = overviewSearch.trim();
+    if (q.length < 2) {
+      setSearchResults(null);
+      setSearchLoading(false);
+      return;
+    }
+    setSearchLoading(true);
+    searchTimerRef.current = setTimeout(() => {
+      void (async () => {
+        try {
+          const r = await fetch(`/api/role-collections/search?q=${encodeURIComponent(q)}`);
+          const j = await r.json() as { ok: boolean; matches: Record<string, string[]> };
+          if (j.ok) setSearchResults(j.matches);
+        } catch { /* ignore */ } finally {
+          setSearchLoading(false);
+        }
+      })();
+    }, 400);
+    return () => { if (searchTimerRef.current) clearTimeout(searchTimerRef.current); };
+  }, [overviewSearch]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // ── Tab derivations ──────────────────────────────────────────────────────────
 
   const visibleTabs = tabEntries.filter(te =>
@@ -309,10 +345,12 @@ export default function RoleCollectionsOverview() {
       .filter((s): s is Extract<TabSection, { type: 'subaccountGroup' }> => s.type === 'subaccountGroup')
       .flatMap(grp => allRcSas.filter(sa => csvIncludes(sa.groupIds, grp.groupId)));
     for (const sa of tabSas) {
-      for (const rc of rcData[`${sa.region}/${sa.subdomain}`] ?? []) {
+      const key      = `${sa.region}/${sa.subdomain}`;
+      const matchSet = searchResults ? new Set(searchResults[key] ?? []) : null;
+      for (const rc of rcData[key] ?? []) {
         const cat = categorizeRc(rc.name);
         catCounts[cat].total++;
-        if (!overviewSearch || rc.name.toLowerCase().includes(overviewSearchLow)) {
+        if (!overviewSearch || (matchSet ? matchSet.has(rc.name) : rc.name.toLowerCase().includes(overviewSearchLow))) {
           catCounts[cat].matched++;
         }
       }
@@ -359,7 +397,10 @@ export default function RoleCollectionsOverview() {
         <div className="ml-auto flex items-center gap-2">
           {/* Full-text search */}
           <div className="relative hidden sm:block">
-            <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground pointer-events-none" />
+            {searchLoading
+              ? <Loader2 className="absolute left-2 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground animate-spin pointer-events-none" />
+              : <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground pointer-events-none" />
+            }
             <input
               type="text"
               value={overviewSearch}
@@ -544,7 +585,7 @@ export default function RoleCollectionsOverview() {
                 .sort((a, b) => a.pos - b.pos);
               if (visibleSas.length === 0) return null;
 
-              const saBuckets = buildSaBuckets(visibleSas, rcData, overviewSearch);
+              const saBuckets = buildSaBuckets(visibleSas, rcData, overviewSearch, searchResults);
 
               return (
                 <div key={grp.groupId} className="space-y-1.5">
