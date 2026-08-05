@@ -1,5 +1,17 @@
 # Changelog
 
+## [v1.3.0] - 2026-08-05
+
+### Added
+- **Role Collections management** — new `/rcs` section (admin-only) for cross-subaccount XSUAA role collection browsing and user management:
+  - **Role Collections Overview** (`/rcs`) — table listing all subaccounts with `manageRoles = true`; shows region, subdomain, and cached role collection count; global **Refresh** with SSE progress bar; **Change History** tab showing `rcs/changelog.md` with archive file selector and full-text search; live updates via `rcs` SSE topic
+  - **Subaccount Role Collections modal** — left panel: searchable list; right panel tabs: **Details** (role references table), **Users** (live add/remove via XSUAA REST API), **Changelog** (per-RC diff log); per-subaccount **Refresh** button with progress banner; opens collapsed or expanded based on entry point
+  - **XSUAA apiaccess credential discovery** — server discovers `xsuaa/apiaccess` service instances via CF v3 API, reads the first service key, and caches credentials in `~/.ba/xsuaa-keys.json`; OAuth2 client-credentials tokens cached in `~/.ba/xsuaa-tokens.json`; tokens auto-refreshed on expiry
+  - **Local storage** — role collections stored as `{LOCAL_STORE_DIR}/rcs/{region}/{subdomain}/{safeName}.json` with sidecar `.users.json` and `.changelog.md` files; removed role collections renamed to `.deleted.json`; global changelog at `rcs/changelog.md` (rotates at 2 MB)
+  - **Remote sync** — `rcs/` folder included in sync browse manifest and ZIP batch download; `rcs` SSE events emitted on sync completion
+  - **Config → Subaccounts table** — new `Roles` checkbox column (`manageRoles` field) alongside `Destinations`; enables or disables RC management per subaccount
+  - **API** — `GET/POST /api/rcs/`, `GET /api/rcs/global-changelog`, `GET /api/rcs/:region/:subdomain`, `POST /api/rcs/:region/:subdomain/refresh`, `GET/PUT /api/rcs/:region/:subdomain/:name`, `GET /api/rcs/:region/:subdomain/:name/users`, `POST /api/rcs/:region/:subdomain/:name/users`, `DELETE /api/rcs/:region/:subdomain/:name/users/:userId`, `GET /api/rcs/:region/:subdomain/:name/export`
+
 ## [v1.2.3] - 2026-08-04
 
 ### Fixed

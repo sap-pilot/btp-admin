@@ -15,6 +15,7 @@ import statusApiRouter from './routes/status.js';
 import configRouter from './routes/config.js';
 import settingsRouter from './routes/settings.js';
 import destRouter from './routes/destinations.js';
+import rcsRouter from './routes/rcs.js';
 import authRouter from './routes/auth.js';
 import { requireSessionGlobal } from './middleware/requireAuth.js';
 import { errorHandler } from './middleware/errorHandler.js';
@@ -38,6 +39,7 @@ app.use('/api/status', statusApiRouter);
 app.use('/api/config', configRouter);
 app.use('/api/settings', settingsRouter);
 app.use('/api/destinations', destRouter);
+app.use('/api/rcs', rcsRouter);
 app.use('/api/sync', syncRouter);
 app.use('/api', apiRouter);
 

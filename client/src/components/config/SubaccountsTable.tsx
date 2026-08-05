@@ -29,6 +29,7 @@ export interface SubaccountEntry {
   inHomepage:         boolean;
   manageDestinations: boolean;
   useAOD:             boolean;
+  manageRoles:        boolean;
   /** Runtime-only flag set by server when org ID or subaccount ID is in RESTRICTED_ORG_IDS. */
   restricted?:        boolean;
   org?: {
@@ -61,10 +62,10 @@ interface Props {
   onOpenDetail:      (sa: SubaccountEntry) => void;
 }
 
-// col idx:        0    1    2    3    4    5    6    7   8   9   10  11
-//                grip  rgn  sub  ga   sa   org  grp  al  hm  dt  sub svc
-const INIT_WIDTHS = [28,  65,  95, 160, 195, 145, 110, 85, 42, 42,  44, 44];
-const MIN_WIDTHS  = [28,  40,  55,  90, 110,  80,  55, 45, 32, 32,  32, 32];
+// col idx:        0    1    2    3    4    5    6    7   8   9   10  11   12
+//                grip  rgn  sub  ga   sa   org  grp  al  hm  dt  rol sub  svc
+const INIT_WIDTHS = [28,  65,  95, 160, 195, 145, 110, 85, 42, 42,  44,  44, 44];
+const MIN_WIDTHS  = [28,  40,  55,  90, 110,  80,  55, 45, 32, 32,  32,  32, 32];
 
 function updateSa(data: SubaccountEntry[], subaccountId: string, patch: Partial<SubaccountEntry>): SubaccountEntry[] {
   return data.map(s => s.subaccountId === subaccountId ? { ...s, ...patch } : s);
@@ -323,13 +324,17 @@ export default function SubaccountsTable({
                 Dest
                 <div className={rszHdl} onMouseDown={e => startResize(e, 9)} />
               </th>
-              <th className={`${thCls} text-center`}>
-                Sub
+              <th className={`${thCls} text-center`} title="Manage Role Collections">
+                Roles
                 <div className={rszHdl} onMouseDown={e => startResize(e, 10)} />
               </th>
               <th className={`${thCls} text-center`}>
-                Svc
+                Sub
                 <div className={rszHdl} onMouseDown={e => startResize(e, 11)} />
+              </th>
+              <th className={`${thCls} text-center`}>
+                Svc
+                <div className={rszHdl} onMouseDown={e => startResize(e, 12)} />
               </th>
             </tr>
           </thead>
@@ -414,6 +419,13 @@ export default function SubaccountsTable({
                       className={sa.restricted ? 'cursor-not-allowed opacity-40' : 'cursor-pointer'}
                       disabled={sa.restricted}
                       title={sa.restricted ? 'Disabled — subaccount is restricted' : undefined} />
+                  </td>
+                  <td className={`${tdCls} text-center`}>
+                    <input type="checkbox" checked={sa.manageRoles ?? false}
+                      onChange={e => onChange(updateSa(data, sa.subaccountId, { manageRoles: e.target.checked }))}
+                      className={sa.restricted ? 'cursor-not-allowed opacity-40' : 'cursor-pointer'}
+                      disabled={sa.restricted}
+                      title={sa.restricted ? 'Disabled — subaccount is restricted' : 'Manage Role Collections via XSUAA apiaccess'} />
                   </td>
                   <td className={`${tdCls} text-center`}>
                     {sa.subscriptions.length > 0

@@ -34,6 +34,22 @@ Clicking any cell or subaccount header opens the **Subaccount Destinations modal
 
 **Compare** — select destinations across any subaccounts with the `Compare (N) ▾` split-button; a full-screen side-by-side modal highlights rows where values differ and allows per-column Save.
 
+## Role Collections Management
+
+A cross-subaccount role collection management view at `/rcs`. All subaccounts with `manageRoles = true` appear in the overview table. Clicking **Browse** opens the **Subaccount Role Collections modal**.
+
+Clicking any subaccount opens the **Subaccount Role Collections modal** with:
+- A searchable role collection list in the left panel
+- **Details tab** — role references table (template name, app ID, description)
+- **Users tab** — assigned users list with add/remove; add accepts an email/username and origin (e.g. `sap.ids`)
+- **Changelog tab** — field-level diff log for every save and refresh
+
+**Refresh** fetches all role collections from the XSUAA REST API (`/sap/rest/authorization/v2/rolecollections`). XSUAA credentials are discovered via CF v3 by locating an `xsuaa/apiaccess` service instance in the org, reading the first service key, and caching keys in `~/.ba/xsuaa-keys.json`; OAuth2 tokens are cached in `~/.ba/xsuaa-tokens.json`. Changed role collections produce a diff written to `{safeName}.changelog.md`; removed role collections are renamed to `{safeName}.deleted.json`.
+
+A global `{LOCAL_STORE_DIR}/rcs/changelog.md` is updated after each refresh with a summary of created/updated/deleted role collections. Subaccount data lives in `{LOCAL_STORE_DIR}/rcs/{region}/{subdomain}/`.
+
+**Remote sync** — the `rcs/` folder is included in the sync manifest and propagated to consumer instances just like `dest/` data.
+
 ## Screenshots
 
 **Overview** — landscape diagram with live service status and timeline dots
@@ -86,6 +102,21 @@ Clicking any cell or subaccount header opens the **Subaccount Destinations modal
 5. **Change History tab** (`/destinations/change-history`) — shows the global `dest/changelog.md` with color-coded entries (green = created, amber = updated, red = deleted); a dropdown selects archived changelog files; live-updates via `dest` SSE events
 
 6. **Compare Destinations** — `Compare (N) ▾` split-button accumulates destinations from any subaccount across any tab; the ▾ dropdown lists selected destinations with per-item and **Clear all** removal; clicking **Compare (N)** opens a full-screen modal with all property keys as rows and one column per destination; rows where values differ are highlighted in amber; cells are editable (sensitive fields masked with eye-reveal); per-column **Save** writes back via `PUT /api/destinations/:region/:subdomain/:name` and appends a diff to the destination's changelog; save result banners appear under the modal title
+
+### BTP Role Collections Management
+
+1. **Role Collections Overview** (`/rcs`) — table listing all subaccounts with `manageRoles = true`; shows region, subdomain, and role collection count; **Browse** opens the per-subaccount modal; SSE progress bar tracks global refresh progress
+
+2. **Refresh** — fetches all role collections from the XSUAA REST API for all managed subaccounts; credentials discovered from an `xsuaa/apiaccess` service instance in the org via CF v3, cached in `~/.ba/xsuaa-keys.json`; tokens cached in `~/.ba/xsuaa-tokens.json`; changed role collections produce a diff appended to `{safeName}.changelog.md`; removed role collections are renamed to `{safeName}.deleted.json`; a `{LOCAL_STORE_DIR}/rcs/changelog.md` is written after each run
+
+3. **Subaccount Role Collections modal** — opened from **Browse**; left panel: searchable list of all role collections; right panel has three tabs:
+   - **Details** — role references table (template name, app ID, description)
+   - **Users** — assigned users list with add-user form (email/ID + origin) and per-row remove button; changes call the live XSUAA API
+   - **Changelog** — field-level diff log for every refresh and save
+
+4. **Change History tab** (`/rcs/change-history`) — shows the global `rcs/changelog.md` with color-coded entries; archive file dropdown; live-updates via `rcs` SSE events
+
+5. **Remote sync** — `rcs/` folder included in sync manifest; role collection data synced to consumer instances alongside destinations and config
 
 ## Quick Start
 

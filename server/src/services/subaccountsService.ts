@@ -45,6 +45,7 @@ export interface SubaccountEntry {
   inHomepage:         boolean;
   manageDestinations: boolean;
   useAOD:             boolean;
+  manageRoles:        boolean;
   /** Runtime-only: true when this SA's subaccount ID is in RESTRICTED_SUBACCOUNT_IDS. Never persisted. */
   restricted?:        boolean;
   org?: {
@@ -76,7 +77,7 @@ export async function readSubaccounts(): Promise<SubaccountEntry[]> {
     const base = { ...sa, subdomain: sa.subdomain.toLowerCase() };
     const isRestricted = restricted.has(sa.subaccountId);
     if (isRestricted) {
-      return { ...base, manageDestinations: false, useAOD: false, restricted: true };
+      return { ...base, manageDestinations: false, useAOD: false, manageRoles: false, restricted: true };
     }
     return base;
   });
@@ -99,7 +100,7 @@ async function writeSubaccounts(subaccounts: SubaccountEntry[], globalAccounts?:
 
 const SA_DIFF_FIELDS = [
   'subaccountName', 'alias', 'groupIds', 'pos', 'subdomain',
-  'globalAccountGUID', 'inHomepage', 'manageDestinations', 'useAOD',
+  'globalAccountGUID', 'inHomepage', 'manageDestinations', 'useAOD', 'manageRoles',
 ] as const;
 
 function diffSubaccounts(before: SubaccountEntry[], after: SubaccountEntry[]): string {
@@ -155,7 +156,7 @@ function mergeOrg(
 }
 
 function mergeSubaccounts(existing: SubaccountEntry[], fresh: SubaccountEntry[]): SubaccountEntry[] {
-  type Editable = Pick<SubaccountEntry, 'alias' | 'groupIds' | 'pos' | 'inHomepage' | 'manageDestinations' | 'useAOD'>;
+  type Editable = Pick<SubaccountEntry, 'alias' | 'groupIds' | 'pos' | 'inHomepage' | 'manageDestinations' | 'useAOD' | 'manageRoles'>;
   type Preserved = Editable & { org: SubaccountEntry['org'] };
   const preservedById = new Map<string, Preserved>();
   for (const s of existing) {
@@ -166,6 +167,7 @@ function mergeSubaccounts(existing: SubaccountEntry[], fresh: SubaccountEntry[])
       inHomepage:         s.inHomepage         ?? false,
       manageDestinations: s.manageDestinations ?? false,
       useAOD:             s.useAOD             ?? false,
+      manageRoles:        s.manageRoles        ?? false,
       org:                s.org,
     });
   }
@@ -343,6 +345,7 @@ export async function refreshSubaccounts(user = 'system', force = false): Promis
       inHomepage:         false,
       manageDestinations: false,
       useAOD:             false,
+      manageRoles:        false,
       org: cfOrg && firstOrg ? {
         orgId:   firstOrg.orgId,
         orgName: cfOrg.orgName,

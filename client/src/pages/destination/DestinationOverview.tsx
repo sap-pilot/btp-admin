@@ -894,7 +894,7 @@ export default function DestinationOverview() {
                                     {others.length > 0
                                       ? (
                                         <button
-                                          onClick={() => setModal({ sa, allNames: allSaNames, initialName: others[0], initialShowList: false })}
+                                          onClick={() => setModal({ sa, allNames: allSaNames, initialName: others[0], initialShowList: true })}
                                           className="w-full flex items-center justify-between px-2 py-1 rounded bg-muted/60 text-muted-foreground hover:bg-accent hover:text-accent-foreground text-[11px] font-medium transition-colors"
                                         >
                                           <span>{others.length} destinations</span>
