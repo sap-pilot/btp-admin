@@ -500,17 +500,15 @@ async function persistDestination(
 
   if (existsSync(filePath)) {
     const existing = JSON.parse(await readFile(filePath, 'utf-8')) as Record<string, unknown>;
-    if (JSON.stringify(existing) !== JSON.stringify(incoming)) {
-      const diff    = diffDestination(existing, incoming);
-      const dateStr = new Date().toISOString().replace('T', ' ').slice(0, 19) + ' UTC';
-      const heading = `## Refreshed by <${username}> at ${dateStr}`;
-      const entry   = `${heading}\n${diff}\n\n`;
-      const prev    = existsSync(changelogPath) ? await readFile(changelogPath, 'utf-8') : '';
-      await writeFile(changelogPath, entry + prev, 'utf-8');
-      await writeFile(filePath, incomingJson, 'utf-8');
-      return 'updated';
-    }
-    return 'unchanged';
+    const diff     = diffDestination(existing, incoming);
+    if (!diff) return 'unchanged';
+    const dateStr = new Date().toISOString().replace('T', ' ').slice(0, 19) + ' UTC';
+    const heading = `## Refreshed by <${username}> at ${dateStr}`;
+    const entry   = `${heading}\n${diff}\n\n`;
+    const prev    = existsSync(changelogPath) ? await readFile(changelogPath, 'utf-8') : '';
+    await writeFile(changelogPath, entry + prev, 'utf-8');
+    await writeFile(filePath, incomingJson, 'utf-8');
+    return 'updated';
   }
 
   await writeFile(filePath, incomingJson, 'utf-8');
