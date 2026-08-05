@@ -832,7 +832,7 @@ const tabCls = (active: boolean) =>
                             {userFilter ? (
                               <>
                                 <span className="absolute right-6 top-1/2 -translate-y-1/2 text-[10px] text-muted-foreground/60 pointer-events-none whitespace-nowrap">
-                                  {filteredUsers.length} of {users.length} matches
+                                  {filteredUsers.length} user{filteredUsers.length !== 1 ? 's' : ''} matched
                                 </span>
                                 <button
                                   type="button"
