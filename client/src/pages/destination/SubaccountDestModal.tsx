@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import {
-  Download, Eye, EyeOff, GitCompare, Lock, PanelLeft, Plus, RefreshCw, RotateCcw, Save, Search, Send, Trash2, Upload, X,
+  Download, Eye, EyeOff, GitCompare, Lock, Maximize2, Minimize2, PanelLeft, Plus, RefreshCw, RotateCcw, Save, Search, Send, Trash2, Upload, X,
 } from 'lucide-react';
 import { useAuth } from '@/hooks/useAuth';
 import type { SubaccountEntry } from '@/components/config/SubaccountsTable';
@@ -178,63 +178,22 @@ function DestPropsTable({ props, onUpdate, onDelete, onAdd }: DestPropsTableProp
 interface SaveBanner { type: 'success' | 'error'; message: string }
 
 interface PropsTabProps {
-  name:             string;
-  props:            DestProp[];
-  dirty:            boolean;
-  saving:           boolean;
-  importing:        boolean;
-  loading:          boolean;
-  banner:           SaveBanner | null;
-  compareSelected?: boolean;
-  onUpdate:         (idx: number, patch: Partial<DestProp>) => void;
-  onDelete:         (idx: number) => void;
-  onAdd:            () => void;
-  onSave:           () => void;
-  onReset:          () => void;
-  onClearBanner:    () => void;
-  onToggleCompare?: () => void;
+  name:          string;
+  props:         DestProp[];
+  loading:       boolean;
+  banner:        SaveBanner | null;
+  onUpdate:      (idx: number, patch: Partial<DestProp>) => void;
+  onDelete:      (idx: number) => void;
+  onAdd:         () => void;
+  onClearBanner: () => void;
 }
 
 function PropertiesTab({
-  name, props, dirty, saving, importing, loading, banner, compareSelected,
-  onUpdate, onDelete, onAdd, onSave, onReset, onClearBanner, onToggleCompare,
+  name, props, loading, banner,
+  onUpdate, onDelete, onAdd, onClearBanner,
 }: PropsTabProps) {
-  const btnBase    = 'inline-flex items-center gap-1.5 px-3 py-1.5 rounded text-xs font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed';
-  const btnOutline = `${btnBase} border border-border hover:bg-accent hover:text-accent-foreground`;
-  const btnPrimary = `${btnBase} bg-primary text-primary-foreground hover:bg-primary/90`;
-
   return (
     <div className="flex flex-col h-full">
-      {/* Toolbar: name | Compare | Reset | Save */}
-      <div className="flex items-center gap-2 px-4 py-3 border-b border-border shrink-0">
-        <h2 className="text-sm font-mono font-semibold text-foreground truncate min-w-0 flex-1">
-          {name || <span className="font-normal text-xs text-muted-foreground">Select or create a destination</span>}
-        </h2>
-        <div className="flex items-center gap-1.5 shrink-0">
-          {onToggleCompare && (
-            <button
-              onClick={onToggleCompare}
-              disabled={!name}
-              className={compareSelected
-                ? `${btnBase} border border-primary bg-primary/10 text-primary`
-                : btnOutline}
-              title={compareSelected ? 'Remove from comparison basket' : 'Add to comparison basket'}
-            >
-              <GitCompare className="h-3.5 w-3.5" />
-              <span className="hidden sm:inline">{compareSelected ? 'In Compare' : 'Select for Compare'}</span>
-            </button>
-          )}
-          <button onClick={onReset} disabled={!dirty || saving || importing} className={btnOutline}>
-            <RotateCcw className="h-3.5 w-3.5" />
-            <span className="hidden sm:inline">Reset</span>
-          </button>
-          <button onClick={onSave} disabled={!name || !dirty || saving || importing} className={btnPrimary}>
-            <Save className="h-3.5 w-3.5" />
-            <span className="hidden sm:inline">{saving ? 'Saving…' : 'Save'}</span>
-          </button>
-        </div>
-      </div>
-
       {banner && (
         <div className={`px-4 py-1.5 text-xs flex items-center gap-2 border-b shrink-0 ${
           banner.type === 'success'
@@ -574,7 +533,8 @@ export default function SubaccountDestModal({ org, allNames, initialName, initia
   const [isImporting, setIsImporting] = useState(false);
 
   // Left-panel visibility toggle
-  const [showList, setShowList] = useState(initialShowList ?? true);
+  const [showList,   setShowList]   = useState(initialShowList ?? true);
+  const [maximized,  setMaximized]  = useState(false);
 
   // Create mode (new destination from scratch)
   const [isCreating,    setIsCreating]    = useState(false);
@@ -658,8 +618,12 @@ export default function SubaccountDestModal({ org, allNames, initialName, initia
         }
         if (json.names.length > 0) setLocalAllNames(json.names);
         if (json.refreshed) {
-          setSubProgress({ type: 'done', created: json.created ?? 0, updated: json.updated ?? 0, deleted: json.deleted ?? 0, received: json.received });
-          subProgressTimerRef.current = setTimeout(() => setSubProgress(null), 3000);
+          if (json.errors?.length) {
+            setSubProgress({ type: 'error', errors: json.errors });
+          } else {
+            setSubProgress({ type: 'done', created: json.created ?? 0, updated: json.updated ?? 0, deleted: json.deleted ?? 0, received: json.received });
+            subProgressTimerRef.current = setTimeout(() => setSubProgress(null), 3000);
+          }
         }
       } catch (err) {
         setSubProgress({ type: 'error', errors: [String(err)] });
@@ -852,6 +816,10 @@ export default function SubaccountDestModal({ org, allNames, initialName, initia
         return;
       }
       if (json.names.length > 0) setLocalAllNames(json.names);
+      if (json.errors?.length) {
+        setSubProgress({ type: 'error', errors: json.errors });
+        return;
+      }
       if (selectedName) await loadDest(selectedName);
       if (activeTab === 'changelog' && selectedName) await loadChangelog(selectedName);
       setSubProgress({ type: 'done', created: json.created ?? 0, updated: json.updated ?? 0, deleted: json.deleted ?? 0, received: json.received });
@@ -866,78 +834,79 @@ export default function SubaccountDestModal({ org, allNames, initialName, initia
       active ? 'border-primary text-foreground' : 'border-transparent text-muted-foreground hover:text-foreground'
     }`;
 
+  const btnBase    = 'inline-flex items-center gap-1.5 px-2 sm:px-3 py-1.5 rounded text-xs font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed';
+  const btnOutline = `${btnBase} border border-border hover:bg-accent hover:text-accent-foreground`;
+  const exportCount = selectedNames.size;
+  const exportTitle = exportCount > 1
+    ? `Download ${exportCount} selected destinations as {region}_{subdomain}_multi_destinations.json`
+    : 'Download destination JSON — Ctrl/⌘+click or Shift+click to select multiple for bulk export';
+
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-3"
+      className={`fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm ${maximized ? 'p-0' : 'p-4'}`}
       onClick={e => { if (e.target === e.currentTarget) onClose(); }}
     >
-      <div className="bg-background border border-border rounded-lg shadow-xl flex flex-col w-full h-full max-w-[1800px] max-h-[calc(100vh-1.5rem)]">
-        {/* Modal header */}
-        <div className="flex items-center gap-3 px-4 py-3 border-b border-border shrink-0">
-          <span className="text-sm font-semibold min-w-0 flex items-center gap-1 truncate">
+      <div className={`bg-background border border-border shadow-2xl flex flex-col ${
+        maximized ? 'w-full h-full rounded-none' : 'w-full max-w-5xl h-[90vh] rounded-xl'
+      }`}>
+
+        {/* Modal header: breadcrumb + action buttons + Maximize + X */}
+        <div className="flex items-center gap-2 px-4 border-b border-border shrink-0 min-h-[44px]">
+          <span className="text-sm font-semibold min-w-0 flex items-center gap-1 truncate flex-1">
             <span className="text-muted-foreground font-normal">{org.region}</span>
             <span className="text-muted-foreground font-normal">›</span>
             <span>{org.alias || org.subaccountName}</span>
             <span className="text-muted-foreground font-normal text-xs font-mono">({org.subdomain})</span>
-            {selectedName && !isCreating && (
-              <>
-                <span className="text-muted-foreground font-normal">›</span>
-                <span>{selectedName}</span>
-              </>
-            )}
+            <span className="text-muted-foreground font-normal">›</span>
+            <span>Subaccount Destinations</span>
           </span>
-          <div className="ml-auto flex items-center gap-1 shrink-0">
-            {(() => {
-              const btnBase    = 'inline-flex items-center gap-1.5 px-2 sm:px-3 py-1.5 rounded text-xs font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed';
-              const btnOutline = `${btnBase} border border-border hover:bg-accent hover:text-accent-foreground`;
-              const exportCount = selectedNames.size;
-              const exportTitle = exportCount > 1
-                ? `Download ${exportCount} selected destinations as {region}_{subdomain}_multi_destinations.json`
-                : 'Download destination JSON — Ctrl/⌘+click or Shift+click to select multiple for bulk export';
-              return (
-                <>
-                  <button
-                    onClick={handleCreateClick}
-                    disabled={isSaving || isImporting}
-                    className={btnOutline}
-                    title="Create a new destination from scratch"
-                  >
-                    <Plus className="h-3.5 w-3.5" />
-                    <span className="hidden sm:inline">Create</span>
-                  </button>
-                  <button
-                    onClick={() => fileInputRef.current?.click()}
-                    disabled={isImporting || isSaving}
-                    className={btnOutline}
-                    title="Import single or multiple destinations into this subaccount. New destinations will be created, existing destinations will be updated."
-                  >
-                    <Upload className="h-3.5 w-3.5" />
-                    <span className="hidden sm:inline">{isImporting ? 'Importing…' : 'Import'}</span>
-                  </button>
-                  <button
-                    onClick={handleExport}
-                    disabled={exportCount === 0 && !selectedName}
-                    className={btnOutline}
-                    title={exportTitle}
-                  >
-                    <Download className="h-3.5 w-3.5" />
-                    <span className="hidden sm:inline">{exportCount > 1 ? `Export (${exportCount})` : 'Export'}</span>
-                    {exportCount > 1 && <span className="sm:hidden text-[10px] font-bold leading-none">{exportCount}</span>}
-                  </button>
-                  <button
-                    onClick={() => void handleRefresh()}
-                    disabled={subProgress?.type === 'refreshing' || isSaving || isImporting}
-                    className={btnOutline}
-                    title="Force-refresh destinations from the Destination API"
-                  >
-                    <RefreshCw className={`h-3.5 w-3.5 ${subProgress?.type === 'refreshing' ? 'animate-spin' : ''}`} />
-                    <span className="hidden sm:inline">{subProgress?.type === 'refreshing' ? 'Refreshing…' : 'Refresh'}</span>
-                  </button>
-                  <div className="w-px h-4 bg-border mx-0.5" />
-                </>
-              );
-            })()}
-            <button onClick={onClose} className="p-1.5 rounded text-muted-foreground hover:text-foreground hover:bg-accent transition-colors">
+          <div className="flex items-center gap-1 shrink-0">
+            <button
+              onClick={handleCreateClick}
+              disabled={isSaving || isImporting}
+              className={btnOutline}
+              title="Create a new destination from scratch"
+            >
+              <Plus className="h-3.5 w-3.5" />
+              <span className="hidden sm:inline">Create</span>
+            </button>
+            <button
+              onClick={() => fileInputRef.current?.click()}
+              disabled={isImporting || isSaving}
+              className={btnOutline}
+              title="Import single or multiple destinations into this subaccount."
+            >
+              <Upload className="h-3.5 w-3.5" />
+              <span className="hidden sm:inline">{isImporting ? 'Importing…' : 'Import'}</span>
+            </button>
+            <button
+              onClick={handleExport}
+              disabled={exportCount === 0 && !selectedName}
+              className={btnOutline}
+              title={exportTitle}
+            >
+              <Download className="h-3.5 w-3.5" />
+              <span className="hidden sm:inline">{exportCount > 1 ? `Export (${exportCount})` : 'Export'}</span>
+              {exportCount > 1 && <span className="sm:hidden text-[10px] font-bold leading-none">{exportCount}</span>}
+            </button>
+            <button
+              onClick={() => void handleRefresh()}
+              disabled={subProgress?.type === 'refreshing' || isSaving || isImporting}
+              className={btnOutline}
+              title="Force-refresh destinations from the Destination API"
+            >
+              <RefreshCw className={`h-3.5 w-3.5 ${subProgress?.type === 'refreshing' ? 'animate-spin' : ''}`} />
+              <span className="hidden sm:inline">{subProgress?.type === 'refreshing' ? 'Refreshing…' : 'Refresh'}</span>
+            </button>
+            <div className="w-px h-4 bg-border mx-0.5" />
+            <button
+              onClick={() => setMaximized(v => !v)}
+              className="p-1.5 rounded text-muted-foreground hover:text-foreground hover:bg-accent/50 transition-colors"
+              title={maximized ? 'Restore' : 'Maximize'}
+            >
+              {maximized ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}
+            </button>
+            <button onClick={onClose} className="p-1.5 rounded text-muted-foreground hover:text-foreground hover:bg-accent/50 transition-colors">
               <X className="h-4 w-4" />
             </button>
           </div>
@@ -976,70 +945,129 @@ export default function SubaccountDestModal({ org, allNames, initialName, initia
         {/* Body */}
         <div className="flex flex-1 min-h-0">
           {/* Left panel: destination list */}
-          {showList && <div className="w-60 border-r border-border flex flex-col shrink-0">
-            <div className="px-2 py-2 border-b border-border">
-              <div className="relative">
-                <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground pointer-events-none" />
-                <input
-                  type="text"
-                  value={searchQuery}
-                  onChange={e => setSearchQuery(e.target.value)}
-                  placeholder="Search destinations…"
-                  className={`w-full h-7 pl-7 text-xs border border-border rounded bg-background focus:outline-none focus:ring-1 focus:ring-ring placeholder:text-muted-foreground/50 ${searchQuery ? 'pr-6' : 'pr-2'}`}
-                />
-                {searchQuery && (
-                  <button
-                    onClick={() => setSearchQuery('')}
-                    className="absolute right-1.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors p-0.5"
-                    tabIndex={-1}
-                  >
-                    <X className="h-3 w-3" />
-                  </button>
-                )}
-              </div>
-            </div>
-            <div ref={listRef} className="flex-1 overflow-auto py-1">
-              {filteredNames.length === 0 ? (
-                <div className="px-3 py-4 text-xs text-muted-foreground text-center">
-                  {isSearching ? 'Searching…' : 'No destinations found'}
+          {showList && (
+            <div className="w-60 border-r border-border flex flex-col shrink-0">
+              <div className="px-2 py-2 border-b border-border">
+                <div className="relative">
+                  <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground pointer-events-none" />
+                  <input
+                    type="text"
+                    value={searchQuery}
+                    onChange={e => setSearchQuery(e.target.value)}
+                    placeholder="Search destinations…"
+                    className={`w-full h-7 pl-7 text-xs border border-border rounded bg-background focus:outline-none focus:ring-1 focus:ring-ring placeholder:text-muted-foreground/50 ${searchQuery ? 'pr-6' : 'pr-2'}`}
+                  />
+                  {searchQuery && (
+                    <button
+                      onClick={() => setSearchQuery('')}
+                      className="absolute right-1.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors p-0.5"
+                      tabIndex={-1}
+                    >
+                      <X className="h-3 w-3" />
+                    </button>
+                  )}
                 </div>
-              ) : filteredNames.map((name, idx) => {
-                const isPrimary  = name === selectedName && !isCreating;
-                const isSelected = selectedNames.has(name) && !isCreating;
-                return (
-                  <button
-                    key={name}
-                    data-selected={isPrimary ? 'true' : undefined}
-                    onClick={e => handleDestClick(name, idx, e)}
-                    title={isSelected && !isPrimary ? `${name} — selected for export` : name}
-                    className={`w-full text-left px-3 py-1.5 text-xs font-mono truncate transition-colors select-none ${
-                      isPrimary  ? 'bg-primary/20 text-primary font-semibold' :
-                      isSelected ? 'bg-primary/10 text-primary' :
-                                   'text-foreground hover:bg-muted/40'
-                    }`}
-                  >
-                    {name}
-                  </button>
-                );
-              })}
-            </div>
-            {!isCreating && selectedNames.size > 1 && (
-              <div className="px-3 py-1.5 border-t border-border text-[10px] text-muted-foreground shrink-0">
-                {selectedNames.size} selected · Ctrl/Shift+click to select
               </div>
-            )}
-          </div>}
+              <div ref={listRef} className="flex-1 overflow-auto py-1">
+                {filteredNames.length === 0 ? (
+                  <div className="px-3 py-4 text-xs text-muted-foreground text-center">
+                    {isSearching ? 'Searching…' : 'No destinations found'}
+                  </div>
+                ) : filteredNames.map((name, idx) => {
+                  const isPrimary  = name === selectedName && !isCreating;
+                  const isSelected = selectedNames.has(name) && !isCreating;
+                  return (
+                    <button
+                      key={name}
+                      data-selected={isPrimary ? 'true' : undefined}
+                      onClick={e => handleDestClick(name, idx, e)}
+                      title={isSelected && !isPrimary ? `${name} — selected for export` : name}
+                      className={`w-full text-left px-3 py-1.5 text-xs font-mono truncate transition-colors select-none ${
+                        isPrimary  ? 'bg-primary/20 text-primary font-semibold' :
+                        isSelected ? 'bg-primary/10 text-primary' :
+                                     'text-foreground hover:bg-muted/40'
+                      }`}
+                    >
+                      {name}
+                    </button>
+                  );
+                })}
+              </div>
+              {!isCreating && selectedNames.size > 1 && (
+                <div className="px-3 py-1.5 border-t border-border text-[10px] text-muted-foreground shrink-0">
+                  {selectedNames.size} selected · Ctrl/Shift+click to select
+                </div>
+              )}
+            </div>
+          )}
 
           {/* Right panel */}
-          <div className="flex-1 flex flex-col min-w-0">
-            <div className="flex items-center border-b border-border shrink-0 px-2 min-h-[45px]">
+          <div className="flex-1 flex flex-col min-w-0 min-h-0 overflow-hidden">
+
+            {/* Name bar: toggle + dest name + Compare/Reset/Save (matches left filter bar height) */}
+            <div className="flex items-center gap-2 px-2 py-2 border-b border-border shrink-0 min-h-[44px]">
               <button
                 onClick={() => setShowList(v => !v)}
-                className={`p-1.5 mr-1 rounded transition-colors ${showList ? 'text-muted-foreground hover:text-foreground hover:bg-accent' : 'bg-accent text-foreground'}`}
+                className={`p-1.5 rounded transition-colors shrink-0 ${showList ? 'text-muted-foreground hover:text-foreground hover:bg-accent/50' : 'bg-accent text-foreground'}`}
                 title={showList ? 'Hide destination list' : 'Show destination list'}
               >
                 <PanelLeft className="h-3.5 w-3.5" />
               </button>
+              <span className="text-xs font-semibold font-mono truncate flex-1 min-w-0">
+                {isCreating ? (
+                  <span className="text-muted-foreground font-normal not-italic">New Destination</span>
+                ) : selectedName ? (
+                  selectedName
+                ) : (
+                  <span className="text-muted-foreground font-normal">—</span>
+                )}
+              </span>
+              {activeTab === 'properties' && !isCreating && (
+                <div className="flex items-center gap-1 shrink-0">
+                  {onToggleCompare && (
+                    <button
+                      onClick={() => onToggleCompare({ region: org.region, subdomain: org.subdomain, name: selectedName })}
+                      disabled={!selectedName}
+                      className={(() => {
+                        const compareSelected = selectedDests?.some(
+                          d => d.region === org.region && d.subdomain === org.subdomain && d.name === selectedName,
+                        );
+                        return compareSelected
+                          ? `${btnBase} border border-primary bg-primary/10 text-primary`
+                          : btnOutline;
+                      })()}
+                      title={selectedDests?.some(d => d.region === org.region && d.subdomain === org.subdomain && d.name === selectedName)
+                        ? 'Remove from comparison basket' : 'Add to comparison basket'}
+                    >
+                      <GitCompare className="h-3.5 w-3.5" />
+                      <span className="hidden sm:inline">
+                        {selectedDests?.some(d => d.region === org.region && d.subdomain === org.subdomain && d.name === selectedName)
+                          ? 'In Compare' : 'Select for Compare'}
+                      </span>
+                    </button>
+                  )}
+                  <button
+                    onClick={() => { setEditedProps(structuredClone(serverProps)); setSaveBanner(null); }}
+                    disabled={!isDirty || isSaving || isImporting}
+                    className={btnOutline}
+                  >
+                    <RotateCcw className="h-3.5 w-3.5" />
+                    <span className="hidden sm:inline">Reset</span>
+                  </button>
+                  <button
+                    onClick={handleSave}
+                    disabled={!selectedName || !isDirty || isSaving || isImporting}
+                    className={`${btnBase} bg-primary text-primary-foreground hover:bg-primary/90`}
+                  >
+                    <Save className="h-3.5 w-3.5" />
+                    <span className="hidden sm:inline">{isSaving ? 'Saving…' : 'Save'}</span>
+                  </button>
+                </div>
+              )}
+            </div>
+
+            {/* Tab bar */}
+            <div className="flex items-center border-b border-border shrink-0">
               <button className={tabCls(activeTab === 'properties')} onClick={() => handleTabChange('properties')}>
                 {isCreating ? 'New Destination' : 'Properties'}
               </button>
@@ -1047,49 +1075,36 @@ export default function SubaccountDestModal({ org, allNames, initialName, initia
               <button className={tabCls(activeTab === 'test')}      onClick={() => { setIsCreating(false); handleTabChange('test'); }}>Test</button>
             </div>
 
-            <div className="flex-1 min-h-0 overflow-hidden">
-              {activeTab === 'properties' && isCreating && (
-                <CreateTab
-                  name={newName}
-                  props={newProps}
-                  saving={isCreatingSave}
-                  error={createError}
-                  onNameChange={setNewName}
-                  onUpdate={(idx, patch) => setNewProps(prev => prev.map((p, i) => i === idx ? { ...p, ...patch } : p))}
-                  onDelete={idx => setNewProps(prev => prev.filter((_, i) => i !== idx))}
-                  onAdd={() => setNewProps(prev => [...prev, { key: '', value: '', isSensitive: false, revealed: false }])}
-                  onSave={handleCreateSave}
-                  onCancel={() => setIsCreating(false)}
-                />
-              )}
-              {activeTab === 'properties' && !isCreating && (
-                <PropertiesTab
-                  name={selectedName}
-                  props={editedProps}
-                  dirty={isDirty}
-                  saving={isSaving}
-                  importing={isImporting}
-                  loading={isLoading}
-                  banner={saveBanner}
-                  compareSelected={selectedDests?.some(
-                    d => d.region === org.region && d.subdomain === org.subdomain && d.name === selectedName,
-                  )}
-                  onUpdate={(idx, patch) => setEditedProps(prev => prev.map((p, i) => i === idx ? { ...p, ...patch } : p))}
-                  onDelete={idx => setEditedProps(prev => prev.filter((_, i) => i !== idx))}
-                  onAdd={() => setEditedProps(prev => [...prev, { key: '', value: '', isSensitive: false, revealed: false }])}
-                  onSave={handleSave}
-                  onReset={() => { setEditedProps(structuredClone(serverProps)); setSaveBanner(null); }}
-                  onClearBanner={() => setSaveBanner(null)}
-                  onToggleCompare={onToggleCompare
-                    ? () => onToggleCompare({ region: org.region, subdomain: org.subdomain, name: selectedName })
-                    : undefined}
-                />
-              )}
-              {activeTab === 'changelog' && (
-                <ChangelogTab changelog={changelog} loading={isLoadingChangelog} />
-              )}
-              {activeTab === 'test' && <TestTab />}
-            </div>
+            {activeTab === 'properties' && isCreating && (
+              <CreateTab
+                name={newName}
+                props={newProps}
+                saving={isCreatingSave}
+                error={createError}
+                onNameChange={setNewName}
+                onUpdate={(idx, patch) => setNewProps(prev => prev.map((p, i) => i === idx ? { ...p, ...patch } : p))}
+                onDelete={idx => setNewProps(prev => prev.filter((_, i) => i !== idx))}
+                onAdd={() => setNewProps(prev => [...prev, { key: '', value: '', isSensitive: false, revealed: false }])}
+                onSave={handleCreateSave}
+                onCancel={() => setIsCreating(false)}
+              />
+            )}
+            {activeTab === 'properties' && !isCreating && (
+              <PropertiesTab
+                name={selectedName}
+                props={editedProps}
+                loading={isLoading}
+                banner={saveBanner}
+                onUpdate={(idx, patch) => setEditedProps(prev => prev.map((p, i) => i === idx ? { ...p, ...patch } : p))}
+                onDelete={idx => setEditedProps(prev => prev.filter((_, i) => i !== idx))}
+                onAdd={() => setEditedProps(prev => [...prev, { key: '', value: '', isSensitive: false, revealed: false }])}
+                onClearBanner={() => setSaveBanner(null)}
+              />
+            )}
+            {activeTab === 'changelog' && (
+              <ChangelogTab changelog={changelog} loading={isLoadingChangelog} />
+            )}
+            {activeTab === 'test' && <TestTab />}
           </div>
         </div>
 
