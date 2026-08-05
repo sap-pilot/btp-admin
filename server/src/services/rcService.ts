@@ -21,6 +21,11 @@ const lastRefreshTs = new Map<string, number>();
 let globalRcsRefreshTs: number | null = null;
 let globalRcsRefreshRunning = false;
 
+// Overview cache: `${region}/${subdomain}` → full RcSummary[] for that subaccount.
+// Populated on first listRoleCollections() call per subaccount; individual keys are
+// deleted on subaccount-level refresh or mutation; cleared entirely on global refresh.
+const rcOverviewCache = new Map<string, RcSummary[]>();
+
 export function getGlobalRcsRefreshTs(): number | null { return globalRcsRefreshTs; }
 
 // ─── Filename helpers ─────────────────────────────────────────────────────────
@@ -262,6 +267,15 @@ async function resolveXsuaaToken(
 
 // ─── XSUAA Role Collections API ───────────────────────────────────────────────
 
+function normalizeUserRef(u: Record<string, string>): UserReference {
+  return {
+    id:       u['id']       ?? '',
+    userName: u['userName'] ?? u['username'] ?? '',
+    email:    u['email']    ?? '',
+    origin:   u['origin']   ?? '',
+  };
+}
+
 async function fetchRoleCollectionsFromApi(
   baseUrl: string,
   token:   string,
@@ -277,7 +291,10 @@ async function fetchRoleCollectionsFromApi(
   }
   const data = await res.json() as unknown;
   const arr  = Array.isArray(data) ? data : ((data as Record<string, unknown>).roleCollections as unknown[] ?? []);
-  return arr as Array<RoleCollection & { userReferences: UserReference[] }>;
+  return (arr as Array<Record<string, unknown>>).map(rc => ({
+    ...rc,
+    userReferences: ((rc['userReferences'] ?? []) as Array<Record<string, string>>).map(normalizeUserRef),
+  })) as Array<RoleCollection & { userReferences: UserReference[] }>;
 }
 
 export async function addUserToRoleCollection(
@@ -518,7 +535,9 @@ export async function listRoleCollections(): Promise<Record<string, RcSummary[]>
   const result: Record<string, RcSummary[]> = {};
   const sas = (await readSubaccounts()).filter(sa => sa.manageRoles);
   await Promise.all(sas.map(async sa => {
-    const key  = `${sa.region}/${sa.subdomain}`;
+    const key    = `${sa.region}/${sa.subdomain}`;
+    const cached = rcOverviewCache.get(key);
+    if (cached !== undefined) { result[key] = cached; return; }
     const dir  = join(LOCAL_RC_DIR, sa.region, sa.subdomain);
     const entries = await readdir(dir).catch(() => [] as string[]);
     const rcFiles = entries.filter(f => f.endsWith('.json') && !f.endsWith('.users.json'));
@@ -527,12 +546,15 @@ export async function listRoleCollections(): Promise<Record<string, RcSummary[]>
       const name     = rcFilenameToName(safeName);
       let userCount  = 0;
       try {
-        const users = JSON.parse(await readFile(join(dir, `${safeName}.users.json`), 'utf-8')) as UserReference[];
-        userCount = users.length;
+        const content = await readFile(join(dir, `${safeName}.users.json`), 'utf-8');
+        const lines   = content.split('\n').length;
+        userCount     = Math.max(0, Math.round((lines - 2) / 9));
       } catch { /* no users file */ }
       return { name, userCount };
     }));
-    result[key] = summaries.sort((a, b) => a.name.localeCompare(b.name));
+    const sorted = summaries.sort((a, b) => a.name.localeCompare(b.name));
+    rcOverviewCache.set(key, sorted);
+    result[key] = sorted;
   }));
   return result;
 }
@@ -549,7 +571,10 @@ export async function getRoleCollection(
 
 export async function getRCUsers(region: string, subdomain: string, name: string): Promise<UserReference[]> {
   const path = join(LOCAL_RC_DIR, region, subdomain, `${rcFilename(name)}.users.json`);
-  try { return JSON.parse(await readFile(path, 'utf-8')) as UserReference[]; }
+  try {
+    const raw = JSON.parse(await readFile(path, 'utf-8')) as Array<Record<string, string>>;
+    return raw.map(normalizeUserRef);
+  }
   catch { return []; }
 }
 
@@ -569,6 +594,7 @@ export async function saveRCToLocal(
 ): Promise<void> {
   const rcDir = join(LOCAL_RC_DIR, region, subdomain);
   await persistRC(rcDir, rcFilename(name), rc, users, username, 'manual');
+  rcOverviewCache.delete(`${region}/${subdomain}`);
   const now = Date.now();
   emit('rcs', { files: [`${region}/${subdomain}/${rcFilename(name)}.json`], ts: now });
 }
@@ -643,6 +669,7 @@ export async function refreshSubaccountRoleCollections(
 
   const now = Date.now();
   lastRefreshTs.set(`${region}/${subdomain}`, now);
+  rcOverviewCache.delete(`${region}/${subdomain}`);
   emit('rcs', { files: [`${region}/${subdomain}`], ts: now });
 
   return { received: rcs.length, created, updated, deleted, errors };
@@ -756,6 +783,7 @@ export async function refreshRoleCollections(
     }
 
     globalRcsRefreshTs = Date.now();
+    rcOverviewCache.clear();
     logger.info({ refreshed, total, received, created, updated, deleted, issues: issues.length }, 'RCS global refresh complete');
     return { refreshed, received, created, updated, deleted, errors: issues };
   } finally {
@@ -873,6 +901,7 @@ export async function addUserToRc(
   const exists = users.some(u => (u.id && u.id === user.id) || (u.userName === user.userName && u.origin === user.origin));
   if (!exists) users.push(user);
   await writeFile(usersPath, JSON.stringify(users, null, 2), 'utf-8');
+  rcOverviewCache.delete(`${region}/${subdomain}`);
 
   const ts = utcTimestamp();
   const entry = `## [Manual] user added by <${username}> at ${ts}\n+ ${user.email || user.userName || user.id} (${user.origin})\n\n`;
@@ -917,6 +946,7 @@ export async function removeUserFromRc(
   const removed = users.find(u => u.id === userId || u.userName === userId);
   users = users.filter(u => u.id !== userId && u.userName !== userId);
   await writeFile(usersPath, JSON.stringify(users, null, 2), 'utf-8');
+  rcOverviewCache.delete(`${region}/${subdomain}`);
 
   if (removed) {
     const ts    = utcTimestamp();
@@ -928,4 +958,7 @@ export async function removeUserFromRc(
   emit('rcs', { files: [`${region}/${subdomain}/${safeStem}.users.json`], ts: Date.now() });
 }
 
-registerOnRcsChangelogSynced(() => void restoreGlobalRcsRefreshTsFromChangelog());
+registerOnRcsChangelogSynced(() => {
+  rcOverviewCache.clear();
+  void restoreGlobalRcsRefreshTsFromChangelog();
+});

@@ -926,7 +926,7 @@ export default function SubaccountDestModal({ org, allNames, initialName, initia
               {subProgress.type === 'refreshing' && 'Refreshing subaccount destinations…'}
               {subProgress.type === 'done' && (
                 (subProgress.created ?? 0) === 0 && (subProgress.updated ?? 0) === 0 && (subProgress.deleted ?? 0) === 0
-                  ? 'Refreshed — no change since last check'
+                  ? 'Refreshed — no change'
                   : `Refreshed — created ${subProgress.created ?? 0}, updated ${subProgress.updated ?? 0}, deleted ${subProgress.deleted ?? 0} destinations since last check`
               )}
               {subProgress.type === 'error' && (subProgress.errors ?? []).join('; ')}

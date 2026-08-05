@@ -20,11 +20,6 @@ router.post('/batch', requireSyncAuth, async (req, res, next) => {
       rejectBatch(400, 'paths must be a non-empty array');
       return;
     }
-    if (paths.length > 500) {
-      rejectBatch(400, 'paths exceeds maximum of 500');
-      return;
-    }
-
     const safeBase = resolvePath(config.LOCAL_STORE_DIR);
 
     for (const p of paths) {

@@ -15,8 +15,13 @@ import { emit } from './liveEvents.js';
 import { refreshLastUpdated } from './lastUpdatedService.js';
 
 const gunzipAsync = promisify(gunzip);
-const BATCH_MAX_ATTEMPTS  = 3;
+const BATCH_MAX_ATTEMPTS   = 3;
 const BATCH_RETRY_DELAY_MS = 4_000;
+const BATCH_CAP_ON_EXCEED  = 500;
+
+// Per-remote forced batch size cap, set when the remote signals "paths exceeds maximum of N".
+// Persists for the lifetime of the process so subsequent syncs respect the remote's limit.
+const remoteBatchCap = new Map<string, number>();
 
 /** Thrown when the remote rejects the sync key with 401; always aborts the full sync. */
 class SyncAuthError extends Error {
@@ -29,10 +34,12 @@ class SyncAuthError extends Error {
 /** Thrown for any non-2xx, non-401 HTTP response. */
 class HttpError extends Error {
   readonly statusCode: number;
-  constructor(statusCode: number, url: string) {
+  readonly body:       string;
+  constructor(statusCode: number, url: string, body = '') {
     super(`HTTP ${statusCode} for ${url}`);
     this.name = 'HttpError';
     this.statusCode = statusCode;
+    this.body = body;
   }
 }
 
@@ -220,7 +227,7 @@ function fetchRaw(url: string, extraHeaders: Record<string, string> = {}): Promi
             const buf = res.headers['content-encoding'] === 'gzip' ? await gunzipAsync(raw) : raw;
             const resBody = buf.toString('utf-8').slice(0, 500);
             logger.debug({ url, reqHeaders, statusCode: code, resHeaders, resBody }, 'Sync HTTP error response');
-            reject(code === 401 ? new SyncAuthError(url) : new HttpError(code, url));
+            reject(code === 401 ? new SyncAuthError(url) : new HttpError(code, url, resBody));
           })().catch(() => reject(code === 401 ? new SyncAuthError(url) : new HttpError(code, url)));
         });
         return;
@@ -271,7 +278,7 @@ function fetchPost(url: string, body: string, extraHeaders: Record<string, strin
               const buf = res.headers['content-encoding'] === 'gzip' ? await gunzipAsync(raw) : raw;
               const resBody = buf.toString('utf-8').slice(0, 500);
               logger.debug({ url, reqBody: body.slice(0, 200), reqHeaders: { 'Content-Type': 'application/json', ...extraHeaders }, statusCode: code, resHeaders, resBody }, 'Sync HTTP error response');
-              reject(code === 401 ? new SyncAuthError(url) : new HttpError(code, url));
+              reject(code === 401 ? new SyncAuthError(url) : new HttpError(code, url, resBody));
             })().catch(() => reject(code === 401 ? new SyncAuthError(url) : new HttpError(code, url)));
           });
           return;
@@ -311,6 +318,7 @@ async function downloadBatch(
   remoteMtimes: Map<string, number>,
 ): Promise<{ transferred: number; decompressed: number }> {
   const url = `${remoteBase}/api/sync/batch`;
+  const t0 = Date.now();
   const { buf: zip, transferred } = await fetchPost(url, JSON.stringify({ paths: filePaths }), syncKeyHeader());
   const entries = extractZip(zip);
 
@@ -379,7 +387,70 @@ async function downloadBatch(
   );
 
   const decompressed = entries.reduce((sum, e) => sum + e.data.length, 0);
-  logger.debug({ files: entries.length }, 'Batch download chunk complete');
+  logger.debug({ files: entries.length, durationMs: Date.now() - t0 }, 'Batch download chunk complete');
+  return { transferred, decompressed };
+}
+
+async function runBatches(
+  remoteBase:   string,
+  files:        string[],
+  batchSize:    number,
+  remoteMtimes: Map<string, number>,
+): Promise<{ transferred: number; decompressed: number }> {
+  let transferred = 0, decompressed = 0;
+
+  // Honour any per-remote cap set by a previous exceed error
+  const cap = remoteBatchCap.get(remoteBase);
+  let effectiveSize = cap !== undefined ? Math.min(batchSize, cap) : batchSize;
+
+  let i = 0;
+  while (i < files.length) {
+    const chunk = files.slice(i, i + effectiveSize);
+    let succeeded = false;
+    let lastErr:   unknown;
+
+    for (let attempt = 1; attempt <= BATCH_MAX_ATTEMPTS; attempt++) {
+      try {
+        const result = await downloadBatch(remoteBase, chunk, remoteMtimes);
+        transferred += result.transferred;
+        decompressed += result.decompressed;
+        succeeded = true;
+        break;
+      } catch (err) {
+        if (err instanceof SyncAuthError) throw err;
+        if (err instanceof HttpError && err.statusCode === 400 && effectiveSize > BATCH_CAP_ON_EXCEED) {
+          // Either an explicit "paths exceeds maximum of N" message from the current remote,
+          // or a generic 400 from an older remote that doesn't emit that message — both are
+          // resolved by capping to 500 and retrying from the same position.
+          const reason = err.body.includes('paths exceeds maximum of') ? 'exceed error' : 'bad request (compat)';
+          remoteBatchCap.set(remoteBase, BATCH_CAP_ON_EXCEED);
+          effectiveSize = BATCH_CAP_ON_EXCEED;
+          logger.warn({ remoteBase, forcedBatchSize: BATCH_CAP_ON_EXCEED, reason },
+            'Remote enforces batch size limit — capping to 500 for this remote going forward');
+          break; // retry from the same position with the smaller size
+        }
+        if (err instanceof HttpError && err.statusCode === 400 && effectiveSize <= BATCH_CAP_ON_EXCEED) {
+          // Already at cap and still getting 400 — not a batch-size issue; treat as fatal
+          lastErr = err;
+          break;
+        }
+        lastErr = err;
+        if (attempt < BATCH_MAX_ATTEMPTS) {
+          logger.warn({ err, attempt, maxAttempts: BATCH_MAX_ATTEMPTS, delayMs: BATCH_RETRY_DELAY_MS }, 'Batch download failed, retrying');
+          await new Promise<void>(res => setTimeout(res, BATCH_RETRY_DELAY_MS));
+        }
+      }
+    }
+
+    if (succeeded) {
+      logger.debug({ done: Math.min(i + chunk.length, files.length), total: files.length }, 'Sync batch complete');
+      i += chunk.length;
+    } else if (lastErr !== undefined) {
+      logger.error({ err: lastErr, maxAttempts: BATCH_MAX_ATTEMPTS }, 'Batch download failed after all retries — aborting sync');
+      throw lastErr;
+    }
+    // else: exceed error hit and effectiveSize was reduced — loop again from same i
+  }
   return { transferred, decompressed };
 }
 
@@ -472,33 +543,26 @@ async function executeSync(
 
     const batchSize = config.SYNC_REMOTE_BATCH_SIZE;
 
-    for (let i = 0; i < missing.length; i += batchSize) {
-      const chunk = missing.slice(i, i + batchSize);
-      let lastErr: unknown;
-
-      for (let attempt = 1; attempt <= BATCH_MAX_ATTEMPTS; attempt++) {
-        try {
-          const result = await downloadBatch(remoteBase, chunk, remoteMtimes);
-          totalTransferred += result.transferred;
-          totalDecompressed += result.decompressed;
-          lastErr = undefined;
-          break;
-        } catch (err) {
-          if (err instanceof SyncAuthError) throw err;
-          lastErr = err;
-          if (attempt < BATCH_MAX_ATTEMPTS) {
-            logger.warn({ err, attempt, maxAttempts: BATCH_MAX_ATTEMPTS, delayMs: BATCH_RETRY_DELAY_MS }, 'Batch download failed, retrying');
-            await new Promise<void>(res => setTimeout(res, BATCH_RETRY_DELAY_MS));
-          }
-        }
+    if (!since) {
+      // Initial full sync: binary (png) files at normal batch size; text (json|md) at 10x
+      const isBinary    = (p: string) => /\.png$/i.test(p);
+      const binaryFiles = missing.filter(isBinary);
+      const textFiles   = missing.filter(p => !isBinary(p));
+      if (binaryFiles.length > 0) {
+        logger.debug({ count: binaryFiles.length, batchSize }, 'Initial sync: downloading binary files');
+        const r = await runBatches(remoteBase, binaryFiles, batchSize, remoteMtimes);
+        totalTransferred += r.transferred; totalDecompressed += r.decompressed;
       }
-
-      if (lastErr !== undefined) {
-        logger.error({ err: lastErr, maxAttempts: BATCH_MAX_ATTEMPTS }, 'Batch download failed after all retries — aborting sync');
-        throw lastErr;
+      if (textFiles.length > 0) {
+        const textBatch = batchSize * 5;
+        logger.debug({ count: textFiles.length, batchSize: textBatch }, 'Initial sync: downloading text files');
+        const r = await runBatches(remoteBase, textFiles, textBatch, remoteMtimes);
+        totalTransferred += r.transferred; totalDecompressed += r.decompressed;
       }
-
-      logger.debug({ done: Math.min(i + batchSize, missing.length), total: missing.length }, 'Sync batch complete');
+    } else {
+      // Delta sync: uniform batch size for all file types
+      const r = await runBatches(remoteBase, missing, batchSize, remoteMtimes);
+      totalTransferred += r.transferred; totalDecompressed += r.decompressed;
     }
 
     // Resolve starred/unstarred duplicates in service folders
