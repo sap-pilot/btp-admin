@@ -359,6 +359,61 @@ export async function browseResponseFiles(since?: number): Promise<Record<string
   }
 
   try {
+    // rcs/{region}/{subdomain}/ — returned as folder keys "rcs/{region}/{subdomain}"
+    // Also includes root-level .md files (changelog, archives) under folder key "rcs"
+    const rcsBase = join(storeDir, 'rcs');
+    const rcsRegions = await readdir(rcsBase, { withFileTypes: true });
+
+    // Root-level .md files in rcs/ (changelog.md, changelog.*.md)
+    const rcsRootFiles: BrowseFile[] = [];
+    for (const e of rcsRegions) {
+      if (!e.isFile() || !e.name.endsWith('.md')) continue;
+      try {
+        const info = await stat(join(rcsBase, e.name));
+        if (!since || since <= 0 || info.mtimeMs >= since) {
+          rcsRootFiles.push({ name: e.name, mtime: info.mtimeMs });
+        }
+      } catch { /* skip */ }
+    }
+    if (rcsRootFiles.length > 0) {
+      rcsRootFiles.sort((a, b) => a.name.localeCompare(b.name));
+      result['rcs'] = rcsRootFiles;
+    }
+
+    await Promise.all(
+      rcsRegions.filter(e => e.isDirectory()).map(async (regionEntry) => {
+        try {
+          const regionPath = join(rcsBase, regionEntry.name);
+          const subEntries = await readdir(regionPath, { withFileTypes: true });
+          await Promise.all(
+            subEntries.filter(e => e.isDirectory()).map(async (subEntry) => {
+              const folderKey = `rcs/${regionEntry.name}/${subEntry.name}`;
+              try {
+                const subPath = join(regionPath, subEntry.name);
+                const files = await readdir(subPath);
+                const withMtime = await Promise.all(
+                  files.map(async (name) => {
+                    try {
+                      const info = await stat(join(subPath, name));
+                      return { name, rawMtime: info.mtimeMs };
+                    } catch { return { name, rawMtime: 0 }; }
+                  }),
+                );
+                result[folderKey] = withMtime
+                  .filter(f => !since || since <= 0 || f.rawMtime === 0 || f.rawMtime >= since)
+                  .map(({ name, rawMtime }) => ({ name, mtime: rawMtime === 0 ? 0 : rawMtime }));
+                result[folderKey].sort((a, b) => a.name.localeCompare(b.name));
+              } catch { result[folderKey] = []; }
+            }),
+          );
+        } catch { /* region dir unreadable */ }
+      }),
+    );
+  } catch {
+    // rcs/ doesn't exist yet
+  }
+
+  try {
     // Service response files under resp/{service}/
     const respBase = join(storeDir, 'resp');
     const entries = await readdir(respBase, { withFileTypes: true });
@@ -420,6 +475,15 @@ export async function readDestFile(relPath: string): Promise<Buffer> {
     throw new Error('Invalid dest path');
   }
   return readFile(join(config.LOCAL_STORE_DIR, 'dest', relPath));
+}
+
+/** Read a file from LOCAL_STORE_DIR/rcs/{relPath} (e.g. us10/subdomain/name.json or changelog.md). */
+export async function readRcsFile(relPath: string): Promise<Buffer> {
+  const parts = relPath.split('/');
+  if (parts.length === 0 || parts.some(p => p === '..' || p === '.' || p === '')) {
+    throw new Error('Invalid rcs path');
+  }
+  return readFile(join(config.LOCAL_STORE_DIR, 'rcs', relPath));
 }
 
 /**

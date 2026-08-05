@@ -5,17 +5,10 @@ import AppLayout from '@/components/AppLayout';
 const StatusOverview = lazy(() => import('@/pages/status/Overview'));
 const StatusHistory = lazy(() => import('@/pages/status/History'));
 const HomePage = lazy(() => import('@/pages/Home'));
-const ConfigPage          = lazy(() => import('@/pages/ConfigPage'));
-const DestinationOverview = lazy(() => import('@/pages/destination/DestinationOverview'));
+const ConfigPage             = lazy(() => import('@/pages/ConfigPage'));
+const DestinationOverview    = lazy(() => import('@/pages/destination/DestinationOverview'));
+const RoleCollectionsOverview = lazy(() => import('@/pages/rcs/RoleCollectionsOverview'));
 
-function ComingSoon({ title }: { title: string }) {
-  return (
-    <div className="flex flex-col h-full items-center justify-center gap-3 text-muted-foreground">
-      <p className="text-lg font-medium">{title}</p>
-      <p className="text-sm">Under construction</p>
-    </div>
-  );
-}
 
 interface EBState { error: Error | null }
 class ErrorBoundary extends Component<{ children: ReactNode }, EBState> {
@@ -61,13 +54,14 @@ export default function App() {
               <Route path="/status/:name" element={<StatusHistory />} />
               <Route path="/home" element={<HomePage />} />
               <Route path="/home/:tab" element={<HomePage />} />
-              <Route path="/apps" element={<ComingSoon title="Apps" />} />
               <Route path="/destinations" element={<DestinationOverview />} />
               <Route path="/destinations/:tab" element={<DestinationOverview />} />
               <Route path="/destinations/:region/:subdomain/:name/:destTab" element={<DestinationOverview />} />
               <Route path="/destinations/:region/:subdomain/:name" element={<DestinationOverview />} />
-              <Route path="/int" element={<ComingSoon title="Integration" />} />
-              <Route path="/int/dynamic-routing" element={<ComingSoon title="Dynamic Routing" />} />
+              <Route path="/role-collections" element={<RoleCollectionsOverview />} />
+              <Route path="/role-collections/:tab" element={<RoleCollectionsOverview />} />
+              <Route path="/role-collections/:region/:subdomain/:name/:rcTab" element={<RoleCollectionsOverview />} />
+              <Route path="/role-collections/:region/:subdomain/:name" element={<RoleCollectionsOverview />} />
               <Route path="/config" element={<Navigate to="/config/orgs" replace />} />
               <Route path="/config/:tab" element={<ConfigPage />} />
               <Route path="/" element={<Navigate to="/home" replace />} />

@@ -22,12 +22,15 @@ router.get('/events', (req, res) => {
   const svc        = typeof req.query['service'] === 'string' ? req.query['service'] : null;
   const configOnly = req.query['config'] === '1';
   const destOnly   = req.query['dest']   === '1';
+  const rcsOnly    = req.query['rcs']    === '1';
 
   let topics: string[];
   if (configOnly) {
     topics = ['config', 'refresh-subaccounts'];
   } else if (destOnly) {
     topics = ['dest', 'refresh-destinations'];
+  } else if (rcsOnly) {
+    topics = ['rcs', 'refresh-rcs'];
   } else {
     topics = ['global'];
     if (svc) topics.push(`service:${svc}`);

@@ -33,9 +33,10 @@ interface NavItem {
 }
 
 const NAV_ITEMS: NavItem[] = [
-  { label: 'Home',        href: '/home',          icon: <Home       className="h-4 w-4 shrink-0" /> },
-  { label: 'Status',      href: '/status',       icon: <Activity   className="h-4 w-4 shrink-0" /> },
-  { label: 'Destinations',href: '/destinations',  icon: <Globe      className="h-4 w-4 shrink-0" />, wip: true, restricted: true, adminOnly: true },
+  { label: 'Home',             href: '/home',          icon: <Home       className="h-4 w-4 shrink-0" /> },
+  { label: 'Status',           href: '/status',        icon: <Activity   className="h-4 w-4 shrink-0" /> },
+  { label: 'Destinations',     href: '/destinations',  icon: <Globe      className="h-4 w-4 shrink-0" />, wip: true, restricted: true, adminOnly: true },
+  { label: 'Role Collections', href: '/role-collections', icon: <ShieldCheck className="h-4 w-4 shrink-0" />, wip: true, restricted: true, adminOnly: true },
 ];
 
 const itemBase = (collapsed: boolean) =>
