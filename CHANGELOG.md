@@ -1,5 +1,24 @@
 # Changelog
 
+## [v1.2.3] - 2026-08-04
+
+### Fixed
+- **Subaccount destination refresh progress bar** — separated global vs per-subaccount refresh feedback; DestinationOverview's progress bar now ignores `scope=subaccount` SSE events (global refresh only); SubaccountDestModal gets its own progress banner beneath the title bar: shows "Refreshing subaccount destinations…" + spinner on the Refresh button during a manual refresh, auto-dismisses after 3 s on success with a "Refreshed — created X, updated Y, deleted Z destinations since last check" (or "Refreshed — no change since last check" when all zero) message, and shows an amber error banner with a manual dismiss button on failure; banner stays hidden on modal open when no refresh is triggered
+- **DestinationOverview initial load state** — replaced the premature "No destinations configured." empty state with "Loading destinations…" text that persists until the initial data fetch completes; "No destinations configured." only appears after the server confirms there are no managed destinations
+- **Subaccount changelog format** — per-subaccount auto/manual refresh entries in the global `dest/changelog.md` now match the global refresh format: `created/updated/deleted` action labels per destination with `[History]` deep-links, instead of the previous plain arrow-separated names
+- **Change History modal close navigation** — closing a Subaccount Destinations modal opened from a `[History]` link in the Destination Overview Change History tab now correctly returns to the Change History tab URL instead of the first content tab; implemented via a `returnUrl` ref that tracks the last non-modal location
+- **`*.passwd` field redaction** — destination properties whose keys contain `passwd` (e.g. `jco.client.passwd`) are now redacted in destination comparisons and changelogs, matching the existing `password`, `secret`, and `credential` redaction rules
+- **Cockpit URL double-protocol** — all cockpit submenu URLs in `cockpit-menu.json` now use `{homepage.cockpit.host}` (bare hostname from settings) instead of `{cockpitRegion}.cockpit.btp.cloud.sap`; `buildCtx` strips any existing protocol prefix via `stripProtocol()` before substitution, preventing `https://https://…` double-protocol links regardless of how the host is configured
+- **Open Cockpit split button** — the "Open Cockpit" action in the Subaccount Detail modal is now a split button: the left part opens the cockpit link directly; the right caret opens a dropdown for other cockpit submenus
+- **Browser tab title on /status** — navigating to the Status page no longer prefixes "Status - " to the browser/tab title; it now shows only the site name, consistent with all other pages
+- **False-positive destination "updated" on refresh** — `persistDestination` previously used `JSON.stringify` equality to detect changes, which is key-order-sensitive; a manual save could write keys in a different order than the Destination API returns them, causing the next auto-refresh to report destinations as "updated" with an empty diff; the check now uses `diffDestination` (key-by-key value comparison) as the single source of truth — no diff means no update
+
+### Changed
+- **SubaccountDestModal — initial list panel state** — clicking a specific destination on the overview opens the modal with the left destination list **collapsed** so focus is on the selected destination; clicking the subaccount column header opens with the list **expanded** for browsing; "OTHERS → X destinations" also opens with the list expanded; deep-links follow the same logic
+- **SubaccountDestModal — search clear button** — a floating × button appears inside the destination search input when text is present; clicking it clears the query and restores the full list
+- **Navigation** — removed "Apps" (coming soon) and "Integration" (coming soon) items from the sidebar; removed unused `LayoutGrid` and `Network` lucide imports
+- **Config → Subaccounts table** — AOD column hidden; width arrays updated to reflect 12 columns
+
 ## [v1.2.2] - 2026-08-03
 
 ### Added
