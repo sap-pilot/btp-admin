@@ -518,8 +518,8 @@ const tabCls = (active: boolean) =>
                       )}
                       {/* Roles */}
                       <div>
-                        <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wide mb-2">Roles ({rc.roleReferences.length})</p>
-                        {rc.roleReferences.length === 0
+                        <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wide mb-2">Roles ({(rc.roleReferences ?? []).length})</p>
+                        {(rc.roleReferences ?? []).length === 0
                           ? <p className="text-xs text-muted-foreground">No roles assigned.</p>
                           : (
                             <div className="border border-border rounded-md overflow-hidden">
@@ -532,7 +532,7 @@ const tabCls = (active: boolean) =>
                                   </tr>
                                 </thead>
                                 <tbody>
-                                  {rc.roleReferences.map((r, i) => (
+                                  {(rc.roleReferences ?? []).map((r, i) => (
                                     <tr key={i} className="border-b border-border last:border-0 hover:bg-muted/10">
                                       <td className="px-3 py-1.5 font-mono">{r.roleTemplateName || r.name}</td>
                                       <td className="px-3 py-1.5 text-muted-foreground truncate max-w-[200px]" title={r.roleTemplateAppId}>{r.roleTemplateAppId}</td>

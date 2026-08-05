@@ -29,12 +29,26 @@ class ErrorBoundary extends Component<{ children: ReactNode }, EBState> {
           <div className="text-center space-y-3 max-w-md">
             <p className="text-destructive font-semibold">Something went wrong</p>
             <p className="text-sm text-muted-foreground break-words">{this.state.error.message}</p>
-            <button
-              onClick={() => this.setState({ error: null })}
-              className="text-xs text-muted-foreground underline hover:text-foreground"
-            >
-              Try again
-            </button>
+            <div className="flex flex-col items-center gap-1.5">
+              <a
+                href="/"
+                className="text-xs text-muted-foreground underline hover:text-foreground"
+              >
+                Return to Home
+              </a>
+              <button
+                onClick={() => history.back()}
+                className="text-xs text-muted-foreground underline hover:text-foreground"
+              >
+                Return to previous screen
+              </button>
+              <button
+                onClick={() => this.setState({ error: null })}
+                className="text-xs text-muted-foreground underline hover:text-foreground"
+              >
+                Try again
+              </button>
+            </div>
           </div>
         </div>
       );
