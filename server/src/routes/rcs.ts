@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { requireAdmin, type AuthRequest } from '../middleware/requireAuth.js';
 import { logger } from '../logger.js';
+import { getAutoGlobalRefreshMs } from '../services/configService.js';
 import {
   isRcSubaccountRestricted,
   listRoleCollections,
@@ -32,9 +33,21 @@ function sessionUser(req: AuthRequest): string {
 
 // ── Status ────────────────────────────────────────────────────────────────────
 
-router.get('/status', requireAdmin, async (_req, res, next) => {
+router.get('/status', requireAdmin, async (req, res, next) => {
   try {
-    res.json({ ok: true, globalRefreshTs: getGlobalRcsRefreshTs() });
+    const authReq      = req as AuthRequest;
+    const globalTs     = getGlobalRcsRefreshTs();
+    const autoGlobalMs = getAutoGlobalRefreshMs();
+
+    if (autoGlobalMs > 0 && (globalTs === null || (Date.now() - globalTs) > autoGlobalMs)) {
+      void refreshRoleCollections(sessionUser(authReq), 'auto').catch(() => {});
+    }
+
+    res.json({
+      ok:                   true,
+      globalRefreshTs:      globalTs,
+      autoGlobalRefreshHrs: autoGlobalMs / 3_600_000,
+    });
   } catch (err) { next(err); }
 });
 

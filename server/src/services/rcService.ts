@@ -536,21 +536,10 @@ export async function searchRoleCollections(query: string): Promise<{ matches: R
 
       const found: string[] = [];
       await Promise.all(rcFiles.map(async f => {
-        let hit = false;
         try {
           const text = await readFile(join(subDir, f), 'utf-8');
-          if (text.toLowerCase().includes(q)) hit = true;
+          if (text.toLowerCase().includes(q)) found.push(rcFilenameToName(f));
         } catch { /* skip unreadable */ }
-
-        if (!hit) {
-          const stem = f.slice(0, -5); // strip .json
-          try {
-            const text = await readFile(join(subDir, `${stem}.users.json`), 'utf-8');
-            if (text.toLowerCase().includes(q)) hit = true;
-          } catch { /* no users file */ }
-        }
-
-        if (hit) found.push(rcFilenameToName(f));
       }));
 
       if (found.length > 0) matches[`${region}/${subdomain}`] = found;
@@ -858,7 +847,10 @@ async function restoreGlobalRcsRefreshTsFromChangelog(): Promise<void> {
     const m = text.match(/## \[(?:Auto|Manual)\] global refresh by .+ at (\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} UTC)/);
     if (m) {
       const ts = new Date(m[1]!.replace(' UTC', 'Z')).getTime();
-      if (ts > 0 && (globalRcsRefreshTs === null || ts > globalRcsRefreshTs)) globalRcsRefreshTs = ts;
+      if (ts > 0 && (globalRcsRefreshTs === null || ts > globalRcsRefreshTs)) {
+        globalRcsRefreshTs = ts;
+        logger.info({ lastRcGlobalRefreshTs: new Date(ts).toISOString() }, 'Restored RCS global refresh timestamp from changelog');
+      }
     }
   } catch { /* best effort */ }
 }

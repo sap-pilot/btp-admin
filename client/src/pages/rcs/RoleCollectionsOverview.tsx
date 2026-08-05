@@ -151,7 +151,7 @@ export default function RoleCollectionsOverview() {
   const [categoryFilter,         setCategoryFilter]         = useState<'all' | RcCategory>('all');
   const [searchResults,          setSearchResults]          = useState<Record<string, string[]> | null>(null);
   const [searchLoading,          setSearchLoading]          = useState(false);
-  const searchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [committedSearch,        setCommittedSearch]        = useState('');
 
   // Global changelog
   const [globalChangelog,        setGlobalChangelog]        = useState('');
@@ -170,7 +170,7 @@ export default function RoleCollectionsOverview() {
   async function fetchStatus() {
     try {
       const r = await fetch('/api/role-collections/status');
-      const j = await r.json() as { ok: boolean; globalRefreshTs: number | null };
+      const j = await r.json() as { ok: boolean; globalRefreshTs: number | null; autoGlobalRefreshHrs: number };
       if (j.ok) setGlobalRefreshTs(j.globalRefreshTs);
     } catch { /* ignore */ }
   }
@@ -295,28 +295,25 @@ export default function RoleCollectionsOverview() {
     setModal({ sa, allNames: names, initialName: name, initialShowList: showList });
   }
 
-  useEffect(() => {
-    if (searchTimerRef.current) clearTimeout(searchTimerRef.current);
-    const q = overviewSearch.trim();
-    if (q.length < 2) {
-      setSearchResults(null);
-      setSearchLoading(false);
-      return;
-    }
+  function clearSearch() {
+    setOverviewSearch('');
+    setSearchResults(null);
+    setCommittedSearch('');
+    setSearchLoading(false);
+  }
+
+  async function doSearch(raw: string) {
+    const q = raw.trim();
+    if (q.length < 2) { clearSearch(); return; }
     setSearchLoading(true);
-    searchTimerRef.current = setTimeout(() => {
-      void (async () => {
-        try {
-          const r = await fetch(`/api/role-collections/search?q=${encodeURIComponent(q)}`);
-          const j = await r.json() as { ok: boolean; matches: Record<string, string[]> };
-          if (j.ok) setSearchResults(j.matches);
-        } catch { /* ignore */ } finally {
-          setSearchLoading(false);
-        }
-      })();
-    }, 400);
-    return () => { if (searchTimerRef.current) clearTimeout(searchTimerRef.current); };
-  }, [overviewSearch]); // eslint-disable-line react-hooks/exhaustive-deps
+    try {
+      const r = await fetch(`/api/role-collections/search?q=${encodeURIComponent(q)}`);
+      const j = await r.json() as { ok: boolean; matches: Record<string, string[]> };
+      if (j.ok) { setSearchResults(j.matches); setCommittedSearch(q); }
+    } catch { /* ignore */ } finally {
+      setSearchLoading(false);
+    }
+  }
 
   // ── Tab derivations ──────────────────────────────────────────────────────────
 
@@ -326,6 +323,26 @@ export default function RoleCollectionsOverview() {
 
   const isChangeHistory = tabParam === 'change-history';
   const activeTabEntry  = visibleTabs.find(te => te.tab === decodeURIComponent(tabParam ?? '')) ?? visibleTabs[0];
+
+  const searchActive = !!searchResults && !!committedSearch;
+
+  const totalSearchMatches = searchActive
+    ? Object.values(searchResults).reduce((acc, v) => acc + v.length, 0)
+    : 0;
+
+  const tabsWithMatchesSet: Set<string> | null = searchActive
+    ? new Set(visibleTabs
+        .filter(te => te.sections
+          .filter((s): s is Extract<TabSection, { type: 'subaccountGroup' }> => s.type === 'subaccountGroup')
+          .some(grp => allRcSas
+            .filter(sa => csvIncludes(sa.groupIds, grp.groupId))
+            .some(sa => (searchResults[`${sa.region}/${sa.subdomain}`]?.length ?? 0) > 0)
+          )
+        )
+        .map(te => te.tab))
+    : null;
+
+  const displayedTabs = tabsWithMatchesSet ? visibleTabs.filter(te => tabsWithMatchesSet.has(te.tab)) : visibleTabs;
 
   useEffect(() => {
     if (!isChangeHistory) return;
@@ -340,7 +357,7 @@ export default function RoleCollectionsOverview() {
     workzone: { total: 0, matched: 0 },
   };
   if (activeTabEntry) {
-    const overviewSearchLow = overviewSearch.toLowerCase();
+    const committedSearchLow = committedSearch.toLowerCase();
     const tabSas = activeTabEntry.sections
       .filter((s): s is Extract<TabSection, { type: 'subaccountGroup' }> => s.type === 'subaccountGroup')
       .flatMap(grp => allRcSas.filter(sa => csvIncludes(sa.groupIds, grp.groupId)));
@@ -350,7 +367,7 @@ export default function RoleCollectionsOverview() {
       for (const rc of rcData[key] ?? []) {
         const cat = categorizeRc(rc.name);
         catCounts[cat].total++;
-        if (!overviewSearch || (matchSet ? matchSet.has(rc.name) : rc.name.toLowerCase().includes(overviewSearchLow))) {
+        if (!committedSearch || (matchSet ? matchSet.has(rc.name) : rc.name.toLowerCase().includes(committedSearchLow))) {
           catCounts[cat].matched++;
         }
       }
@@ -359,7 +376,7 @@ export default function RoleCollectionsOverview() {
 
   function catOptionLabel(display: string, cat: RcCategory): string {
     const { total, matched } = catCounts[cat];
-    const count = overviewSearch && matched !== total ? `${matched}/${total}` : String(total);
+    const count = committedSearch && matched !== total ? `${matched}/${total}` : String(total);
     return `${display} (${count})`;
   }
 
@@ -405,12 +422,13 @@ export default function RoleCollectionsOverview() {
               type="text"
               value={overviewSearch}
               onChange={e => setOverviewSearch(e.target.value)}
-              placeholder="Search role collections…"
-              className={`h-7 pl-7 ${overviewSearch ? 'pr-6' : 'pr-2'} w-48 text-xs border border-border rounded bg-background text-foreground focus:outline-none focus:ring-1 focus:ring-ring placeholder:text-muted-foreground`}
+              onKeyDown={e => { if (e.key === 'Enter') void doSearch(overviewSearch); else if (e.key === 'Escape') clearSearch(); }}
+              placeholder="Search roles/role collections…"
+              className={`h-7 pl-7 ${overviewSearch ? 'pr-6' : 'pr-2'} w-44 text-xs border border-border rounded bg-background text-foreground focus:outline-none focus:ring-1 focus:ring-ring placeholder:text-muted-foreground`}
             />
             {overviewSearch && (
               <button
-                onClick={() => setOverviewSearch('')}
+                onClick={clearSearch}
                 className="absolute right-1.5 top-1/2 -translate-y-1/2 h-4 w-4 flex items-center justify-center text-muted-foreground hover:text-foreground"
               >
                 <X className="h-3 w-3" />
@@ -470,11 +488,29 @@ export default function RoleCollectionsOverview() {
         );
       })()}
 
+      {/* Search results banner */}
+      {searchActive && !isChangeHistory && (
+        <div className="shrink-0 border-b border-border bg-muted/20 px-4 py-2 flex items-center gap-2 text-xs">
+          <span className="text-muted-foreground">
+            Search results for{' '}
+            <span className="font-medium text-foreground">"{committedSearch}"</span>
+            {' — '}{totalSearchMatches} role collection{totalSearchMatches !== 1 ? 's' : ''} matched
+          </span>
+          <button
+            onClick={clearSearch}
+            className="ml-auto inline-flex items-center gap-1 px-2 py-0.5 rounded border border-border text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
+          >
+            <X className="h-3 w-3" />
+            Clear
+          </button>
+        </div>
+      )}
+
       {/* Tab bar */}
       {(visibleTabs.length > 0 || allRcSas.length > 0) && (
         <div className="flex items-stretch border-b border-border shrink-0 px-2">
           <div className="flex items-center overflow-x-auto flex-1 min-w-0">
-            {visibleTabs.map(te => (
+            {displayedTabs.map(te => (
               <button key={te.tab} className={tabCls(!isChangeHistory && te === activeTabEntry)} onClick={() => navigate(`/role-collections/${encodeURIComponent(te.tab)}`)}>
                 {te.tab}
               </button>
@@ -585,7 +621,9 @@ export default function RoleCollectionsOverview() {
                 .sort((a, b) => a.pos - b.pos);
               if (visibleSas.length === 0) return null;
 
-              const saBuckets = buildSaBuckets(visibleSas, rcData, overviewSearch, searchResults);
+              const saBuckets     = buildSaBuckets(visibleSas, rcData, committedSearch, searchResults);
+              const visibleBuckets = searchActive ? saBuckets.filter(b => b.matchCount > 0) : saBuckets;
+              if (searchActive && visibleBuckets.length === 0) return null;
 
               return (
                 <div key={grp.groupId} className="space-y-1.5">
@@ -602,7 +640,7 @@ export default function RoleCollectionsOverview() {
                             <th className="sticky left-0 z-20 bg-muted/30 text-left text-xs font-medium text-muted-foreground px-3 py-2 w-[175px] border-r border-b border-border whitespace-nowrap">
                               Top Role Collections
                             </th>
-                            {saBuckets.map(({ sa }) => (
+                            {visibleBuckets.map(({ sa }) => (
                               <th
                                 key={sa.subaccountId}
                                 colSpan={2}
@@ -622,15 +660,19 @@ export default function RoleCollectionsOverview() {
                         <tbody>
                           {RC_CATS
                             .filter(({ key }) => categoryFilter === 'all' || key === categoryFilter)
-                            .map(({ key: cat, label }) =>
-                              Array.from({ length: 5 }, (_, i) => (
+                            .map(({ key: cat, label }) => {
+                              const validIdxs = [0, 1, 2, 3, 4].filter(i =>
+                                visibleBuckets.some(({ cats }) => cats[cat][i] !== undefined)
+                              );
+                              if (validIdxs.length === 0) return null;
+                              return validIdxs.map((i, rowIdx) => (
                                 <tr key={`${cat}-${i}`} className="hover:bg-muted/20">
-                                  {i === 0 && (
-                                    <td rowSpan={5} className={catTdCls}>
+                                  {rowIdx === 0 && (
+                                    <td rowSpan={validIdxs.length} className={catTdCls}>
                                       <span className="text-[11px] font-semibold leading-tight">{label}</span>
                                     </td>
                                   )}
-                                  {saBuckets.map(({ sa, cats }) => {
+                                  {visibleBuckets.map(({ sa, cats }) => {
                                     const rc = cats[cat][i];
                                     return (
                                       <Fragment key={sa.subaccountId}>
@@ -641,8 +683,8 @@ export default function RoleCollectionsOverview() {
                                               title={rc.name}
                                               onClick={() => openModal(sa, false, rc.name)}
                                             >
-                                              {overviewSearch
-                                                ? highlightText(rc.name, overviewSearch)
+                                              {committedSearch
+                                                ? highlightText(rc.name, committedSearch)
                                                 : rc.name}
                                             </button>
                                           ) : <span className="text-muted-foreground/30 text-[11px]">—</span>}
@@ -654,19 +696,19 @@ export default function RoleCollectionsOverview() {
                                     );
                                   })}
                                 </tr>
-                              ))
-                            )
+                              ));
+                            })
                           }
                           {/* More row — one per subaccount after all 3 category groups */}
                           <tr className="hover:bg-muted/10">
                             <td className="sticky left-0 z-10 bg-background border-r border-border w-[175px] min-w-[175px]" />
-                            {saBuckets.map(({ sa, total, matchCount }) => (
+                            {visibleBuckets.map(({ sa, total, matchCount }) => (
                               <td key={sa.subaccountId} colSpan={2} className="px-2 py-1.5 text-xs border-l border-border">
                                 <button
                                   onClick={() => openModal(sa, true)}
                                   className="w-full text-center text-[11px] text-muted-foreground hover:text-foreground hover:bg-accent/50 py-1 px-2 rounded transition-colors"
                                 >
-                                  {overviewSearch
+                                  {searchActive
                                     ? `View all ${matchCount} matching in modal`
                                     : `${total} Role Collections`}
                                 </button>
