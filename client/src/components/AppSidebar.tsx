@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Link, useLocation } from 'react-router';
 import {
-  LogIn, Sun, Moon, Activity, Home, Globe, LayoutGrid, Network, ChevronDown, RefreshCw,
+  LogIn, Sun, Moon, Activity, Home, Globe, ChevronDown, RefreshCw,
   BookMarked, ShieldCheck, Settings, BookOpenText, LifeBuoy, Star, Wrench, HelpCircle,
   FileText, ExternalLink, Layers, Package, Users, Zap, Code2, Database, Bell,
 } from 'lucide-react';
@@ -35,12 +35,7 @@ interface NavItem {
 const NAV_ITEMS: NavItem[] = [
   { label: 'Home',        href: '/home',          icon: <Home       className="h-4 w-4 shrink-0" /> },
   { label: 'Status',      href: '/status',       icon: <Activity   className="h-4 w-4 shrink-0" /> },
-  { label: 'Apps',        href: '/apps',          icon: <LayoutGrid className="h-4 w-4 shrink-0" />, soon: true, restricted: true },
   { label: 'Destinations',href: '/destinations',  icon: <Globe      className="h-4 w-4 shrink-0" />, wip: true, restricted: true, adminOnly: true },
-  {
-    label: 'Integration', href: '/int', icon: <Network className="h-4 w-4 shrink-0" />, soon: true, restricted: true,
-    children: [{ label: 'Dynamic Routing', href: '/int/dynamic-routing', soon: true }],
-  },
 ];
 
 const itemBase = (collapsed: boolean) =>
