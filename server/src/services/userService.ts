@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { config } from '../config.js';
 import { logger } from '../logger.js';
 import { fetchWithRateLimit } from './cfLoginService.js';
-import { getAutoGlobalRefreshMs } from './configService.js';
+import { getAutoGlobalRefreshMs, getAutoSubaccountRefreshMs } from './configService.js';
 import { readSubaccounts } from './subaccountsService.js';
 import { isRcSubaccountRestricted } from './rcService.js';
 import {
@@ -13,7 +13,7 @@ import {
   resolveXsuaaToken, withXsuaaApiRetry,
   type XsuaaKeyStore, type XsuaaTokenStore, type XsuaaCredentials,
 } from './rcService.js';
-import { notifyCallbacks, registerOnUsersChangelogSynced } from './syncService.js';
+import { notifyCallbacks, registerOnUsersChangelogSynced, registerOnUsersSynced } from './syncService.js';
 import { emit, emitImmediate } from './liveEvents.js';
 
 const LOCAL_USERS_DIR       = join(config.LOCAL_STORE_DIR, 'users');
@@ -22,6 +22,7 @@ const MAX_CHANGELOG_SIZE    = 2 * 1024 * 1024; // 2 MB
 
 let globalUsersRefreshTs:      number | null = null;
 let globalUsersRefreshRunning  = false;
+const lastUsersRefreshTs       = new Map<string, number>(); // per-SA last refresh wall-clock time
 
 const usersOverviewCache = new Map<string, { users: UserSummary[]; total: number }>();
 
@@ -107,7 +108,9 @@ function normalizeGroups(groups: XsuaaUserGroup[]): XsuaaUserGroup[] {
 }
 
 // Deep-diff two user records, ignoring frequently-changing fields.
-const IGNORED_DIFF_KEYS = new Set(['passwordLastModified', 'previousLogonTime', 'lastLogonTime']);
+// 'meta' (version/created/lastModified) is excluded — XSUAA bumps it on every read,
+// so meta-only changes would produce changelog noise with no meaningful content change.
+const IGNORED_DIFF_KEYS = new Set(['passwordLastModified', 'previousLogonTime', 'lastLogonTime', 'meta']);
 
 function diffUser(prev: XsuaaUser, next: XsuaaUser): string {
   const lines: string[] = [];
@@ -182,8 +185,9 @@ async function refreshUsersOverviewCacheForSa(region: string, subdomain: string)
 // Deduplicate by origin+email; when two records share the same key, the one
 // with the later meta.lastModified wins. This handles XSUAA zones that contain
 // duplicate accounts (same identity, different internal id).
-function deduplicateUsers(users: XsuaaUser[]): XsuaaUser[] {
-  const map = new Map<string, XsuaaUser>();
+function deduplicateUsers(users: XsuaaUser[]): { users: XsuaaUser[]; removed: XsuaaUser[] } {
+  const map     = new Map<string, XsuaaUser>();
+  const removed: XsuaaUser[] = [];
   for (const u of users) {
     const key      = `${u.origin}|${userEmail(u)}`;
     const existing = map.get(key);
@@ -192,10 +196,11 @@ function deduplicateUsers(users: XsuaaUser[]): XsuaaUser[] {
     } else {
       const existingTs = existing.meta?.lastModified ? Date.parse(existing.meta.lastModified) : 0;
       const newTs      = u.meta?.lastModified        ? Date.parse(u.meta.lastModified)        : 0;
-      if (newTs > existingTs) map.set(key, u);
+      if (newTs > existingTs) { removed.push(existing); map.set(key, u); }
+      else                    { removed.push(u); }
     }
   }
-  return [...map.values()];
+  return { users: [...map.values()], removed };
 }
 
 // ─── XSUAA Users API ──────────────────────────────────────────────────────────
@@ -253,27 +258,29 @@ async function persistUser(
 
   const exists = existsSync(userPath);
   let diff = '';
-  let wasCreated = false;
 
   if (exists) {
     const prev = JSON.parse(await readFile(userPath, 'utf-8')) as XsuaaUser;
-    diff = diffUser(prev, user);
+    diff = diffUser(prev, user); // meta excluded from diff
+    // Always write JSON when anything changed (including meta-only) so the stored
+    // baseline stays current and future diffs don't re-detect the same meta bump.
+    if (JSON.stringify(prev) !== JSON.stringify(user)) {
+      await writeFile(userPath, JSON.stringify(user, null, 2), 'utf-8');
+    }
+    if (!diff) return 'unchanged'; // meta-only or truly unchanged — no changelog
   } else {
-    wasCreated = true;
+    await writeFile(userPath, JSON.stringify(user, null, 2), 'utf-8');
   }
-
-  if (!wasCreated && !diff) return 'unchanged';
 
   const ts      = utcTimestamp();
   const label   = mode === 'auto' ? 'Auto' : 'Manual';
   const heading = `## [${label}] refresh by <${username}> at ${ts}`;
-  const entry   = [heading, diff || (wasCreated ? '(new user)' : '')].filter(Boolean).join('\n') + '\n\n';
+  const entry   = [heading, diff || '(new user)'].filter(Boolean).join('\n') + '\n\n';
 
   const prevChangelog = existsSync(changelogPath) ? await readFile(changelogPath, 'utf-8') : '';
   await writeFile(changelogPath, entry + prevChangelog, 'utf-8');
-  await writeFile(userPath, JSON.stringify(user, null, 2), 'utf-8');
 
-  return wasCreated ? 'created' : 'updated';
+  return exists ? 'updated' : 'created';
 }
 
 // ─── Global changelog ─────────────────────────────────────────────────────────
@@ -361,6 +368,18 @@ registerOnUsersChangelogSynced(() => {
   void restoreGlobalUsersRefreshTsFromChangelog();
 });
 
+registerOnUsersSynced(async (saPaths: string[]) => {
+  const ts = Date.now();
+  await Promise.all(saPaths.map(async key => {
+    const slash = key.indexOf('/');
+    if (slash === -1) return;
+    const region    = key.slice(0, slash);
+    const subdomain = key.slice(slash + 1);
+    await refreshUsersOverviewCacheForSa(region, subdomain);
+  }));
+  emit('users', { files: saPaths, ts });
+});
+
 // ─── Public accessors ─────────────────────────────────────────────────────────
 
 export function getGlobalUsersRefreshTs(): number | null { return globalUsersRefreshTs; }
@@ -428,9 +447,13 @@ export async function refreshUsers(
       try {
         const raw = await withXsuaaApiRetry(sa.region, orgId, sa.org!.orgName, spaceIds, keyStore, tokenStore, cfFailed, auth,
           (tok, cred) => fetchUsersFromApi(cred.apiurl || cred.url, tok));
-        users = deduplicateUsers(raw);
-        if (users.length < raw.length)
-          logger.warn({ loc, raw: raw.length, deduped: users.length }, 'XSUAA users: removed duplicate accounts (same origin+email)');
+        const deduped = deduplicateUsers(raw);
+        users = deduped.users;
+        if (deduped.removed.length > 0)
+          logger.warn(
+            { loc, raw: raw.length, deduped: users.length, duplicates: deduped.removed.map(u => ({ id: u.id, userName: u.userName, email: userEmail(u), origin: u.origin })) },
+            'XSUAA users: removed duplicate accounts (same origin+email)',
+          );
       } catch (err) {
         errors.push(`${loc}: ${String(err)}`);
         continue;
@@ -482,6 +505,7 @@ export async function refreshUsers(
       } catch { /* dir may not exist */ }
 
       await refreshUsersOverviewCacheForSa(sa.region, sa.subdomain);
+      lastUsersRefreshTs.set(loc, Date.now());
       emit('users', { files: [loc], ts: Date.now() });
     }
 
@@ -518,6 +542,16 @@ export async function refreshSubaccountUsers(
   const sa  = sas.find(s => s.region === region && s.subdomain === subdomain && s.manageRoles);
   if (!sa?.org?.orgId) throw new Error(`No managed-roles subaccount for ${region}/${subdomain}`);
 
+  if (mode === 'auto') {
+    const key   = `${region}/${subdomain}`;
+    const delta = getAutoSubaccountRefreshMs();
+    const last  = Math.max(lastUsersRefreshTs.get(key) ?? 0, globalUsersRefreshTs ?? 0);
+    if (delta > 0 && Date.now() - last <= delta) {
+      logger.debug({ loc: key }, 'users refresh skipped — still fresh');
+      return { received: 0, created: 0, updated: 0, deleted: 0, errors: [] };
+    }
+  }
+
   const keyStore   = await loadXsuaaKeyStore();
   const tokenStore = await loadXsuaaTokenStore();
   const cfFailed   = new Set<string>();
@@ -534,9 +568,13 @@ export async function refreshSubaccountUsers(
   try {
     const raw = await withXsuaaApiRetry(region, sa.org.orgId, sa.org.orgName, spaceIds, keyStore, tokenStore, cfFailed, auth,
       (tok, cred) => fetchUsersFromApi(cred.apiurl || cred.url, tok));
-    users = deduplicateUsers(raw);
-    if (users.length < raw.length)
-      logger.warn({ loc: `${region}/${subdomain}`, raw: raw.length, deduped: users.length }, 'XSUAA users: removed duplicate accounts (same origin+email)');
+    const deduped = deduplicateUsers(raw);
+    users = deduped.users;
+    if (deduped.removed.length > 0)
+      logger.warn(
+        { loc: `${region}/${subdomain}`, raw: raw.length, deduped: users.length, duplicates: deduped.removed.map(u => ({ id: u.id, userName: u.userName, email: userEmail(u), origin: u.origin })) },
+        'XSUAA users: removed duplicate accounts (same origin+email)',
+      );
   } catch (err) {
     await saveXsuaaKeyStore(keyStore);
     await saveXsuaaTokenStore(tokenStore);
@@ -577,6 +615,7 @@ export async function refreshSubaccountUsers(
   } catch { /* ok */ }
 
   await refreshUsersOverviewCacheForSa(region, subdomain);
+  lastUsersRefreshTs.set(`${region}/${subdomain}`, Date.now());
   emit('users', { files: [`${region}/${subdomain}`], ts: Date.now() });
   emitImmediate('refresh-users', { type: 'done', scope: 'subaccount', region, subdomain, received: users.length, created, updated, deleted, issues: errors });
 

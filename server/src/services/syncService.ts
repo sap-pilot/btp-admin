@@ -58,10 +58,27 @@ export function registerOnRcsChangelogSynced(fn: () => void): void {
   onRcsChangelogSynced = fn;
 }
 
+// Called by executeSync with deduplicated SA keys (e.g. ['eu10/my-sub']) when any
+// rcs/{region}/{subdomain}/* files are included in a sync batch — lets rcService
+// refresh per-SA overview cache and emit a targeted SSE in one pass.
+let onRcsSynced: ((saPaths: string[]) => void) | null = null;
+
+export function registerOnRcsSynced(fn: (saPaths: string[]) => void): void {
+  onRcsSynced = fn;
+}
+
 let onUsersChangelogSynced: (() => void) | null = null;
 
 export function registerOnUsersChangelogSynced(fn: () => void): void {
   onUsersChangelogSynced = fn;
+}
+
+// Called by executeSync with deduplicated SA keys when any users/{region}/{subdomain}/*
+// files are included in a sync batch — lets userService refresh per-SA cache and emit.
+let onUsersSynced: ((saPaths: string[]) => void) | null = null;
+
+export function registerOnUsersSynced(fn: (saPaths: string[]) => void): void {
+  onUsersSynced = fn;
 }
 
 // ── Callback registry (producer side) ────────────────────────────────────────
@@ -665,12 +682,32 @@ async function executeSync(
       if (onDestChangelogSynced && missing.includes('dest/changelog.md')) onDestChangelogSynced();
     }
     if (updatedFolders.has('rcs')) {
-      emit('rcs', { ts });
-      if (onRcsChangelogSynced && missing.some(p => p === 'rcs/changelog.md')) onRcsChangelogSynced();
+      const rcSaKeys = [...new Set(
+        missing
+          .filter(p => p.startsWith('rcs/'))
+          .map(p => { const parts = p.split('/'); return parts.length >= 3 ? `${parts[1]}/${parts[2]}` : ''; })
+          .filter(Boolean),
+      )];
+      if (rcSaKeys.length > 0 && onRcsSynced) {
+        void (onRcsSynced as (s: string[]) => void | Promise<void>)(rcSaKeys);
+      } else {
+        emit('rcs', { ts });
+      }
+      if (onRcsChangelogSynced && missing.includes('rcs/changelog.md')) onRcsChangelogSynced();
     }
     if (updatedFolders.has('users')) {
-      emit('users', { ts });
-      if (onUsersChangelogSynced && missing.some(p => p === 'users/changelog.md')) onUsersChangelogSynced();
+      const userSaKeys = [...new Set(
+        missing
+          .filter(p => p.startsWith('users/'))
+          .map(p => { const parts = p.split('/'); return parts.length >= 3 ? `${parts[1]}/${parts[2]}` : ''; })
+          .filter(Boolean),
+      )];
+      if (userSaKeys.length > 0 && onUsersSynced) {
+        void (onUsersSynced as (s: string[]) => void | Promise<void>)(userSaKeys);
+      } else {
+        emit('users', { ts });
+      }
+      if (onUsersChangelogSynced && missing.includes('users/changelog.md')) onUsersChangelogSynced();
     }
 
     return stats;
