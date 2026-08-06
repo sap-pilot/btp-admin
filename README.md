@@ -50,6 +50,27 @@ A global `{LOCAL_STORE_DIR}/rcs/changelog.md` is updated after each refresh with
 
 **Remote sync** — the `rcs/` folder is included in the sync manifest and propagated to consumer instances just like `dest/` data.
 
+## Users Management
+
+A cross-subaccount user management view at `/users`. All subaccounts with `manageRoles = true` appear in the overview table, grouped by the same tab/section structure as the Home page. Each subaccount column shows the 16 most-recently-logged-on users (email + last logon time). Clicking any email or column header opens the **Subaccount Users modal**.
+
+The **Subaccount Users modal** provides:
+- A header cockpit dropdown button (when cockpit settings are configured) for quick Cockpit navigation, with a plain `{alias} ({subdomain})` fallback
+- A filter input and sorted user list in the left panel (sorted by last logon time descending by default)
+- **User Detail tab** — all XSUAA user attributes: ID, username, name, emails, active/verified, origin, zone, group count, logon times, meta timestamps
+- **Global Access tab** — collapsible tree of all role collection group assignments for this user across every other subaccount in the local store; each parent row is the subaccount, child rows show `value / display / type` for each group
+- **Change History tab** — per-user field-level diff log for every refresh
+- **Export** — downloads the full user JSON as `{region}_{subdomain}_{origin}_{email}.json`
+- **Refresh** — per-subaccount refresh with a progress banner
+
+**Refresh** fetches all XSUAA users from the XSUAA REST API (`GET /sap/rest/authorization/v2/users?count=500&startIndex=N`) using the same XSUAA apiaccess credential chain as Role Collections (keys cached in `~/.ba/xsuaa-keys.json`, tokens in `~/.ba/xsuaa-tokens.json`). Users are paginated via SCIM `startIndex`. After each API fetch, records sharing the same `origin + email` key but with different internal IDs are deduplicated (latest `meta.lastModified` wins). Changed user records produce a field-level diff (excluding `passwordLastModified`, `previousLogonTime`, `lastLogonTime`) written to `{email}.changelog.md`; removed users are renamed to `{email}.deleted.json`.
+
+A global `{LOCAL_STORE_DIR}/users/changelog.md` is updated after each global refresh. Subaccount data lives in `{LOCAL_STORE_DIR}/users/{region}/{subdomain}/{origin}/`, where `email` = `emails[0].value` falling back to the XSUAA `id` UUID when the email field is absent or empty.
+
+**Full-text search** — pressing Enter on the Users Overview search input triggers a server-side scan of all `{LOCAL_STORE_DIR}/users/` JSON files matching `userName`, `emails[].value`, `name.givenName`, `name.familyName`, `origin`, and `groups[].display`; matches filter the overview and highlight matched email text.
+
+**Remote sync** — the `users/` folder is included in the sync manifest and propagated to consumer instances.
+
 ## Screenshots
 
 **Overview** — landscape diagram with live service status and timeline dots
@@ -117,6 +138,23 @@ A global `{LOCAL_STORE_DIR}/rcs/changelog.md` is updated after each refresh with
 4. **Change History tab** (`/rcs/change-history`) — shows the global `rcs/changelog.md` with color-coded entries; archive file dropdown; live-updates via `rcs` SSE events
 
 5. **Remote sync** — `rcs/` folder included in sync manifest; role collection data synced to consumer instances alongside destinations and config
+
+### BTP Users Management
+
+1. **Users Overview** (`/users`) — cross-subaccount view of XSUAA users; tabs and group sections mirror the Role Collections layout; only subaccounts with `manageRoles = true` appear; each SA column shows the 16 most-recently-logged-on users with email and last logon time; global **Refresh** with SSE progress bar; **Change History** tab showing `users/changelog.md`; live updates via `users` SSE topic; auto global refresh on page open when stale (threshold: `AUTO_GLOBAL_REFRESH_HRS`)
+
+2. **Refresh** — fetches all XSUAA users via the SCIM API (`count=500`, paginated via `startIndex`); reuses the same `xsuaa/apiaccess` credential chain as Role Collections; after each API fetch, records sharing the same `origin + email` key but with different internal IDs are deduplicated before storage (latest `meta.lastModified` wins); changed user records produce a field-level diff (ignoring `passwordLastModified`, `previousLogonTime`, `lastLogonTime`) appended to `{email}.changelog.md`; removed users renamed to `{email}.deleted.json`; global `users/changelog.md` updated after each run (rotates at 2 MB)
+
+3. **Subaccount Users modal** — header: cockpit dropdown button (when cockpit settings are configured) for Cockpit navigation; left panel: filter input + scrollable user list (sorted by last logon time descending by default); right panel:
+   - **User Detail** — all XSUAA user attributes (ID, username, name, emails, active, verified, origin, zone ID, group count, logon timestamps, meta dates)
+   - **Global Access** — collapsible tree listing every subaccount where this user appears, with their group assignments (`value / display / type`); all rows expanded by default
+   - **Change History** — per-user field-level diff log for every refresh; `+` lines in green, `-` lines in red
+   - **Export** — downloads the full stored user JSON as `{region}_{subdomain}_{origin}_{email}.json`
+   - **Refresh** — per-subaccount refresh with inline progress banner (auto-dismisses after 3 s on success)
+
+4. **Full-text search** (`/api/users/search?q=`) — server-side scan of all user JSON files; matches `userName`, `emails[].value`, `name.givenName`, `name.familyName`, `origin`, `groups[].display`; results filter and highlight matched emails in the overview table
+
+5. **Remote sync** — `users/` folder included in sync manifest; user data synced alongside destinations and role collections; `globalUsersRefreshTs` restored at startup by parsing the topmost header in `users/changelog.md`
 
 ## Quick Start
 

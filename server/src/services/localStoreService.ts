@@ -414,6 +414,68 @@ export async function browseResponseFiles(since?: number): Promise<Record<string
   }
 
   try {
+    // users/{region}/{subdomain}/ — returned as folder keys "users/{region}/{subdomain}"
+    // Also includes root-level .md files (changelog, archives) under folder key "users"
+    const usersBase = join(storeDir, 'users');
+    const usersRegions = await readdir(usersBase, { withFileTypes: true });
+
+    const usersRootFiles: BrowseFile[] = [];
+    for (const e of usersRegions) {
+      if (!e.isFile() || !e.name.endsWith('.md')) continue;
+      try {
+        const info = await stat(join(usersBase, e.name));
+        if (!since || since <= 0 || info.mtimeMs >= since) {
+          usersRootFiles.push({ name: e.name, mtime: info.mtimeMs });
+        }
+      } catch { /* skip */ }
+    }
+    if (usersRootFiles.length > 0) {
+      usersRootFiles.sort((a, b) => a.name.localeCompare(b.name));
+      result['users'] = usersRootFiles;
+    }
+
+    await Promise.all(
+      usersRegions.filter(e => e.isDirectory()).map(async (regionEntry) => {
+        try {
+          const regionPath = join(usersBase, regionEntry.name);
+          const subEntries = await readdir(regionPath, { withFileTypes: true });
+          await Promise.all(
+            subEntries.filter(e => e.isDirectory()).map(async (subEntry) => {
+              const folderKey = `users/${regionEntry.name}/${subEntry.name}`;
+              try {
+                const subPath = join(regionPath, subEntry.name);
+                const originEntries = await readdir(subPath, { withFileTypes: true });
+                // Each origin is a subdirectory; list files within as "{origin}/{file}"
+                const collected: { name: string; rawMtime: number }[] = [];
+                await Promise.all(
+                  originEntries.filter(e => e.isDirectory()).map(async (originEntry) => {
+                    const originPath = join(subPath, originEntry.name);
+                    try {
+                      const originFiles = await readdir(originPath);
+                      await Promise.all(originFiles.map(async (fname) => {
+                        try {
+                          const info = await stat(join(originPath, fname));
+                          collected.push({ name: `${originEntry.name}/${fname}`, rawMtime: info.mtimeMs });
+                        } catch { collected.push({ name: `${originEntry.name}/${fname}`, rawMtime: 0 }); }
+                      }));
+                    } catch { /* origin dir unreadable */ }
+                  }),
+                );
+                result[folderKey] = collected
+                  .filter(f => !since || since <= 0 || f.rawMtime === 0 || f.rawMtime >= since)
+                  .map(({ name, rawMtime }) => ({ name, mtime: rawMtime === 0 ? 0 : rawMtime }));
+                result[folderKey].sort((a, b) => a.name.localeCompare(b.name));
+              } catch { result[folderKey] = []; }
+            }),
+          );
+        } catch { /* region dir unreadable */ }
+      }),
+    );
+  } catch {
+    // users/ doesn't exist yet
+  }
+
+  try {
     // Service response files under resp/{service}/
     const respBase = join(storeDir, 'resp');
     const entries = await readdir(respBase, { withFileTypes: true });
@@ -484,6 +546,15 @@ export async function readRcsFile(relPath: string): Promise<Buffer> {
     throw new Error('Invalid rcs path');
   }
   return readFile(join(config.LOCAL_STORE_DIR, 'rcs', relPath));
+}
+
+/** Read a file from LOCAL_STORE_DIR/users/{relPath} (e.g. us10/subdomain/uuid.json or changelog.md). */
+export async function readUsersFile(relPath: string): Promise<Buffer> {
+  const parts = relPath.split('/');
+  if (parts.length === 0 || parts.some(p => p === '..' || p === '.' || p === '')) {
+    throw new Error('Invalid users path');
+  }
+  return readFile(join(config.LOCAL_STORE_DIR, 'users', relPath));
 }
 
 /**

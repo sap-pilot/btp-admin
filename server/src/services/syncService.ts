@@ -58,6 +58,12 @@ export function registerOnRcsChangelogSynced(fn: () => void): void {
   onRcsChangelogSynced = fn;
 }
 
+let onUsersChangelogSynced: (() => void) | null = null;
+
+export function registerOnUsersChangelogSynced(fn: () => void): void {
+  onUsersChangelogSynced = fn;
+}
+
 // ── Callback registry (producer side) ────────────────────────────────────────
 const registeredCallbacks = new Set<string>();
 
@@ -368,6 +374,17 @@ async function downloadBatch(
             ? join(config.LOCAL_STORE_DIR, 'rcs', filename.slice(0, lastSlash))
             : join(config.LOCAL_STORE_DIR, 'rcs');
           await mkdir(parentDir, { recursive: true });
+        } else if (folder === 'users') {
+          target = resolvePath(config.LOCAL_STORE_DIR, 'users', filename);
+          if (!target.startsWith(safeBase + '/')) {
+            logger.warn({ name }, 'Skipping ZIP users entry: path traversal detected');
+            return;
+          }
+          const lastSlash = filename.lastIndexOf('/');
+          const parentDir = lastSlash !== -1
+            ? join(config.LOCAL_STORE_DIR, 'users', filename.slice(0, lastSlash))
+            : join(config.LOCAL_STORE_DIR, 'users');
+          await mkdir(parentDir, { recursive: true });
         } else {
           target = resolvePath(config.LOCAL_STORE_DIR, 'resp', folder, filename);
           if (!target.startsWith(safeBase + '/')) {
@@ -624,6 +641,10 @@ async function executeSync(
     if (updatedFolders.has('rcs')) {
       emit('rcs', { ts });
       if (onRcsChangelogSynced && missing.some(p => p === 'rcs/changelog.md')) onRcsChangelogSynced();
+    }
+    if (updatedFolders.has('users')) {
+      emit('users', { ts });
+      if (onUsersChangelogSynced && missing.some(p => p === 'users/changelog.md')) onUsersChangelogSynced();
     }
 
     return stats;

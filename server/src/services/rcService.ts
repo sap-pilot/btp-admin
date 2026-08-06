@@ -47,7 +47,7 @@ function rcFilenameToName(stem: string): string {
 
 // ─── XSUAA types ──────────────────────────────────────────────────────────────
 
-interface XsuaaCredentials {
+export interface XsuaaCredentials {
   apiurl:       string;  // XSUAA API base URL (for role collection calls)
   url:          string;  // OAuth token URL
   clientid:     string;
@@ -55,7 +55,7 @@ interface XsuaaCredentials {
   [k: string]: unknown;
 }
 
-interface XsuaaKeyEntry {
+export interface XsuaaKeyEntry {
   orgName:    string;
   instanceId: string;
   instanceName: string;
@@ -63,16 +63,16 @@ interface XsuaaKeyEntry {
 }
 
 // { [region]: { [orgId]: XsuaaKeyEntry } }
-type XsuaaKeyStore = Record<string, Record<string, XsuaaKeyEntry>>;
+export type XsuaaKeyStore = Record<string, Record<string, XsuaaKeyEntry>>;
 
-interface XsuaaTokenEntry {
+export interface XsuaaTokenEntry {
   token:     string;
   expiresAt: number;
   tokenUrl:  string;
 }
 
 // { [region]: { [orgId]: XsuaaTokenEntry } }
-type XsuaaTokenStore = Record<string, Record<string, XsuaaTokenEntry>>;
+export type XsuaaTokenStore = Record<string, Record<string, XsuaaTokenEntry>>;
 
 // ─── RC data types ────────────────────────────────────────────────────────────
 
@@ -115,22 +115,22 @@ export interface RcChange {
 
 // ─── Key/token store helpers ──────────────────────────────────────────────────
 
-async function loadXsuaaKeyStore(): Promise<XsuaaKeyStore> {
+export async function loadXsuaaKeyStore(): Promise<XsuaaKeyStore> {
   try { return JSON.parse(await readFile(KEYS_PATH, 'utf-8')) as XsuaaKeyStore; }
   catch { return {}; }
 }
 
-async function saveXsuaaKeyStore(store: XsuaaKeyStore): Promise<void> {
+export async function saveXsuaaKeyStore(store: XsuaaKeyStore): Promise<void> {
   await mkdir(BA_DIR, { recursive: true });
   await writeFile(KEYS_PATH, JSON.stringify(store, null, 2), 'utf-8');
 }
 
-async function loadXsuaaTokenStore(): Promise<XsuaaTokenStore> {
+export async function loadXsuaaTokenStore(): Promise<XsuaaTokenStore> {
   try { return JSON.parse(await readFile(TOKENS_PATH, 'utf-8')) as XsuaaTokenStore; }
   catch { return {}; }
 }
 
-async function saveXsuaaTokenStore(store: XsuaaTokenStore): Promise<void> {
+export async function saveXsuaaTokenStore(store: XsuaaTokenStore): Promise<void> {
   await mkdir(BA_DIR, { recursive: true });
   await writeFile(TOKENS_PATH, JSON.stringify(store, null, 2), 'utf-8');
 }
@@ -220,7 +220,7 @@ async function acquireXsuaaToken(credential: XsuaaCredentials): Promise<XsuaaTok
   return { token: data.access_token, expiresAt: Date.now() + expiresIn * 1000, tokenUrl };
 }
 
-async function resolveXsuaaToken(
+export async function resolveXsuaaToken(
   region:     string,
   orgId:      string,
   orgName:    string,
@@ -267,7 +267,7 @@ async function resolveXsuaaToken(
 
 // ─── XSUAA API call with 401 retry cascade ────────────────────────────────────
 
-async function withXsuaaApiRetry<T>(
+export async function withXsuaaApiRetry<T>(
   region:     string,
   orgId:      string,
   orgName:    string,
@@ -377,6 +377,16 @@ export async function removeUserFromRoleCollection(
 
 // ─── Diff helpers ─────────────────────────────────────────────────────────────
 
+function normalizeRc(rc: RoleCollection): RoleCollection {
+  return {
+    ...rc,
+    roleReferences:  [...(rc.roleReferences  ?? [])].sort((a, b) => a.name.localeCompare(b.name)),
+    groupReferences: [...(rc.groupReferences ?? [])].sort((a, b) =>
+      a.samlAttributeValue.localeCompare(b.samlAttributeValue) || a.samlAttrName.localeCompare(b.samlAttrName),
+    ),
+  };
+}
+
 function diffObjects(prev: Record<string, unknown>, next: Record<string, unknown>): string {
   const lines: string[] = [];
   const keys = new Set([...Object.keys(prev), ...Object.keys(next)]);
@@ -424,8 +434,9 @@ async function persistRC(
   const usersPath     = join(rcDir, `${safeName}.users.json`);
   const changelogPath = join(rcDir, `${safeName}.changelog.md`);
 
-  const rcJson    = JSON.stringify(rc, null, 2);
-  const usersJson = JSON.stringify(users, null, 2);
+  const normalized = normalizeRc(rc);
+  const rcJson     = JSON.stringify(normalized, null, 2);
+  const usersJson  = JSON.stringify(users, null, 2);
 
   const rcExists    = existsSync(rcPath);
   const usersExist  = existsSync(usersPath);
@@ -435,8 +446,8 @@ async function persistRC(
   let wasCreated = false;
 
   if (rcExists) {
-    const existingRc = JSON.parse(await readFile(rcPath, 'utf-8')) as Record<string, unknown>;
-    rcDiff = diffObjects(existingRc, rc as unknown as Record<string, unknown>);
+    const existingNorm = normalizeRc(JSON.parse(await readFile(rcPath, 'utf-8')) as RoleCollection);
+    rcDiff = diffObjects(existingNorm as unknown as Record<string, unknown>, normalized as unknown as Record<string, unknown>);
   } else {
     wasCreated = true;
   }
@@ -602,6 +613,24 @@ export async function listSubaccountRCNames(region: string, subdomain: string): 
 
 export interface RcSummary { name: string; userCount: number }
 
+async function computeRcSummariesForSa(region: string, subdomain: string): Promise<RcSummary[]> {
+  const dir     = join(LOCAL_RC_DIR, region, subdomain);
+  const entries = await readdir(dir).catch(() => [] as string[]);
+  const rcFiles = entries.filter(f => f.endsWith('.json') && !f.endsWith('.users.json') && !f.endsWith('.deleted.json'));
+  const summaries = await Promise.all(rcFiles.map(async f => {
+    const safeName = f.slice(0, -5);
+    const name     = rcFilenameToName(safeName);
+    let userCount  = 0;
+    try {
+      const content = await readFile(join(dir, `${safeName}.users.json`), 'utf-8');
+      const lines   = content.split('\n').length;
+      userCount     = Math.max(0, Math.round((lines - 2) / 9));
+    } catch { /* no users file */ }
+    return { name, userCount };
+  }));
+  return summaries.sort((a, b) => a.name.localeCompare(b.name));
+}
+
 export async function listRoleCollections(): Promise<Record<string, RcSummary[]>> {
   const result: Record<string, RcSummary[]> = {};
   const sas = (await readSubaccounts()).filter(sa => sa.manageRoles);
@@ -609,21 +638,7 @@ export async function listRoleCollections(): Promise<Record<string, RcSummary[]>
     const key    = `${sa.region}/${sa.subdomain}`;
     const cached = rcOverviewCache.get(key);
     if (cached !== undefined) { result[key] = cached; return; }
-    const dir  = join(LOCAL_RC_DIR, sa.region, sa.subdomain);
-    const entries = await readdir(dir).catch(() => [] as string[]);
-    const rcFiles = entries.filter(f => f.endsWith('.json') && !f.endsWith('.users.json'));
-    const summaries = await Promise.all(rcFiles.map(async f => {
-      const safeName = f.slice(0, -5);
-      const name     = rcFilenameToName(safeName);
-      let userCount  = 0;
-      try {
-        const content = await readFile(join(dir, `${safeName}.users.json`), 'utf-8');
-        const lines   = content.split('\n').length;
-        userCount     = Math.max(0, Math.round((lines - 2) / 9));
-      } catch { /* no users file */ }
-      return { name, userCount };
-    }));
-    const sorted = summaries.sort((a, b) => a.name.localeCompare(b.name));
+    const sorted = await computeRcSummariesForSa(sa.region, sa.subdomain);
     rcOverviewCache.set(key, sorted);
     result[key] = sorted;
   }));
@@ -743,10 +758,12 @@ export async function refreshSubaccountRoleCollections(
     }
   }
 
-  const now = Date.now();
-  lastRefreshTs.set(`${region}/${subdomain}`, now);
-  rcOverviewCache.delete(`${region}/${subdomain}`);
-  emit('rcs', { files: [`${region}/${subdomain}`], ts: now });
+  const now     = Date.now();
+  const saKey   = `${region}/${subdomain}`;
+  const summary = await computeRcSummariesForSa(region, subdomain);
+  rcOverviewCache.set(saKey, summary);
+  lastRefreshTs.set(saKey, now);
+  emit('rcs', { files: [saKey], ts: now });
 
   return { received: rcs.length, created, updated, deleted, errors };
 }
@@ -843,6 +860,12 @@ export async function refreshRoleCollections(
         }
       }
 
+      // Update cache and notify client immediately for this SA
+      const saSummary = await computeRcSummariesForSa(sa.region, sa.subdomain);
+      rcOverviewCache.set(loc, saSummary);
+      lastRefreshTs.set(loc, Date.now());
+      emit('rcs', { files: [loc], ts: Date.now() });
+
       refreshed++;
     }
 
@@ -860,7 +883,6 @@ export async function refreshRoleCollections(
     }
 
     globalRcsRefreshTs = Date.now();
-    rcOverviewCache.clear();
     logger.info({ refreshed, total, received, created, updated, deleted, issues: issues.length }, 'RCS global refresh complete');
     return { refreshed, received, created, updated, deleted, errors: issues };
   } finally {
