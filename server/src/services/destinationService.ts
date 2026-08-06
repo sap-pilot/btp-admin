@@ -541,7 +541,9 @@ async function persistDestination(
 
   if (existsSync(filePath)) {
     const existing = JSON.parse(await readFile(filePath, 'utf-8')) as Record<string, unknown>;
-    const diff     = diffDestination(existing, incoming);
+    // Whole-JSON comparison — all fields considered (no IGNORED_DIFF_KEYS for destinations)
+    if (JSON.stringify(existing) === JSON.stringify(incoming)) return 'unchanged';
+    const diff = diffDestination(existing, incoming);
     if (!diff) return 'unchanged';
     const dateStr = new Date().toISOString().replace('T', ' ').slice(0, 19) + ' UTC';
     const heading = `## Refreshed by <${username}> at ${dateStr}`;
