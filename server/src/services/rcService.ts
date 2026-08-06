@@ -7,7 +7,7 @@ import { logger } from '../logger.js';
 import { getOrRefreshToken, fetchWithRateLimit } from './cfLoginService.js';
 import { getRestrictedIds, getAutoSubaccountRefreshMs } from './configService.js';
 import { readSubaccounts, type SubaccountEntry } from './subaccountsService.js';
-import { notifyCallbacks, registerOnRcsChangelogSynced } from './syncService.js';
+import { notifyCallbacks, registerOnRcsChangelogSynced, registerOnRcsSynced } from './syncService.js';
 import { emit, emitImmediate } from './liveEvents.js';
 
 const BA_DIR       = join(homedir(), '.ba');
@@ -380,10 +380,20 @@ export async function removeUserFromRoleCollection(
 function normalizeRc(rc: RoleCollection): RoleCollection {
   return {
     ...rc,
-    roleReferences:  [...(rc.roleReferences  ?? [])].sort((a, b) => a.name.localeCompare(b.name)),
+    roleReferences: [...(rc.roleReferences ?? [])].sort((a, b) => a.name.localeCompare(b.name)).map(r => ({
+      roleTemplateAppId: r.roleTemplateAppId,
+      roleTemplateName:  r.roleTemplateName,
+      name:              r.name,
+      description:       r.description,
+    })),
     groupReferences: [...(rc.groupReferences ?? [])].sort((a, b) =>
       a.samlAttributeValue.localeCompare(b.samlAttributeValue) || a.samlAttrName.localeCompare(b.samlAttrName),
-    ),
+    ).map(r => ({
+      idpDisplayName:     r.idpDisplayName,
+      roleCollectionName: r.roleCollectionName,
+      samlAttrName:       r.samlAttrName,
+      samlAttributeValue: r.samlAttributeValue,
+    })),
   };
 }
 
@@ -945,10 +955,12 @@ export async function getSubaccountRcNames(
   force      = false,
   noRefresh  = false,
 ): Promise<SubaccountRcNamesResult> {
-  const key   = `${region}/${subdomain}`;
-  const delta = getAutoSubaccountRefreshMs();
-  const last  = lastRefreshTs.get(key) ?? 0;
-  const stale = force || (delta > 0 && Date.now() - last > delta);
+  const key        = `${region}/${subdomain}`;
+  const delta      = getAutoSubaccountRefreshMs();
+  const lastSa     = lastRefreshTs.get(key) ?? 0;
+  const lastGlobal = globalRcsRefreshTs ?? 0;
+  const last       = Math.max(lastSa, lastGlobal);
+  const stale      = force || (delta > 0 && Date.now() - last > delta);
 
   if (noRefresh) {
     const names = await listSubaccountRCNames(region, subdomain);
@@ -1076,4 +1088,17 @@ export async function removeUserFromRc(
 registerOnRcsChangelogSynced(() => {
   rcOverviewCache.clear();
   void restoreGlobalRcsRefreshTsFromChangelog();
+});
+
+registerOnRcsSynced(async (saPaths: string[]) => {
+  const ts = Date.now();
+  await Promise.all(saPaths.map(async key => {
+    const slash = key.indexOf('/');
+    if (slash === -1) return;
+    const region    = key.slice(0, slash);
+    const subdomain = key.slice(slash + 1);
+    const sorted = await computeRcSummariesForSa(region, subdomain);
+    rcOverviewCache.set(key, sorted);
+  }));
+  emit('rcs', { files: saPaths, ts });
 });

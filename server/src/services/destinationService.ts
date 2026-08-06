@@ -963,10 +963,12 @@ export async function getSubaccountDestinationNames(
   username:  string,
   force      = false,
 ): Promise<SubaccountDestNamesResult> {
-  const key   = `${region}/${subdomain}`;
-  const delta = getAutoSubaccountRefreshMs();
-  const last  = lastRefreshTs.get(key) ?? 0;
-  const stale = force || (delta > 0 && Date.now() - last > delta);
+  const key        = `${region}/${subdomain}`;
+  const delta      = getAutoSubaccountRefreshMs();
+  const lastSa     = lastRefreshTs.get(key) ?? 0;
+  const lastGlobal = globalRefreshTs ?? 0;
+  const last       = Math.max(lastSa, lastGlobal);
+  const stale      = force || (delta > 0 && Date.now() - last > delta);
 
   if (stale) {
     logger.info({ location: key, force, ageSec: Math.round((Date.now() - last) / 1000) }, 'Proactive destination refresh');
