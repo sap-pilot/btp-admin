@@ -1,5 +1,25 @@
 # Changelog
 
+## [v1.4.0] - unreleased
+
+### Added
+- **Users management** — new admin-only section at `/users` mirroring the Role Collections feature:
+  - **Users Overview** (`/users`) — cross-subaccount table showing the 16 most-recently-logged-on users per subaccount (email + last logon time); tabs and group sections driven by `tabs.json`; global **Refresh** with SSE progress bar; **Change History** tab with archive file selector and full-text search; auto global refresh on page open when stale (`AUTO_GLOBAL_REFRESH_HRS`)
+  - **Subaccount Users modal** — header: cockpit dropdown button (when cockpit settings are configured, same pattern as RC modal) or plain `{alias} ({subdomain})` fallback; left panel: filter input + scrollable sorted user list (by last logon time desc by default); right panel: **User Detail** tab (all XSUAA user attributes), **Global Access** tab (collapsible tree of role collection group assignments across all subaccounts), **Change History** tab (per-user field-level diff log); Export and Refresh buttons; URL-addressable: `/users/{region}/{subdomain}/{origin}/{email}/{tab}`
+  - **XSUAA users API** — paginated fetch via `GET {apiurl}/sap/rest/authorization/v2/users?count=500&startIndex={N}`; reuses the same `xsuaa/apiaccess` credential chain and 401-retry cascade as Role Collections (`~/.ba/xsuaa-keys.json`, `~/.ba/xsuaa-tokens.json`)
+  - **Local storage** — users stored as `{LOCAL_STORE_DIR}/users/{region}/{subdomain}/{origin}/{email}.json` where `email` = `emails[0].value` (or the XSUAA `id` UUID when the email field is absent or empty); per-user `{email}.changelog.md` and `{email}.deleted.json` (for removed users); global changelog at `users/changelog.md` (rotates at 2 MB); diff ignores `passwordLastModified`, `previousLogonTime`, `lastLogonTime`
+  - **XSUAA duplicate account deduplication** — after each API fetch, records sharing the same `origin + email` key but with different internal IDs (e.g. created by IDP federation) are deduplicated before storage; the record with the later `meta.lastModified` timestamp is kept; a `WARN` is logged when duplicates are removed
+  - **Global and per-subaccount refresh** — guarded concurrent execution; SSE progress events on `refresh-users` topic; per-subaccount `usersOverviewCache` updated immediately after each subaccount completes and a `users` SSE event emitted per subaccount; `globalUsersRefreshTs` restored at startup from `users/changelog.md` header
+  - **Full-text search** — server-side scan matching `userName`, `emails[].value`, `name.givenName`, `name.familyName`, `origin`, `groups[].display`; Enter-triggered with spinner; matches filter and highlight the overview table
+  - **Remote sync** — `users/` folder included in sync browse manifest; origin subdirectories under `users/{region}/{subdomain}/` are recursed and files listed as `{origin}/{filename}` entries; ZIP batch download accepts 5-segment `users/{region}/{subdomain}/{origin}/{file}` paths; `users` SSE event emitted on sync completion; `globalUsersRefreshTs` restored when `users/changelog.md` is synced
+  - **API** — `GET /api/users/status`, `POST /api/users/refresh`, `GET /api/users/`, `GET /api/users/global-changelog`, `GET /api/users/global-changelog/search`, `GET /api/users/search`, `POST /api/users/:region/:subdomain/refresh`, `GET /api/users/:region/:subdomain`, `GET /api/users/:region/:subdomain/:origin/:email/history`, `GET /api/users/:region/:subdomain/:origin/:email/access`, `GET /api/users/:region/:subdomain/:origin/:email/export`, `GET /api/users/:region/:subdomain/:origin/:email`
+  - **Sidebar** — Users nav item added after Role Collections (admin-only)
+
+### Fixed
+- **Role Collections — array-ordering false-positive diffs** — `roleReferences` are now sorted by `name` and `groupReferences` by `samlAttributeValue + samlAttrName` before diffing and before writing to disk (`normalizeRc`); role collections returned by XSUAA in a different array order between refreshes no longer produce spurious changelog entries
+- **Role Collections — overview stale during global refresh** — per-subaccount RC summaries are now recomputed and cached in memory immediately after each subaccount completes (`computeRcSummariesForSa`), and a `rcs` SSE event is emitted per subaccount; the overview table updates progressively rather than staying empty until the full global refresh finishes
+- **Users sync — batch path rejection** — the sync browse endpoint now recurses into origin subdirectories and the batch validation and read handler correctly handle 5-segment `users/{region}/{subdomain}/{origin}/{file}` paths; previously all users file paths were rejected with `400 path must be filename or folder/filename`
+
 ## [v1.3.0] - 2026-08-05
 
 ### Added

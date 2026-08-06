@@ -23,6 +23,7 @@ router.get('/events', (req, res) => {
   const configOnly = req.query['config'] === '1';
   const destOnly   = req.query['dest']   === '1';
   const rcsOnly    = req.query['rcs']    === '1';
+  const usersOnly  = req.query['users']  === '1';
 
   let topics: string[];
   if (configOnly) {
@@ -31,6 +32,8 @@ router.get('/events', (req, res) => {
     topics = ['dest', 'refresh-destinations'];
   } else if (rcsOnly) {
     topics = ['rcs', 'refresh-rcs'];
+  } else if (usersOnly) {
+    topics = ['users', 'refresh-users'];
   } else {
     topics = ['global'];
     if (svc) topics.push(`service:${svc}`);

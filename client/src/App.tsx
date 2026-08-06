@@ -8,6 +8,7 @@ const HomePage = lazy(() => import('@/pages/Home'));
 const ConfigPage             = lazy(() => import('@/pages/ConfigPage'));
 const DestinationOverview    = lazy(() => import('@/pages/destination/DestinationOverview'));
 const RoleCollectionsOverview = lazy(() => import('@/pages/rcs/RoleCollectionsOverview'));
+const UsersOverview           = lazy(() => import('@/pages/users/UsersOverview'));
 
 
 interface EBState { error: Error | null }
@@ -76,6 +77,11 @@ export default function App() {
               <Route path="/role-collections/:tab" element={<RoleCollectionsOverview />} />
               <Route path="/role-collections/:region/:subdomain/:name/:rcTab" element={<RoleCollectionsOverview />} />
               <Route path="/role-collections/:region/:subdomain/:name" element={<RoleCollectionsOverview />} />
+              <Route path="/users" element={<UsersOverview />} />
+              <Route path="/users/:tab" element={<UsersOverview />} />
+              <Route path="/users/:region/:subdomain" element={<UsersOverview />} />
+              <Route path="/users/:region/:subdomain/:origin/:email" element={<UsersOverview />} />
+              <Route path="/users/:region/:subdomain/:origin/:email/:userTab" element={<UsersOverview />} />
               <Route path="/config" element={<Navigate to="/config/orgs" replace />} />
               <Route path="/config/:tab" element={<ConfigPage />} />
               <Route path="/" element={<Navigate to="/home" replace />} />

@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { readConfigFile, readDestFile, readRcsFile, readRootFile, readRawResponseFile, browseResponseFiles, formatBrowseT, parseBrowseT } from '../services/localStoreService.js';
+import { readConfigFile, readDestFile, readRcsFile, readRootFile, readRawResponseFile, readUsersFile, browseResponseFiles, formatBrowseT, parseBrowseT } from '../services/localStoreService.js';
 import { buildZip } from '../services/zipBuilder.js';
 import { handleDownloadTrigger, registerCallback } from '../services/syncService.js';
 import { logger } from '../logger.js';
@@ -55,6 +55,17 @@ router.post('/batch', requireSyncAuth, async (req, res, next) => {
           rejectBatch(400, `invalid rcs path (expected 2 or 4 segments): ${p}`);
           return;
         }
+      } else if (parts[0] === 'users') {
+        // users paths: root .md files (users/changelog*.md) or user files (users/{region}/{subdomain}/{origin}/{file})
+        if (parts.length === 2) {
+          if (!parts[1] || !/^[a-zA-Z0-9][a-zA-Z0-9_.-]*\.md$/.test(parts[1])) {
+            rejectBatch(400, `invalid users root path: ${p}`);
+            return;
+          }
+        } else if (parts.length !== 5 || !parts[1] || !parts[2] || !parts[3] || !parts[4]) {
+          rejectBatch(400, `invalid users path (expected 2 or 5 segments): ${p}`);
+          return;
+        }
       } else if (parts.length !== 2 || !parts[0] || !parts[1]) {
         rejectBatch(400, `path must be filename or folder/filename: ${p}`);
         return;
@@ -84,6 +95,8 @@ router.post('/batch', requireSyncAuth, async (req, res, next) => {
             data = await readDestFile(rest);
           } else if (folder === 'rcs') {
             data = await readRcsFile(rest);
+          } else if (folder === 'users') {
+            data = await readUsersFile(rest);
           } else {
             data = await readRawResponseFile(folder, rest);
           }
