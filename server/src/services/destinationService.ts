@@ -450,6 +450,47 @@ async function rediscoverAndAcquire(
   }
 }
 
+// ─── Destination API call with 401 retry cascade ─────────────────────────────
+
+async function withDestApiRetry<T>(
+  region:        string,
+  orgId:         string,
+  orgName:       string,
+  keyStore:      KeyStore,
+  tokenStore:    TokenStore,
+  cfLoginFailed: Set<string>,
+  planGuids:     Record<string, string>,
+  location:      string,
+  auth:          ResolvedAuth,
+  call:          (auth: ResolvedAuth) => Promise<T>,
+): Promise<T> {
+  try {
+    return await call(auth);
+  } catch (err) {
+    if (!String(err).includes('HTTP 401')) throw err;
+
+    // Retry 1: invalidate cached token, re-acquire using existing service key
+    logger.info({ region, orgId, location }, 'Destination API 401 — re-acquiring token via existing service key');
+    if (tokenStore[region]) delete tokenStore[region][orgId];
+    const r2 = await resolveToken(region, orgId, orgName, keyStore, tokenStore, cfLoginFailed, planGuids, location);
+    if ('error' in r2) throw new Error(r2.error);
+
+    try {
+      return await call(r2);
+    } catch (err2) {
+      if (!String(err2).includes('HTTP 401')) throw err2;
+
+      // Retry 2: also invalidate service key, re-discover via CF API
+      logger.info({ region, orgId, location }, 'Destination API 401 again — re-discovering service key via CF API');
+      if (keyStore[region]) delete keyStore[region][orgId];
+      if (tokenStore[region]) delete tokenStore[region][orgId];
+      const r3 = await resolveToken(region, orgId, orgName, keyStore, tokenStore, cfLoginFailed, planGuids, location);
+      if ('error' in r3) throw new Error(r3.error);
+      return await call(r3);
+    }
+  }
+}
+
 // ─── Destination API ──────────────────────────────────────────────────────────
 
 async function fetchSubaccountDestinations(credential: DestCredentials, accessToken: string): Promise<unknown[]> {
@@ -737,7 +778,8 @@ export async function refreshDestinations(username = 'system', mode: 'auto' | 'm
         continue;
       }
 
-      const destinations = await fetchSubaccountDestinations(tokenResult.credential, tokenResult.accessToken);
+      const destinations = await withDestApiRetry(sa.region, orgId, orgName, keyStore, tokenStore, cfLoginFailed, planGuids, location, tokenResult,
+        auth => fetchSubaccountDestinations(auth.credential, auth.accessToken));
       const destDir = join(LOCAL_DEST_DIR, sa.region, sa.subdomain);
       await mkdir(destDir, { recursive: true });
 
@@ -841,7 +883,8 @@ export async function refreshSubaccountDestinations(region: string, subdomain: s
     if ('error' in tokenResult) {
       issues.push(`${location}${issueRef()}: ${tokenResult.error}`);
     } else {
-      const destinations = await fetchSubaccountDestinations(tokenResult.credential, tokenResult.accessToken);
+      const destinations = await withDestApiRetry(saRegion, orgId, orgName, keyStore, tokenStore, cfLoginFailed, planGuids, location, tokenResult,
+        auth => fetchSubaccountDestinations(auth.credential, auth.accessToken));
       const destDir = join(LOCAL_DEST_DIR, sa.region, sa.subdomain);
       await mkdir(destDir, { recursive: true });
 
@@ -1035,30 +1078,29 @@ async function pushToDestinationApi(
     throw new Error(`Cannot authenticate to Destination API for ${region}/${subdomain}: ${tokenResult.error}`);
   }
 
-  const { accessToken, credential } = tokenResult;
-  const baseUrl = `${credential.uri}/destination-configuration/v1/subaccountDestinations`;
-  const headers  = { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' };
-  const body     = JSON.stringify(data);
+  const encodedBody = JSON.stringify(data);
+  await withDestApiRetry(region, orgId, orgName, keyStore, tokenStore, cfLoginFailed, planGuids, location, tokenResult,
+    async (auth) => {
+      const baseUrl = `${auth.credential.uri}/destination-configuration/v1/subaccountDestinations`;
+      const headers = { Authorization: `Bearer ${auth.accessToken}`, 'Content-Type': 'application/json' };
 
-  // Try PUT (update) first; fall back to POST (create) if destination doesn't exist yet
-  const putRes = await fetchWithRateLimit(() => fetch(baseUrl, { method: 'PUT', headers, body }), baseUrl);
-  if (putRes.ok) {
-    logger.debug({ location }, 'Destination pushed to API via PUT');
-    return;
-  }
+      // Try PUT (update) first; fall back to POST (create) if destination doesn't exist yet
+      const putRes = await fetchWithRateLimit(() => fetch(baseUrl, { method: 'PUT', headers, body: encodedBody }), baseUrl);
+      if (putRes.ok) { logger.debug({ location }, 'Destination pushed to API via PUT'); return; }
 
-  if (putRes.status === 404) {
-    const postRes = await fetchWithRateLimit(() => fetch(baseUrl, { method: 'POST', headers, body }), baseUrl);
-    if (postRes.ok) {
-      logger.debug({ location }, 'Destination created in API via POST');
-      return;
-    }
-    const errText = await postRes.text().catch(() => '');
-    throw new Error(`Destination API POST failed with HTTP ${postRes.status}: ${errText.slice(0, 300)}`);
-  }
+      if (putRes.status === 404) {
+        const postRes = await fetchWithRateLimit(() => fetch(baseUrl, { method: 'POST', headers, body: encodedBody }), baseUrl);
+        if (postRes.ok) { logger.debug({ location }, 'Destination created in API via POST'); return; }
+        const errText = await postRes.text().catch(() => '');
+        throw new Error(`Destination API POST failed with HTTP ${postRes.status}: ${errText.slice(0, 300)}`);
+      }
 
-  const errText = await putRes.text().catch(() => '');
-  throw new Error(`Destination API PUT failed with HTTP ${putRes.status}: ${errText.slice(0, 300)}`);
+      const errText = await putRes.text().catch(() => '');
+      throw new Error(`Destination API PUT failed with HTTP ${putRes.status}: ${errText.slice(0, 300)}`);
+    });
+
+  await saveKeyStore(keyStore, planGuids);
+  await saveTokenStore(tokenStore);
 }
 
 // ─── Public: single-destination CRUD ─────────────────────────────────────────
