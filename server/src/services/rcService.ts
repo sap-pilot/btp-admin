@@ -448,42 +448,48 @@ async function persistRC(
   const rcJson     = JSON.stringify(normalized, null, 2);
   const usersJson  = JSON.stringify(users, null, 2);
 
-  const rcExists    = existsSync(rcPath);
-  const usersExist  = existsSync(usersPath);
+  const rcExists   = existsSync(rcPath);
+  const usersExist = existsSync(usersPath);
 
-  let rcDiff     = '';
-  let usersDiff  = '';
-  let wasCreated = false;
+  let rcDiff    = '';
+  let usersDiff = '';
+  let wasCreated    = false;
+  let rcChanged     = !rcExists;
+  let usersChanged  = !usersExist;
 
   if (rcExists) {
     const existingNorm = normalizeRc(JSON.parse(await readFile(rcPath, 'utf-8')) as RoleCollection);
-    rcDiff = diffObjects(existingNorm as unknown as Record<string, unknown>, normalized as unknown as Record<string, unknown>);
+    rcDiff    = diffObjects(existingNorm as unknown as Record<string, unknown>, normalized as unknown as Record<string, unknown>);
+    rcChanged = JSON.stringify(existingNorm) !== JSON.stringify(normalized);
   } else {
     wasCreated = true;
   }
 
   if (usersExist) {
     const existingUsers = JSON.parse(await readFile(usersPath, 'utf-8')) as UserReference[];
-    usersDiff = diffUsers(existingUsers, users);
+    usersDiff    = diffUsers(existingUsers, users);
+    usersChanged = JSON.stringify(existingUsers) !== JSON.stringify(users);
   }
 
   const hasChange = wasCreated || !!rcDiff || !!usersDiff;
-  if (!hasChange) return 'unchanged';
+  if (!hasChange && !rcChanged && !usersChanged) return 'unchanged';
 
-  const ts      = utcTimestamp();
-  const label   = mode === 'auto' ? 'Auto' : 'Manual';
-  const heading = `## [${label}] refresh by <${username}> at ${ts}`;
-  const parts: string[] = [heading];
-  if (rcDiff)    parts.push(rcDiff);
-  if (usersDiff) parts.push('Users:\n' + usersDiff);
-  const entry = parts.join('\n') + '\n\n';
+  if (hasChange) {
+    const ts      = utcTimestamp();
+    const label   = mode === 'auto' ? 'Auto' : 'Manual';
+    const heading = `## [${label}] refresh by <${username}> at ${ts}`;
+    const parts: string[] = [heading];
+    if (rcDiff)    parts.push(rcDiff);
+    if (usersDiff) parts.push('Users:\n' + usersDiff);
+    const entry = parts.join('\n') + '\n\n';
+    const prevChangelog = existsSync(changelogPath) ? await readFile(changelogPath, 'utf-8') : '';
+    await writeFile(changelogPath, entry + prevChangelog, 'utf-8');
+  }
 
-  const prevChangelog = existsSync(changelogPath) ? await readFile(changelogPath, 'utf-8') : '';
-  await writeFile(changelogPath, entry + prevChangelog, 'utf-8');
-  await writeFile(rcPath,    rcJson,    'utf-8');
-  await writeFile(usersPath, usersJson, 'utf-8');
+  if (rcChanged)    await writeFile(rcPath,    rcJson,    'utf-8');
+  if (usersChanged) await writeFile(usersPath, usersJson, 'utf-8');
 
-  return wasCreated ? 'created' : 'updated';
+  return wasCreated ? 'created' : (hasChange ? 'updated' : 'unchanged');
 }
 
 // ─── Global changelog ─────────────────────────────────────────────────────────

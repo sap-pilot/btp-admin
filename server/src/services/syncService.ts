@@ -603,26 +603,28 @@ async function executeSync(
 
     const batchSize = config.SYNC_REMOTE_BATCH_SIZE;
 
-    if (!since) {
-      // Initial full sync: binary (png) files at normal batch size; text (json|md) at 10x
-      const isBinary    = (p: string) => /\.png$/i.test(p);
+    // Binary (png) files use the base batch size; text (json/md) use 10× for throughput.
+    // Exception: delta syncs with few files skip the split and download everything together.
+    const isBinary    = (p: string) => /\.png$/i.test(p);
+    const textBatch   = batchSize * 10;
+    const syncLabel   = since ? 'Delta' : 'Initial';
+    if (since && missing.length < batchSize) {
+      logger.debug({ count: missing.length, batchSize: missing.length }, 'Delta sync: downloading all files together (below batch threshold)');
+      const r = await runBatches(remoteBase, missing, missing.length, remoteMtimes);
+      totalTransferred += r.transferred; totalDecompressed += r.decompressed;
+    } else {
       const binaryFiles = missing.filter(isBinary);
       const textFiles   = missing.filter(p => !isBinary(p));
       if (binaryFiles.length > 0) {
-        logger.debug({ count: binaryFiles.length, batchSize }, 'Initial sync: downloading binary files');
+        logger.debug({ count: binaryFiles.length, batchSize }, `${syncLabel} sync: downloading binary files`);
         const r = await runBatches(remoteBase, binaryFiles, batchSize, remoteMtimes);
         totalTransferred += r.transferred; totalDecompressed += r.decompressed;
       }
       if (textFiles.length > 0) {
-        const textBatch = batchSize * 10;
-        logger.debug({ count: textFiles.length, batchSize: textBatch }, 'Initial sync: downloading text files');
+        logger.debug({ count: textFiles.length, batchSize: textBatch }, `${syncLabel} sync: downloading text files`);
         const r = await runBatches(remoteBase, textFiles, textBatch, remoteMtimes);
         totalTransferred += r.transferred; totalDecompressed += r.decompressed;
       }
-    } else {
-      // Delta sync: uniform batch size for all file types
-      const r = await runBatches(remoteBase, missing, batchSize, remoteMtimes);
-      totalTransferred += r.transferred; totalDecompressed += r.decompressed;
     }
 
     // Resolve starred/unstarred duplicates in service folders
