@@ -1,13 +1,14 @@
 import { useEffect, useState } from 'react';
 
 export interface AuthState {
-  loading: boolean;
-  enabled: boolean;
-  loggedIn: boolean;
-  firstName: string;
-  email: string;
-  initials: string;
-  isAdmin: boolean;
+  loading:        boolean;
+  enabled:        boolean;
+  loggedIn:       boolean;
+  sessionExpired: boolean; // true when a mid-session 401 triggered the logout
+  firstName:      string;
+  email:          string;
+  initials:       string;
+  isAdmin:        boolean;
 }
 
 interface MeResponse {
@@ -24,7 +25,7 @@ interface AuthMessage {
   user?: { firstName: string; initials: string; isAdmin: boolean };
 }
 
-const INITIAL: AuthState = { loading: true, enabled: false, loggedIn: false, firstName: '', email: '', initials: '', isAdmin: false };
+const INITIAL: AuthState = { loading: true, enabled: false, loggedIn: false, sessionExpired: false, firstName: '', email: '', initials: '', isAdmin: false };
 
 function fetchMe(): Promise<MeResponse> {
   return fetch('/api/me').then(r => r.json() as Promise<MeResponse>);
@@ -32,13 +33,14 @@ function fetchMe(): Promise<MeResponse> {
 
 function applyMe(d: MeResponse): AuthState {
   return {
-    loading: false,
-    enabled: d.enabled ?? false,
-    loggedIn: d.loggedIn ?? false,
-    firstName: d.firstName ?? '',
-    email: d.email ?? '',
-    initials: d.initials ?? '',
-    isAdmin: d.isAdmin ?? false,
+    loading:        false,
+    enabled:        d.enabled  ?? false,
+    loggedIn:       d.loggedIn ?? false,
+    sessionExpired: false,
+    firstName:      d.firstName ?? '',
+    email:          d.email     ?? '',
+    initials:       d.initials  ?? '',
+    isAdmin:        d.isAdmin   ?? false,
   };
 }
 
@@ -65,14 +67,32 @@ function _initOnce() {
   _initialized = true;
   fetchMe().then(d => { _state = applyMe(d); _notify(); }).catch(() => { _update({ loading: false }); });
 
+  // Intercept fetch to detect mid-session 401s (expired XSUAA session).
+  // Only fires when auth is enabled and the user was actively logged in.
+  const _origFetch = window.fetch.bind(window);
+  window.fetch = async (...args: Parameters<typeof fetch>): Promise<Response> => {
+    const res = await _origFetch(...args);
+    if (res.status === 401 && _state.enabled && _state.loggedIn) {
+      const raw = typeof args[0] === 'string' ? args[0]
+        : args[0] instanceof URL ? args[0].href
+        : args[0] instanceof Request ? args[0].url : '';
+      let pathname: string;
+      try { pathname = new URL(raw, location.href).pathname; } catch { pathname = raw; }
+      if (pathname.startsWith('/api/') && pathname !== '/api/me') {
+        _update({ loggedIn: false, sessionExpired: true, firstName: '', email: '', isAdmin: false });
+      }
+    }
+    return res;
+  };
+
   function onMessage(e: MessageEvent) {
     if (e.origin && e.origin !== window.location.origin) return;
     const msg = e.data as AuthMessage;
     if (msg.type === 'login' && msg.user) {
-      _update({ loggedIn: true, firstName: msg.user.firstName, initials: msg.user.initials, isAdmin: msg.user.isAdmin });
+      _update({ loggedIn: true, sessionExpired: false, firstName: msg.user.firstName, initials: msg.user.initials, isAdmin: msg.user.isAdmin });
       _popupRef = null;
     } else if (msg.type === 'logout') {
-      _update({ loggedIn: false, firstName: '', email: '', isAdmin: false });
+      _update({ loggedIn: false, sessionExpired: false, firstName: '', email: '', isAdmin: false });
       _popupRef = null;
     } else if (msg.type === 'login-error') {
       _popupRef = null;

@@ -1,5 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
-import { Outlet } from 'react-router';
+import { Outlet, useNavigate } from 'react-router';
 import { PanelLeft } from 'lucide-react';
 import AppSidebar from './AppSidebar';
 import { useAuth } from '@/hooks/useAuth';
@@ -52,22 +52,46 @@ export default function AppLayout() {
   const [settings, setSettings]         = useState<SettingsData | null>(null);
   const [cockpitMenu, setCockpitMenu]   = useState<CockpitMenuItem | null>(null);
   const [settingsKey, setSettingsKey]   = useState(0);
-  const auth = useAuth();
+  const auth     = useAuth();
+  const navigate = useNavigate();
 
   const gated = !auth.loading && auth.enabled && !auth.loggedIn;
 
-  const prevLoggedInRef = useRef<boolean | null>(null);
+  // Refs that survive across renders without triggering re-renders
+  const prevLoggedInRef   = useRef<boolean | null>(null);
+  const collapsedRef      = useRef(collapsed);
+  collapsedRef.current    = collapsed; // always reflects latest collapsed state
+  const sessionExpiredRef = useRef(false);   // was the logout caused by a mid-session 401?
+  const savedCollapsedRef = useRef(false);   // sidebar state captured at expiry time
+  const returnPathRef     = useRef<string | null>(null); // path to restore after re-login
+
   useEffect(() => {
     if (auth.loading) return;
     const loggedIn = !auth.enabled || auth.loggedIn;
     if (prevLoggedInRef.current === loggedIn) return;
     prevLoggedInRef.current = loggedIn;
     if (loggedIn) {
-      setCollapsed(readCookie());
+      if (sessionExpiredRef.current) {
+        // Re-login after session expiry: restore pre-expiry sidebar state and page
+        setCollapsed(savedCollapsedRef.current);
+        if (returnPathRef.current) {
+          navigate(returnPathRef.current, { replace: true });
+          returnPathRef.current = null;
+        }
+        sessionExpiredRef.current = false;
+      } else {
+        setCollapsed(readCookie());
+      }
     } else {
+      if (auth.sessionExpired) {
+        // Mid-session 401: save state so it can be restored on re-login
+        sessionExpiredRef.current  = true;
+        savedCollapsedRef.current  = collapsedRef.current;
+        returnPathRef.current      = location.pathname + location.search + location.hash;
+      }
       setCollapsed(true);
     }
-  }, [auth.loading, auth.loggedIn, auth.enabled]);
+  }, [auth.loading, auth.loggedIn, auth.enabled, auth.sessionExpired]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Fetch settings on mount and whenever auth state changes (login → get gated data; logout → revert to public).
   // Skip while auth is still loading to avoid a redundant public-only fetch before login state is known.
@@ -118,7 +142,7 @@ export default function AppLayout() {
                     onClick={auth.login}
                     className="rounded-md bg-primary px-5 py-2.5 text-sm font-medium text-primary-foreground shadow-sm hover:bg-primary/90 transition-colors"
                   >
-                    Welcome, click here to login
+                    {auth.sessionExpired ? 'Session timed out — click here to sign in again' : 'Welcome, click here to login'}
                   </button>
                   <a
                     href="https://github.com/sap-pilot/btp-admin/issues"
