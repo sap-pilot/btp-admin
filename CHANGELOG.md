@@ -15,6 +15,11 @@
   - **API** — `GET /api/users/status`, `POST /api/users/refresh`, `GET /api/users/`, `GET /api/users/global-changelog`, `GET /api/users/global-changelog/search`, `GET /api/users/search`, `POST /api/users/:region/:subdomain/refresh`, `GET /api/users/:region/:subdomain`, `GET /api/users/:region/:subdomain/:origin/:email/history`, `GET /api/users/:region/:subdomain/:origin/:email/access`, `GET /api/users/:region/:subdomain/:origin/:email/export`, `GET /api/users/:region/:subdomain/:origin/:email`
   - **Sidebar** — Users nav item added after Role Collections (admin-only)
 
+### Changed
+- **Sync browse (producer) — `find` instead of `readdir`+`stat`** — `browseResponseFiles` now runs `find . -type f [-newermt "YYYY-MM-DD HH:MM:SS"] -printf "%T+ %p\n"` (with `TZ=UTC`) from `LOCAL_STORE_DIR` instead of recursively `readdir`+`stat`-ing every file; the OS handles directory traversal and mtime filtering in a single process; delta browse with no changed files returns in near-zero I/O time regardless of store size
+- **Sync (consumer) — targeted local stat** — `executeSync` now stats only the specific files reported by the remote browse response instead of enumerating all local files; delta sync with 0 remote changes makes 0 local stat calls, cutting ~6 s overhead for up-to-date consumers to near zero
+- **Sync debug logging** — added `debug`-level log entries at each major sync step: browse HTTP call (`durationMs`, `files`), local stat pass (`remoteFiles`, `localFound`, `durationMs`), comparison result (`missing`), batch HTTP call (`requested`, `durationMs`), and batch write phase (`writeMs`, `totalMs`)
+
 ### Fixed
 - **Role Collections — array-ordering false-positive diffs** — `roleReferences` are now sorted by `name` and `groupReferences` by `samlAttributeValue + samlAttrName` before diffing and before writing to disk (`normalizeRc`); role collections returned by XSUAA in a different array order between refreshes no longer produce spurious changelog entries
 - **Role Collections — overview stale during global refresh** — per-subaccount RC summaries are now recomputed and cached in memory immediately after each subaccount completes (`computeRcSummariesForSa`), and a `rcs` SSE event is emitted per subaccount; the overview table updates progressively rather than staying empty until the full global refresh finishes

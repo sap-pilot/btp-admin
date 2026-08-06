@@ -1,5 +1,9 @@
 import { mkdir, writeFile, readdir, readFile, rename, stat, utimes, unlink } from 'node:fs/promises';
+import { execFile as execFileCb } from 'node:child_process';
+import { promisify } from 'node:util';
 import { join } from 'node:path';
+
+const execFile = promisify(execFileCb);
 import { config } from '../config.js';
 import { getCity } from './geoService.js';
 import { logger } from '../logger.js';
@@ -248,267 +252,135 @@ export function filenameTimestamp(filename: string): number {
   return Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +m[6]);
 }
 
+/** Parse %T+ output from GNU find (TZ=UTC): "YYYY-MM-DD+HH:MM:SS.fractional" → Unix ms. */
+function parseFindTimestamp(ts: string): number {
+  const plusIdx = ts.indexOf('+');
+  if (plusIdx === -1) return 0;
+  const datePart = ts.slice(0, plusIdx);
+  const timePart = ts.slice(plusIdx + 1);
+  const dotIdx   = timePart.indexOf('.');
+  const hms  = dotIdx !== -1 ? timePart.slice(0, dotIdx) : timePart;
+  const frac = dotIdx !== -1 ? timePart.slice(dotIdx + 1) : '';
+  const baseMs = Date.parse(`${datePart}T${hms}Z`);
+  if (isNaN(baseMs)) return 0;
+  // frac is fractional seconds; take first 9 chars (nanoseconds), convert to ms
+  const fracMs = frac ? Math.round(parseInt(frac.slice(0, 9).padEnd(9, '0'), 10) / 1_000_000) : 0;
+  return baseMs + fracMs;
+}
+
+/**
+ * Maps a path relative to LOCAL_STORE_DIR to the {folder, name} pair used in browse responses.
+ *
+ * Folder layout:
+ *   <name>                            → { folder: '',                        name }
+ *   conf/<name>                       → { folder: 'conf',                    name }
+ *   dest/<name>.md                    → { folder: 'dest',                    name }
+ *   dest/<region>/<sub>/<name>        → { folder: 'dest/<region>/<sub>',     name }
+ *   rcs/<name>.md                     → { folder: 'rcs',                     name }
+ *   rcs/<region>/<sub>/<name>         → { folder: 'rcs/<region>/<sub>',      name }
+ *   users/<name>.md                   → { folder: 'users',                   name }
+ *   users/<region>/<sub>/<org>/<name> → { folder: 'users/<region>/<sub>',    '<org>/<name>' }
+ *   resp/<service>/<name>             → { folder: '<service>',               name }
+ */
+function pathToFolderEntry(relPath: string): { folder: string; name: string } | null {
+  const s1 = relPath.indexOf('/');
+  if (s1 === -1) return { folder: '', name: relPath };
+
+  const first = relPath.slice(0, s1);
+  const rest  = relPath.slice(s1 + 1);
+
+  if (first === 'conf') {
+    return rest.includes('/') ? null : { folder: 'conf', name: rest };
+  }
+
+  if (first === 'dest' || first === 'rcs') {
+    const s2 = rest.indexOf('/');
+    if (s2 === -1) return rest.endsWith('.md') ? { folder: first, name: rest } : null;
+    const region = rest.slice(0, s2);
+    const after2 = rest.slice(s2 + 1);
+    const s3 = after2.indexOf('/');
+    if (s3 === -1) return null;
+    const sub  = after2.slice(0, s3);
+    const name = after2.slice(s3 + 1);
+    return name && !name.includes('/') ? { folder: `${first}/${region}/${sub}`, name } : null;
+  }
+
+  if (first === 'users') {
+    const s2 = rest.indexOf('/');
+    if (s2 === -1) return rest.endsWith('.md') ? { folder: 'users', name: rest } : null;
+    const region = rest.slice(0, s2);
+    const after2 = rest.slice(s2 + 1);
+    const s3 = after2.indexOf('/');
+    if (s3 === -1) return null;
+    const sub    = after2.slice(0, s3);
+    const after3 = after2.slice(s3 + 1);
+    const s4 = after3.indexOf('/');
+    if (s4 === -1) return null;
+    const origin = after3.slice(0, s4);
+    const name   = after3.slice(s4 + 1);
+    return name ? { folder: `users/${region}/${sub}`, name: `${origin}/${name}` } : null;
+  }
+
+  if (first === 'resp') {
+    const s2 = rest.indexOf('/');
+    if (s2 === -1) return null;
+    const service = rest.slice(0, s2);
+    const name    = rest.slice(s2 + 1);
+    return name && !name.includes('/') ? { folder: service, name } : null;
+  }
+
+  return null;
+}
+
 /**
  * Lists all local files for sync. Service files live in `resp/{folder}/`; conf files in `conf/`;
  * dest files in `dest/{region}/{subdomain}/`; root-level files live directly in LOCAL_STORE_DIR.
  * Returns `{ [folder]: BrowseFile[] }` where folder `""` holds root files.
  * When `since` is provided, only files whose mtime >= since are returned.
+ *
+ * Uses `find -newermt` for the delta case so the OS filters by mtime without Node.js stat-ing
+ * every file. For the full-scan case the same `find` approach lists all files with their mtimes.
  */
 export async function browseResponseFiles(since?: number): Promise<Record<string, BrowseFile[]>> {
-  const result: Record<string, BrowseFile[]> = {};
   const storeDir = config.LOCAL_STORE_DIR;
+  const result: Record<string, BrowseFile[]> = {};
 
+  const args: string[] = ['.', '-type', 'f'];
+  if (since && since > 0) {
+    const d = new Date(since);
+    const p = (n: number) => String(n).padStart(2, '0');
+    const dateStr = `${d.getUTCFullYear()}-${p(d.getUTCMonth() + 1)}-${p(d.getUTCDate())} ` +
+                    `${p(d.getUTCHours())}:${p(d.getUTCMinutes())}:${p(d.getUTCSeconds())}`;
+    args.push('-newermt', dateStr);
+  }
+  args.push('-printf', '%T+ %p\n');
+
+  let rawOut: string | Buffer;
   try {
-    // Root-level files directly in LOCAL_STORE_DIR
-    const rootEntries = await readdir(storeDir, { withFileTypes: true });
-    const rootFiles: BrowseFile[] = [];
-    for (const e of rootEntries) {
-      if (!e.isFile()) continue;
-      try {
-        const info = await stat(join(storeDir, e.name));
-        const rawMtime = info.mtimeMs;
-        if (!since || since <= 0 || rawMtime >= since) {
-          rootFiles.push({ name: e.name, mtime: rawMtime });
-        }
-      } catch { /* skip */ }
-    }
-    if (rootFiles.length > 0) {
-      rootFiles.sort((a, b) => a.name.localeCompare(b.name));
-      result[''] = rootFiles;
-    }
+    ({ stdout: rawOut } = await execFile('find', args, {
+      cwd: storeDir,
+      env: { ...process.env, TZ: 'UTC' },
+      maxBuffer: 50 * 1024 * 1024,
+    }));
   } catch {
-    // LOCAL_STORE_DIR doesn't exist yet
+    return result; // LOCAL_STORE_DIR doesn't exist yet or find failed
   }
 
-  try {
-    // conf/ directory — flat; files synced to consumers alongside root and resp/ files
-    const configDir = join(storeDir, 'conf');
-    const configEntries = await readdir(configDir, { withFileTypes: true });
-    const configFiles: BrowseFile[] = [];
-    for (const e of configEntries) {
-      if (!e.isFile()) continue;
-      try {
-        const info = await stat(join(configDir, e.name));
-        const rawMtime = info.mtimeMs;
-        if (!since || since <= 0 || rawMtime >= since) {
-          configFiles.push({ name: e.name, mtime: rawMtime });
-        }
-      } catch { /* skip */ }
-    }
-    if (configFiles.length > 0) {
-      configFiles.sort((a, b) => a.name.localeCompare(b.name));
-      result['conf'] = configFiles;
-    }
-  } catch {
-    // conf/ doesn't exist yet
+  for (const line of String(rawOut).split('\n')) {
+    if (!line) continue;
+    const spaceIdx = line.indexOf(' ');
+    if (spaceIdx === -1) continue;
+    const mtime   = parseFindTimestamp(line.slice(0, spaceIdx));
+    const rawPath = line.slice(spaceIdx + 1);
+    const relPath = rawPath.startsWith('./') ? rawPath.slice(2) : rawPath;
+    if (!relPath) continue;
+    const entry = pathToFolderEntry(relPath);
+    if (!entry) continue;
+    (result[entry.folder] ??= []).push({ name: entry.name, mtime });
   }
 
-  try {
-    // dest/{region}/{subdomain}/ — returned as folder keys "dest/{region}/{subdomain}"
-    // Also includes root-level .md files (changelog, archives) under folder key "dest"
-    const destBase = join(storeDir, 'dest');
-    const destRegions = await readdir(destBase, { withFileTypes: true });
-
-    // Root-level .md files in dest/ (changelog.md, changelog.*.md)
-    const destRootFiles: BrowseFile[] = [];
-    for (const e of destRegions) {
-      if (!e.isFile() || !e.name.endsWith('.md')) continue;
-      try {
-        const info = await stat(join(destBase, e.name));
-        if (!since || since <= 0 || info.mtimeMs >= since) {
-          destRootFiles.push({ name: e.name, mtime: info.mtimeMs });
-        }
-      } catch { /* skip */ }
-    }
-    if (destRootFiles.length > 0) {
-      destRootFiles.sort((a, b) => a.name.localeCompare(b.name));
-      result['dest'] = destRootFiles;
-    }
-
-    await Promise.all(
-      destRegions.filter(e => e.isDirectory()).map(async (regionEntry) => {
-        try {
-          const regionPath = join(destBase, regionEntry.name);
-          const subEntries = await readdir(regionPath, { withFileTypes: true });
-          await Promise.all(
-            subEntries.filter(e => e.isDirectory()).map(async (subEntry) => {
-              const folderKey = `dest/${regionEntry.name}/${subEntry.name}`;
-              try {
-                const subPath = join(regionPath, subEntry.name);
-                const files = await readdir(subPath);
-                const withMtime = await Promise.all(
-                  files.map(async (name) => {
-                    try {
-                      const info = await stat(join(subPath, name));
-                      return { name, rawMtime: info.mtimeMs };
-                    } catch { return { name, rawMtime: 0 }; }
-                  }),
-                );
-                result[folderKey] = withMtime
-                  .filter(f => !since || since <= 0 || f.rawMtime === 0 || f.rawMtime >= since)
-                  .map(({ name, rawMtime }) => ({ name, mtime: rawMtime === 0 ? 0 : rawMtime }));
-                result[folderKey].sort((a, b) => a.name.localeCompare(b.name));
-              } catch { result[folderKey] = []; }
-            }),
-          );
-        } catch { /* region dir unreadable */ }
-      }),
-    );
-  } catch {
-    // dest/ doesn't exist yet
-  }
-
-  try {
-    // rcs/{region}/{subdomain}/ — returned as folder keys "rcs/{region}/{subdomain}"
-    // Also includes root-level .md files (changelog, archives) under folder key "rcs"
-    const rcsBase = join(storeDir, 'rcs');
-    const rcsRegions = await readdir(rcsBase, { withFileTypes: true });
-
-    // Root-level .md files in rcs/ (changelog.md, changelog.*.md)
-    const rcsRootFiles: BrowseFile[] = [];
-    for (const e of rcsRegions) {
-      if (!e.isFile() || !e.name.endsWith('.md')) continue;
-      try {
-        const info = await stat(join(rcsBase, e.name));
-        if (!since || since <= 0 || info.mtimeMs >= since) {
-          rcsRootFiles.push({ name: e.name, mtime: info.mtimeMs });
-        }
-      } catch { /* skip */ }
-    }
-    if (rcsRootFiles.length > 0) {
-      rcsRootFiles.sort((a, b) => a.name.localeCompare(b.name));
-      result['rcs'] = rcsRootFiles;
-    }
-
-    await Promise.all(
-      rcsRegions.filter(e => e.isDirectory()).map(async (regionEntry) => {
-        try {
-          const regionPath = join(rcsBase, regionEntry.name);
-          const subEntries = await readdir(regionPath, { withFileTypes: true });
-          await Promise.all(
-            subEntries.filter(e => e.isDirectory()).map(async (subEntry) => {
-              const folderKey = `rcs/${regionEntry.name}/${subEntry.name}`;
-              try {
-                const subPath = join(regionPath, subEntry.name);
-                const files = await readdir(subPath);
-                const withMtime = await Promise.all(
-                  files.map(async (name) => {
-                    try {
-                      const info = await stat(join(subPath, name));
-                      return { name, rawMtime: info.mtimeMs };
-                    } catch { return { name, rawMtime: 0 }; }
-                  }),
-                );
-                result[folderKey] = withMtime
-                  .filter(f => !since || since <= 0 || f.rawMtime === 0 || f.rawMtime >= since)
-                  .map(({ name, rawMtime }) => ({ name, mtime: rawMtime === 0 ? 0 : rawMtime }));
-                result[folderKey].sort((a, b) => a.name.localeCompare(b.name));
-              } catch { result[folderKey] = []; }
-            }),
-          );
-        } catch { /* region dir unreadable */ }
-      }),
-    );
-  } catch {
-    // rcs/ doesn't exist yet
-  }
-
-  try {
-    // users/{region}/{subdomain}/ — returned as folder keys "users/{region}/{subdomain}"
-    // Also includes root-level .md files (changelog, archives) under folder key "users"
-    const usersBase = join(storeDir, 'users');
-    const usersRegions = await readdir(usersBase, { withFileTypes: true });
-
-    const usersRootFiles: BrowseFile[] = [];
-    for (const e of usersRegions) {
-      if (!e.isFile() || !e.name.endsWith('.md')) continue;
-      try {
-        const info = await stat(join(usersBase, e.name));
-        if (!since || since <= 0 || info.mtimeMs >= since) {
-          usersRootFiles.push({ name: e.name, mtime: info.mtimeMs });
-        }
-      } catch { /* skip */ }
-    }
-    if (usersRootFiles.length > 0) {
-      usersRootFiles.sort((a, b) => a.name.localeCompare(b.name));
-      result['users'] = usersRootFiles;
-    }
-
-    await Promise.all(
-      usersRegions.filter(e => e.isDirectory()).map(async (regionEntry) => {
-        try {
-          const regionPath = join(usersBase, regionEntry.name);
-          const subEntries = await readdir(regionPath, { withFileTypes: true });
-          await Promise.all(
-            subEntries.filter(e => e.isDirectory()).map(async (subEntry) => {
-              const folderKey = `users/${regionEntry.name}/${subEntry.name}`;
-              try {
-                const subPath = join(regionPath, subEntry.name);
-                const originEntries = await readdir(subPath, { withFileTypes: true });
-                // Each origin is a subdirectory; list files within as "{origin}/{file}"
-                const collected: { name: string; rawMtime: number }[] = [];
-                await Promise.all(
-                  originEntries.filter(e => e.isDirectory()).map(async (originEntry) => {
-                    const originPath = join(subPath, originEntry.name);
-                    try {
-                      const originFiles = await readdir(originPath);
-                      await Promise.all(originFiles.map(async (fname) => {
-                        try {
-                          const info = await stat(join(originPath, fname));
-                          collected.push({ name: `${originEntry.name}/${fname}`, rawMtime: info.mtimeMs });
-                        } catch { collected.push({ name: `${originEntry.name}/${fname}`, rawMtime: 0 }); }
-                      }));
-                    } catch { /* origin dir unreadable */ }
-                  }),
-                );
-                result[folderKey] = collected
-                  .filter(f => !since || since <= 0 || f.rawMtime === 0 || f.rawMtime >= since)
-                  .map(({ name, rawMtime }) => ({ name, mtime: rawMtime === 0 ? 0 : rawMtime }));
-                result[folderKey].sort((a, b) => a.name.localeCompare(b.name));
-              } catch { result[folderKey] = []; }
-            }),
-          );
-        } catch { /* region dir unreadable */ }
-      }),
-    );
-  } catch {
-    // users/ doesn't exist yet
-  }
-
-  try {
-    // Service response files under resp/{service}/
-    const respBase = join(storeDir, 'resp');
-    const entries = await readdir(respBase, { withFileTypes: true });
-    await Promise.all(
-      entries
-        .filter(e => e.isDirectory())
-        .map(async (dirEntry) => {
-          try {
-            const names = await readdir(join(respBase, dirEntry.name));
-            const withRawMtime = await Promise.all(
-              names.map(async (name) => {
-                try {
-                  const info = await stat(join(respBase, dirEntry.name, name));
-                  return { name, rawMtime: info.mtimeMs };
-                } catch {
-                  return { name, rawMtime: 0 };
-                }
-              }),
-            );
-            result[dirEntry.name] = withRawMtime
-              .filter(f => !since || since <= 0 || f.rawMtime === 0 || f.rawMtime >= since)
-              .map(({ name, rawMtime }) => ({
-                name,
-                mtime: rawMtime === 0 ? 0 : rawMtime,
-              }));
-            result[dirEntry.name].sort((a, b) => a.name.localeCompare(b.name));
-          } catch {
-            result[dirEntry.name] = [];
-          }
-        }),
-    );
-  } catch {
-    // resp/ subdirectory doesn't exist yet
+  for (const files of Object.values(result)) {
+    files.sort((a, b) => a.name.localeCompare(b.name));
   }
 
   return result;
