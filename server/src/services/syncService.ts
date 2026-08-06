@@ -2,12 +2,12 @@ import { get as httpGet, request as httpRequest } from 'node:http';
 import { get as httpsGet, request as httpsRequest } from 'node:https';
 import { gunzip } from 'node:zlib';
 import { promisify } from 'node:util';
-import { mkdir, writeFile, utimes } from 'node:fs/promises';
+import { mkdir, writeFile, utimes, stat } from 'node:fs/promises';
 import { join, resolve as resolvePath } from 'node:path';
 import { createHmac } from 'node:crypto';
 import { config } from '../config.js';
 import { logger } from '../logger.js';
-import { browseResponseFiles, resolveSyncDuplicates, sanitizeName, formatBrowseT, parseBrowseT } from './localStoreService.js';
+import { resolveSyncDuplicates, sanitizeName, formatBrowseT } from './localStoreService.js';
 import type { BrowseFile } from './localStoreService.js';
 import { extractZip } from './zipBuilder.js';
 import { getSyncKey, getAllServices } from './configService.js';
@@ -318,6 +318,17 @@ function syncKeyHeader(): Record<string, string> {
 }
 
 
+/** Resolve a flat sync path (e.g. "dest/eu10/sub/f.json" or "MySvc/status.json") to an absolute local path. */
+function resolveLocalPath(flatPath: string): string {
+  const slash = flatPath.indexOf('/');
+  if (slash === -1) return join(config.LOCAL_STORE_DIR, flatPath);
+  const first = flatPath.slice(0, slash);
+  if (first === 'conf' || first === 'dest' || first === 'rcs' || first === 'users') {
+    return join(config.LOCAL_STORE_DIR, flatPath);
+  }
+  return join(config.LOCAL_STORE_DIR, 'resp', flatPath);
+}
+
 async function downloadBatch(
   remoteBase: string,
   filePaths: string[],
@@ -326,6 +337,8 @@ async function downloadBatch(
   const url = `${remoteBase}/api/sync/batch`;
   const t0 = Date.now();
   const { buf: zip, transferred } = await fetchPost(url, JSON.stringify({ paths: filePaths }), syncKeyHeader());
+  const t0Write = Date.now();
+  logger.debug({ url, requested: filePaths.length, durationMs: t0Write - t0 }, 'Sync batch HTTP complete');
   const entries = extractZip(zip);
 
   const safeBase = resolvePath(config.LOCAL_STORE_DIR);
@@ -404,7 +417,7 @@ async function downloadBatch(
   );
 
   const decompressed = entries.reduce((sum, e) => sum + e.data.length, 0);
-  logger.debug({ files: entries.length, durationMs: Date.now() - t0 }, 'Batch download chunk complete');
+  logger.debug({ files: entries.length, writeMs: Date.now() - t0Write, totalMs: Date.now() - t0 }, 'Batch download chunk complete');
   return { transferred, decompressed };
 }
 
@@ -482,9 +495,6 @@ async function executeSync(
   logger.info({ remote: remoteBase, since: since ?? 'full', hasCallback: !!callbackUrl }, 'Sync starting');
   const start = Date.now();
 
-  // Parse since string to ms once for local FS comparison (avoids repeated parsing)
-  const sinceMs = since ? parseBrowseT(since) : undefined;
-
   try {
     // Build browse URL
     const browseParams = new URLSearchParams();
@@ -493,6 +503,7 @@ async function executeSync(
     const browseQs = browseParams.toString();
     const browseUrl = browseQs ? `${remoteBase}/api/sync/browse?${browseQs}` : `${remoteBase}/api/sync/browse`;
 
+    const t0Browse = Date.now();
     const { buf: browseBuf, headers: browseHeaders } = await fetchRaw(browseUrl, syncKeyHeader());
     let rawBrowse: {
       folders: Record<string, (string | BrowseFile)[]>;
@@ -518,32 +529,47 @@ async function executeSync(
       folders[folder] = items.map(item => (typeof item === 'string' ? { name: item, mtime: 0 } : item));
     }
 
-    // Compare with LOCAL files modified since the same cutoff.
-    // For delta syncs this skips stat-ing files that predate `since`, cutting
-    // comparison time from O(all local files) to O(recently changed local files).
-    const localFolders = await browseResponseFiles(sinceMs);
+    const remoteFileCount = Object.values(folders).reduce((s, fs) => s + fs.length, 0);
+    logger.debug({ url: browseUrl, durationMs: Date.now() - t0Browse, files: remoteFileCount }, 'Sync browse HTTP complete');
 
     const fp = (folder: string, name: string) => folder ? `${folder}/${name}` : name;
 
+    // Build flat list of remote-reported files and their mtimes
     const remoteMtimes = new Map<string, number>();
+    const allRemotePaths: string[] = [];
     for (const [folder, files] of Object.entries(folders)) {
-      for (const f of files) remoteMtimes.set(fp(folder, f.name), f.mtime);
-    }
-
-    const missing: string[] = [];
-    for (const [folder, files] of Object.entries(folders)) {
-      const localMtimes = new Map((localFolders[folder] ?? []).map(f => [f.name, f.mtime]));
       for (const f of files) {
-        const localMtime = localMtimes.get(f.name);
-        // localMtime undefined means either missing or older than sinceMs — both need download.
-        // Round both sides to second precision: remote returns precise ms but local filesystems
-        // on some VMs store mtime at 1-second granularity, so utimes(remote_ms) reads back as
-        // floor(remote_ms/1000)*1000 locally. Comparing at second precision avoids re-downloading
-        // unchanged files while still catching genuine updates (different second).
-        if (localMtime !== undefined && (!f.mtime || Math.round(localMtime / 1000) >= Math.round(f.mtime / 1000))) continue;
-        missing.push(fp(folder, f.name));
+        const flatPath = fp(folder, f.name);
+        remoteMtimes.set(flatPath, f.mtime);
+        allRemotePaths.push(flatPath);
       }
     }
+
+    // Stat only the specific files the remote reported — O(remote files) not O(all local files).
+    // For delta syncs with no remote changes this is 0 stat calls, cutting ~6 s to ~0 s.
+    const t0Stat = Date.now();
+    const localMtimes = new Map<string, number>();
+    await Promise.all(allRemotePaths.map(async (flatPath) => {
+      try {
+        const info = await stat(resolveLocalPath(flatPath));
+        localMtimes.set(flatPath, info.mtimeMs);
+      } catch { /* file absent locally */ }
+    }));
+    logger.debug({ remoteFiles: allRemotePaths.length, localFound: localMtimes.size, durationMs: Date.now() - t0Stat }, 'Local stat complete');
+
+    const missing: string[] = [];
+    for (const flatPath of allRemotePaths) {
+      const remoteMtime = remoteMtimes.get(flatPath)!;
+      const localMtime  = localMtimes.get(flatPath);
+      // localMtime undefined means file is absent locally — always download.
+      // Round both sides to second precision: remote returns precise ms but local filesystems
+      // on some VMs store mtime at 1-second granularity, so utimes(remote_ms) reads back as
+      // floor(remote_ms/1000)*1000 locally. Comparing at second precision avoids re-downloading
+      // unchanged files while still catching genuine updates (different second).
+      if (localMtime !== undefined && (!remoteMtime || Math.round(localMtime / 1000) >= Math.round(remoteMtime / 1000))) continue;
+      missing.push(flatPath);
+    }
+    logger.debug({ remoteFiles: allRemotePaths.length, localFound: localMtimes.size, missing: missing.length }, 'Remote/local comparison complete');
 
     logger.info({ total: missing.length }, 'Files to sync from remote');
 
@@ -571,7 +597,7 @@ async function executeSync(
         totalTransferred += r.transferred; totalDecompressed += r.decompressed;
       }
       if (textFiles.length > 0) {
-        const textBatch = batchSize * 5;
+        const textBatch = batchSize * 10;
         logger.debug({ count: textFiles.length, batchSize: textBatch }, 'Initial sync: downloading text files');
         const r = await runBatches(remoteBase, textFiles, textBatch, remoteMtimes);
         totalTransferred += r.transferred; totalDecompressed += r.decompressed;
