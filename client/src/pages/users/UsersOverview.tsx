@@ -118,7 +118,7 @@ export default function UsersOverview() {
   const [showRefreshDialog,      setShowRefreshDialog]      = useState(false);
   const [showForceRefreshDialog, setShowForceRefreshDialog] = useState(false);
   const [overviewSearch,         setOverviewSearch]         = useState('');
-  const [searchResults,          setSearchResults]          = useState<Record<string, string[]> | null>(null);
+  const [searchResults,          setSearchResults]          = useState<Record<string, { users: UserSummary[]; total: number }> | null>(null);
   const [searchLoading,          setSearchLoading]          = useState(false);
   const [committedSearch,        setCommittedSearch]        = useState('');
 
@@ -277,7 +277,7 @@ export default function UsersOverview() {
     setSearchLoading(true);
     try {
       const r = await fetch(`/api/users/search?q=${encodeURIComponent(q)}`);
-      const j = await r.json() as { ok: boolean; matches: Record<string, string[]> };
+      const j = await r.json() as { ok: boolean; matches: Record<string, { users: UserSummary[]; total: number }> };
       if (j.ok) { setSearchResults(j.matches); setCommittedSearch(q); }
     } catch { /* ignore */ } finally {
       setSearchLoading(false);
@@ -296,7 +296,7 @@ export default function UsersOverview() {
   const searchActive = !!searchResults && !!committedSearch;
 
   const totalSearchMatches = searchActive
-    ? Object.values(searchResults).reduce((acc, v) => acc + v.length, 0)
+    ? Object.values(searchResults).reduce((acc, v) => acc + v.total, 0)
     : 0;
 
   const tabsWithMatchesSet: Set<string> | null = searchActive
@@ -305,7 +305,7 @@ export default function UsersOverview() {
           .filter((s): s is Extract<TabSection, { type: 'subaccountGroup' }> => s.type === 'subaccountGroup')
           .some(grp => allUserSas
             .filter(sa => csvIncludes(sa.groupIds, grp.groupId))
-            .some(sa => (searchResults[`${sa.region}/${sa.subdomain}`]?.length ?? 0) > 0),
+            .some(sa => (searchResults[`${sa.region}/${sa.subdomain}`]?.total ?? 0) > 0),
           ),
         )
         .map(te => te.tab))
@@ -548,9 +548,9 @@ export default function UsersOverview() {
               const saBuckets = visibleSas.map(sa => {
                 const key      = `${sa.region}/${sa.subdomain}`;
                 const bucket   = userData[key] ?? { users: [], total: 0 };
-                const matchSet = searchResults ? new Set(searchResults[key] ?? []) : null;
-                const users    = matchSet ? bucket.users.filter(u => matchSet.has(u.email)) : bucket.users;
-                const matchCount = matchSet ? (searchResults![key]?.length ?? 0) : bucket.total;
+                const srBucket = searchResults?.[key];
+                const users    = srBucket ? srBucket.users : bucket.users;
+                const matchCount = srBucket ? srBucket.total : bucket.total;
                 return { sa, users, total: bucket.total, matchCount };
               });
 
