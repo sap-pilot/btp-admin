@@ -81,7 +81,7 @@ export default function AppSidebar() {
   const location  = useLocation();
   const auth      = useAuth();
   const { theme, toggleTheme } = useTheme();
-  const { collapsed }          = useSidebar();
+  const { collapsed, toggle }  = useSidebar();
   const { settings }           = useSettings();
   const [userSettingsOpen,    setUserSettingsOpen]    = useState(false);
   const [userSettingsSection, setUserSettingsSection] = useState<'account' | 'themes'>('themes');
@@ -147,7 +147,9 @@ export default function AppSidebar() {
     <aside className={`${w} ${border} shrink-0 flex flex-col border-sidebar-border bg-sidebar transition-[width] duration-200 overflow-hidden`}>
       {/* Header */}
       <div className={`flex items-center border-b border-sidebar-border min-h-[52px] ${collapsed ? 'justify-center' : 'pl-2 pr-3 gap-2'}`}>
-        <img src="/images/favicon-32x32.png?lastModified=20260729" alt="" className="h-8 w-8 shrink-0" />
+        <button onClick={toggle} className="h-8 w-8 shrink-0 rounded hover:opacity-70 transition-opacity" title="Toggle sidebar">
+          <img src="/images/favicon-32x32.png?lastModified=20260729" alt="" className="h-8 w-8" />
+        </button>
         {!collapsed && (
           <div className="flex flex-col min-w-0 flex-1">
             <div className="flex items-center gap-1">
