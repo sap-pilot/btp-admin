@@ -696,10 +696,10 @@ export async function getUserGlobalAccess(origin: string, email: string): Promis
 
 // ─── Full-text search ─────────────────────────────────────────────────────────
 
-export async function searchUsers(q: string): Promise<{ matches: Record<string, string[]> }> {
+export async function searchUsers(q: string): Promise<{ matches: Record<string, { users: UserSummary[]; total: number }> }> {
   if (!q || q.trim().length < 2) return { matches: {} };
   const low     = q.trim().toLowerCase();
-  const matches: Record<string, string[]> = {};
+  const matches: Record<string, { users: UserSummary[]; total: number }> = {};
 
   const sas = (await readSubaccounts()).filter(sa => sa.manageRoles && !sa.restricted);
   await Promise.all(sas.map(async sa => {
@@ -707,7 +707,7 @@ export async function searchUsers(q: string): Promise<{ matches: Record<string, 
     const userDir = join(LOCAL_USERS_DIR, sa.region, sa.subdomain);
     try {
       const entries = await readdir(userDir, { withFileTypes: true });
-      const found: string[] = [];
+      const found: UserSummary[] = [];
 
       // New format: origin subdirectories
       await Promise.all(entries.filter(e => e.isDirectory()).map(async d => {
@@ -716,7 +716,9 @@ export async function searchUsers(q: string): Promise<{ matches: Record<string, 
         await Promise.all(files.map(async f => {
           try {
             const text = await readFile(join(oDir, f), 'utf-8');
-            if (text.toLowerCase().includes(low)) found.push(f.replace(/\.json$/, ''));
+            if (!text.toLowerCase().includes(low)) return;
+            const u = JSON.parse(text) as XsuaaUser;
+            found.push({ id: u.id, userName: u.userName, email: userEmail(u), origin: u.origin, lastLogonTime: u.lastLogonTime, active: u.active });
           } catch { /* skip */ }
         }));
       }));
@@ -725,15 +727,19 @@ export async function searchUsers(q: string): Promise<{ matches: Record<string, 
       await Promise.all(entries.filter(e => !e.isDirectory() && /^[a-f0-9-]{36}\.json$/.test(e.name)).map(async e => {
         try {
           const text = await readFile(join(userDir, e.name), 'utf-8');
-          if (text.toLowerCase().includes(low)) {
-            const u = JSON.parse(text) as XsuaaUser;
-            const em = userEmail(u);
-            if (!found.includes(em)) found.push(em);
+          if (!text.toLowerCase().includes(low)) return;
+          const u  = JSON.parse(text) as XsuaaUser;
+          const em = userEmail(u);
+          if (!found.some(f => f.email === em)) {
+            found.push({ id: u.id, userName: u.userName, email: em, origin: u.origin, lastLogonTime: u.lastLogonTime, active: u.active });
           }
         } catch { /* skip */ }
       }));
 
-      if (found.length > 0) matches[key] = found;
+      if (found.length > 0) {
+        found.sort((a, b) => (b.lastLogonTime ?? 0) - (a.lastLogonTime ?? 0));
+        matches[key] = { users: found.slice(0, 15), total: found.length };
+      }
     } catch { /* dir missing */ }
   }));
 
