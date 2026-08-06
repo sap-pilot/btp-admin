@@ -265,6 +265,46 @@ async function resolveXsuaaToken(
   }
 }
 
+// ─── XSUAA API call with 401 retry cascade ────────────────────────────────────
+
+async function withXsuaaApiRetry<T>(
+  region:     string,
+  orgId:      string,
+  orgName:    string,
+  spaceIds:   string[],
+  keyStore:   XsuaaKeyStore,
+  tokenStore: XsuaaTokenStore,
+  cfFailed:   Set<string>,
+  auth:       { token: string; credential: XsuaaCredentials },
+  call:       (token: string, credential: XsuaaCredentials) => Promise<T>,
+): Promise<T> {
+  try {
+    return await call(auth.token, auth.credential);
+  } catch (err) {
+    if (!String(err).includes('HTTP 401')) throw err;
+
+    // Retry 1: invalidate cached token, re-acquire using existing service key
+    logger.info({ region, orgId }, 'XSUAA API 401 — re-acquiring token via existing service key');
+    if (tokenStore[region]) delete tokenStore[region][orgId];
+    const auth2 = await resolveXsuaaToken(region, orgId, orgName, spaceIds, keyStore, tokenStore, cfFailed);
+    if ('error' in auth2) throw new Error(auth2.error);
+
+    try {
+      return await call(auth2.token, auth2.credential);
+    } catch (err2) {
+      if (!String(err2).includes('HTTP 401')) throw err2;
+
+      // Retry 2: also invalidate service key, re-discover via CF API
+      logger.info({ region, orgId }, 'XSUAA API 401 again — re-discovering service key via CF API');
+      if (keyStore[region]) delete keyStore[region][orgId];
+      if (tokenStore[region]) delete tokenStore[region][orgId];
+      const auth3 = await resolveXsuaaToken(region, orgId, orgName, spaceIds, keyStore, tokenStore, cfFailed);
+      if ('error' in auth3) throw new Error(auth3.error);
+      return await call(auth3.token, auth3.credential);
+    }
+  }
+}
+
 // ─── XSUAA Role Collections API ───────────────────────────────────────────────
 
 function normalizeUserRef(u: Record<string, string>): UserReference {
@@ -663,10 +703,15 @@ export async function refreshSubaccountRoleCollections(
 
   let rcs: Array<RoleCollection & { userReferences: UserReference[] }>;
   try {
-    rcs = await fetchRoleCollectionsFromApi(auth.credential.apiurl || auth.credential.url, auth.token);
+    rcs = await withXsuaaApiRetry(region, orgId, orgName, spaceIds, keyStore, tokenStore, cfFailed, auth,
+      (tok, cred) => fetchRoleCollectionsFromApi(cred.apiurl || cred.url, tok));
   } catch (err) {
+    void saveXsuaaKeyStore(keyStore).catch(() => {});
+    void saveXsuaaTokenStore(tokenStore).catch(() => {});
     return { received: 0, created: 0, updated: 0, deleted: 0, errors: [String(err)] };
   }
+  await saveXsuaaKeyStore(keyStore);
+  await saveXsuaaTokenStore(tokenStore);
 
   const errors:  string[]  = [];
   const changes: RcChange[] = [];
@@ -763,7 +808,8 @@ export async function refreshRoleCollections(
 
       let rcs: Array<RoleCollection & { userReferences: UserReference[] }>;
       try {
-        rcs = await fetchRoleCollectionsFromApi(auth.credential.apiurl || auth.credential.url, auth.token);
+        rcs = await withXsuaaApiRetry(sa.region, sa.org.orgId, sa.org.orgName, saSpaceIds, keyStore, tokenStore, cfFailed, auth,
+          (tok, cred) => fetchRoleCollectionsFromApi(cred.apiurl || cred.url, tok));
       } catch (err) {
         issues.push(`${loc}: ${String(err)}`);
         continue;
@@ -922,13 +968,16 @@ export async function addUserToRc(
   const keyStore   = await loadXsuaaKeyStore();
   const tokenStore = await loadXsuaaTokenStore();
   const saSpaceIds = sa.org?.spaces?.map(s => s.spaceId) ?? [];
-  const auth = await resolveXsuaaToken(region, sa.org.orgId, sa.org.orgName, saSpaceIds, keyStore, tokenStore, new Set());
+  const cfFailed   = new Set<string>();
+  const auth = await resolveXsuaaToken(region, sa.org.orgId, sa.org.orgName, saSpaceIds, keyStore, tokenStore, cfFailed);
   await saveXsuaaKeyStore(keyStore);
   await saveXsuaaTokenStore(tokenStore);
   if ('error' in auth) throw new Error(auth.error);
 
-  const apiUrl = auth.credential.apiurl || auth.credential.url;
-  await addUserToRoleCollection(apiUrl, auth.token, name, user);
+  await withXsuaaApiRetry(region, sa.org.orgId, sa.org.orgName, saSpaceIds, keyStore, tokenStore, cfFailed, auth,
+    (tok, cred) => addUserToRoleCollection(cred.apiurl || cred.url, tok, name, user));
+  await saveXsuaaKeyStore(keyStore);
+  await saveXsuaaTokenStore(tokenStore);
 
   // Update local users file
   const rcDir      = join(LOCAL_RC_DIR, region, subdomain);
@@ -964,16 +1013,19 @@ export async function removeUserFromRc(
   const sa  = sas.find(s => s.region === region && s.subdomain === subdomain && s.manageRoles);
   if (!sa?.org?.orgId) throw new Error(`No managed-RC subaccount for ${region}/${subdomain}`);
 
-  const keyStore   = await loadXsuaaKeyStore();
-  const tokenStore = await loadXsuaaTokenStore();
+  const keyStore    = await loadXsuaaKeyStore();
+  const tokenStore  = await loadXsuaaTokenStore();
   const saSpaceIds2 = sa.org?.spaces?.map(s => s.spaceId) ?? [];
-  const auth = await resolveXsuaaToken(region, sa.org.orgId, sa.org.orgName, saSpaceIds2, keyStore, tokenStore, new Set());
+  const cfFailed2   = new Set<string>();
+  const auth = await resolveXsuaaToken(region, sa.org.orgId, sa.org.orgName, saSpaceIds2, keyStore, tokenStore, cfFailed2);
   await saveXsuaaKeyStore(keyStore);
   await saveXsuaaTokenStore(tokenStore);
   if ('error' in auth) throw new Error(auth.error);
 
-  const apiUrl = auth.credential.apiurl || auth.credential.url;
-  await removeUserFromRoleCollection(apiUrl, auth.token, name, userId, origin);
+  await withXsuaaApiRetry(region, sa.org.orgId, sa.org.orgName, saSpaceIds2, keyStore, tokenStore, cfFailed2, auth,
+    (tok, cred) => removeUserFromRoleCollection(cred.apiurl || cred.url, tok, name, userId, origin));
+  await saveXsuaaKeyStore(keyStore);
+  await saveXsuaaTokenStore(tokenStore);
 
   // Update local users file
   const rcDir     = join(LOCAL_RC_DIR, region, subdomain);
