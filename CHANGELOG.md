@@ -31,9 +31,6 @@
 - **Destination overview table: per-SA packed rows** — generic and cep category rows now fill from the top row down per subaccount (same as s4), instead of aligning by shared destination name across all subaccounts; eliminates spurious empty cells caused by name mismatches
 - **SubaccountDetailModal: spaces table** — "Dest" column header renamed to "Manage Dest"
 
-### Changed
-- **Experimental Features flag** — Destinations, Role Collections, and Users sidebar items are hidden by default; users enable them via a toggle in **User Settings → User Account → Features → Experimental Features**; the flag is stored in `localStorage` (`btp-admin:experimental`), is per-browser, persists across sessions, and is independent of login state
-
 ## [v1.4.0] - unreleased
 
 ### Added
