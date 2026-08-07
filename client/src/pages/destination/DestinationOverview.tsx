@@ -836,16 +836,16 @@ export default function DestinationOverview() {
                             {(['generic', 's4', 'cep'] as const).map(cat => {
                               const { label, pattern } = CAT_META[cat];
 
-                              if (cat === 's4') {
+                              if (cat === 's4' || cat === 'generic' || cat === 'cep') {
                                 const sortedPerSa = saBuckets.map(b => ({
                                   sa:       b.sa,
-                                  names:    [...b.buckets.s4].sort(),
+                                  names:    [...b.buckets[cat]].sort(),
                                   allDests: b.allDests,
                                 }));
                                 const maxRows = Math.max(0, ...sortedPerSa.map(b => b.names.length));
                                 if (maxRows === 0) return null;
                                 return Array.from({ length: maxRows }, (_, i) => (
-                                  <tr key={`s4-${i}`} className="hover:bg-muted/20">
+                                  <tr key={`${cat}-${i}`} className="hover:bg-muted/20">
                                     {i === 0 && (
                                       <td rowSpan={maxRows} className={catTdCls}>
                                         <div className="flex flex-col gap-0.5">
@@ -875,32 +875,6 @@ export default function DestinationOverview() {
                                   </tr>
                                 ));
                               }
-
-                              const allNames = [...new Set(saBuckets.flatMap(b => [...b.buckets[cat]]))].sort();
-                              if (allNames.length === 0) return null;
-                              return allNames.map((name, i) => (
-                                <tr key={`${cat}-${name}`} className="hover:bg-muted/20">
-                                  {i === 0 && (
-                                    <td rowSpan={allNames.length} className={catTdCls}>
-                                      <div className="flex flex-col gap-0.5">
-                                        <span className="font-semibold">{label}</span>
-                                        <span className="text-[10px] text-muted-foreground/60">{pattern}</span>
-                                      </div>
-                                    </td>
-                                  )}
-                                  {saBuckets.map(({ sa, buckets, allDests }) => {
-                                    const present = buckets[cat].includes(name);
-                                    return (
-                                      <td key={sa.subaccountId} className={`${tdCls} text-left`}>
-                                        {present
-                                          ? <button className="text-foreground font-mono text-[11px] hover:underline text-left" onClick={() => setModal({ sa, allNames: allDests.map(d => d.name).sort(), initialName: name, initialShowList: false })}><Highlight text={name} query={activeFilter} /></button>
-                                          : <span className="text-muted-foreground/30 text-[11px]">—</span>
-                                        }
-                                      </td>
-                                    );
-                                  })}
-                                </tr>
-                              ));
                             })}
 
                             {/* OTHERS row */}

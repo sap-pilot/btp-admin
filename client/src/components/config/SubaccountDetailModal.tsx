@@ -317,7 +317,7 @@ export default function SubaccountDetailModal({ sa, onClose, cockpit, cockpitMen
                               <tr className="bg-muted/30">
                                 <th className={thCls}>Space Name</th>
                                 <th className={`${thCls} font-mono`}>Space ID</th>
-                                {canManageSpaces && <th className={`${thCls} text-center`}>Dest</th>}
+                                {canManageSpaces && <th className={`${thCls} text-center`}>Manage Dest</th>}
                               </tr>
                             </thead>
                             <tbody>
