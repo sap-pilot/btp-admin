@@ -1,9 +1,8 @@
 import { useEffect, useState } from 'react';
-import { Check, FlaskConical } from 'lucide-react';
+import { Check } from 'lucide-react';
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog';
 import { useAuth } from '@/hooks/useAuth';
 import { useTheme } from '@/hooks/useTheme';
-import { useExperimentalFeatures } from '@/hooks/useExperimentalFeatures';
 import { BASE_THEMES, ACCENT_THEMES } from '@/lib/themes';
 
 type Section = 'account' | 'themes';
@@ -68,82 +67,54 @@ export default function UserSettingsModal({ open, onClose, initialSection = 'the
 
 function AccountSection() {
   const auth = useAuth();
-  const { experimentalFeatures, setExperimentalFeatures } = useExperimentalFeatures();
+
+  if (!auth.enabled) {
+    return (
+      <div className="px-6 py-8">
+        <p className="text-sm text-muted-foreground">Authentication is not enabled on this instance.</p>
+      </div>
+    );
+  }
+
+  if (!auth.loggedIn) {
+    return (
+      <div className="px-6 py-8">
+        <p className="text-sm text-muted-foreground">You are not logged in.</p>
+      </div>
+    );
+  }
 
   return (
     <div className="px-6 py-6 flex flex-col gap-6 max-w-md">
-
-      {/* User identity block — only when auth is enabled and user is logged in */}
-      {auth.enabled && auth.loggedIn && (
-        <>
-          <div className="flex items-center gap-4">
-            <div className="h-12 w-12 rounded-full bg-primary text-primary-foreground flex items-center justify-center text-lg font-bold select-none shrink-0">
-              {auth.initials || auth.firstName.slice(0, 1).toUpperCase()}
-            </div>
-            <div className="flex flex-col gap-0.5 min-w-0">
-              <span className="text-sm font-semibold truncate">{auth.firstName}</span>
-              {auth.email && <span className="text-xs text-muted-foreground truncate">{auth.email}</span>}
-              {auth.isAdmin && (
-                <span className="text-[10px] font-medium text-primary mt-0.5">Administrator</span>
-              )}
-            </div>
-          </div>
-
-          <div className="flex flex-col gap-2">
-            <div className="flex items-center gap-3 py-2 border-b border-border/50">
-              <span className="text-xs text-muted-foreground w-24 shrink-0">Name</span>
-              <span className="text-sm">{auth.firstName}</span>
-            </div>
-            {auth.email && (
-              <div className="flex items-center gap-3 py-2 border-b border-border/50">
-                <span className="text-xs text-muted-foreground w-24 shrink-0">Email</span>
-                <span className="text-sm truncate">{auth.email}</span>
-              </div>
-            )}
-            <div className="flex items-center gap-3 py-2 border-b border-border/50">
-              <span className="text-xs text-muted-foreground w-24 shrink-0">Role</span>
-              <span className="text-sm">{auth.isAdmin ? 'Administrator' : 'Viewer'}</span>
-            </div>
-          </div>
-        </>
-      )}
-
-      {auth.enabled && !auth.loggedIn && (
-        <p className="text-sm text-muted-foreground">You are not logged in.</p>
-      )}
-
-      {!auth.enabled && (
-        <p className="text-sm text-muted-foreground">Authentication is not enabled on this instance.</p>
-      )}
-
-      {/* Experimental features — browser-local, always visible */}
-      <div className="flex flex-col gap-2">
-        <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Features</h3>
-        <label className="flex items-center justify-between gap-4 py-2 border-b border-border/50 cursor-pointer group">
-          <div className="flex items-center gap-2 min-w-0">
-            <FlaskConical className="h-4 w-4 shrink-0 text-muted-foreground group-hover:text-foreground transition-colors" />
-            <div className="flex flex-col gap-0.5 min-w-0">
-              <span className="text-sm">Experimental Features</span>
-              <span className="text-[11px] text-muted-foreground leading-tight">
-                Show Destinations, Role Collections and Users in the sidebar. Stored in your browser.
-              </span>
-            </div>
-          </div>
-          <button
-            role="switch"
-            aria-checked={experimentalFeatures}
-            onClick={() => setExperimentalFeatures(!experimentalFeatures)}
-            className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer items-center rounded-full border-2 border-transparent transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 ${
-              experimentalFeatures ? 'bg-primary' : 'bg-input'
-            }`}
-          >
-            <span className={`pointer-events-none block h-4 w-4 rounded-full bg-background shadow-lg ring-0 transition-transform ${
-              experimentalFeatures ? 'translate-x-4' : 'translate-x-0'
-            }`} />
-          </button>
-        </label>
+      <div className="flex items-center gap-4">
+        <div className="h-12 w-12 rounded-full bg-primary text-primary-foreground flex items-center justify-center text-lg font-bold select-none shrink-0">
+          {auth.initials || auth.firstName.slice(0, 1).toUpperCase()}
+        </div>
+        <div className="flex flex-col gap-0.5 min-w-0">
+          <span className="text-sm font-semibold truncate">{auth.firstName}</span>
+          {auth.email && <span className="text-xs text-muted-foreground truncate">{auth.email}</span>}
+          {auth.isAdmin && (
+            <span className="text-[10px] font-medium text-primary mt-0.5">Administrator</span>
+          )}
+        </div>
       </div>
 
+      <div className="flex flex-col gap-2">
+        <div className="flex items-center gap-3 py-2 border-b border-border/50">
+          <span className="text-xs text-muted-foreground w-24 shrink-0">Name</span>
+          <span className="text-sm">{auth.firstName}</span>
+        </div>
+        {auth.email && (
+          <div className="flex items-center gap-3 py-2 border-b border-border/50">
+            <span className="text-xs text-muted-foreground w-24 shrink-0">Email</span>
+            <span className="text-sm truncate">{auth.email}</span>
+          </div>
+        )}
+        <div className="flex items-center gap-3 py-2 border-b border-border/50">
+          <span className="text-xs text-muted-foreground w-24 shrink-0">Role</span>
+          <span className="text-sm">{auth.isAdmin ? 'Administrator' : 'Viewer'}</span>
+        </div>
+      </div>
     </div>
   );
 }
