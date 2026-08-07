@@ -16,6 +16,12 @@ import {
   getGlobalChangelog,
   getGlobalChangelogFile,
   searchGlobalChangelogs,
+  getSpaceInstances,
+  getInstanceDestinationNames,
+  getInstanceDestination,
+  getInstanceDestinationChangelog,
+  exportInstanceDestination,
+  saveInstanceDestinationEntry,
 } from '../services/destinationService.js';
 import { getAutoGlobalRefreshMs, getAutoSubaccountRefreshMs } from '../services/configService.js';
 
@@ -119,6 +125,73 @@ router.post('/:region/:subdomain/refresh', requireAdmin, async (req, res, next) 
 });
 
 // ── Subaccount destination names (proactive load) ────────────────────────────
+
+// ── Space/instance destination routes (must precede /:region/:subdomain) ──────
+
+router.get('/:region/:subdomain/spaces', requireAdmin, async (req, res, next) => {
+  try {
+    const { region, subdomain } = req.params as { region: string; subdomain: string };
+    if (await isSubaccountRestricted(region, subdomain)) return void res.status(403).json(RESTRICTED);
+    const data = await getSpaceInstances(region, subdomain);
+    res.json({ ok: true, data });
+  } catch (err) { next(err); }
+});
+
+router.get('/:region/:subdomain/spaces/:spaceName/instances/:instanceGuid/:name/changelog', requireAdmin, async (req, res, next) => {
+  try {
+    const { region, subdomain, spaceName, instanceGuid, name } = req.params as Record<string, string>;
+    if (await isSubaccountRestricted(region, subdomain)) return void res.status(403).json(RESTRICTED);
+    const data = await getInstanceDestinationChangelog(region, subdomain, spaceName, instanceGuid, name);
+    res.json({ ok: true, data });
+  } catch (err) { next(err); }
+});
+
+router.get('/:region/:subdomain/spaces/:spaceName/instances/:instanceGuid/:name/export', requireAdmin, async (req, res, next) => {
+  try {
+    const { region, subdomain, spaceName, instanceGuid, name } = req.params as Record<string, string>;
+    if (await isSubaccountRestricted(region, subdomain)) return void res.status(403).json(RESTRICTED);
+    const data = await exportInstanceDestination(region, subdomain, spaceName, instanceGuid, name);
+    if (!data) return void res.status(404).json({ ok: false, error: 'Not found' });
+    res.setHeader('Content-Disposition', `attachment; filename="${region}_${subdomain}_${spaceName}_${name}.json"`);
+    res.setHeader('Content-Type', 'application/json');
+    res.send(JSON.stringify(data, null, 2));
+  } catch (err) { next(err); }
+});
+
+router.get('/:region/:subdomain/spaces/:spaceName/instances/:instanceGuid/:name', requireAdmin, async (req, res, next) => {
+  try {
+    const { region, subdomain, spaceName, instanceGuid, name } = req.params as Record<string, string>;
+    if (await isSubaccountRestricted(region, subdomain)) return void res.status(403).json(RESTRICTED);
+    const result = await getInstanceDestination(region, subdomain, spaceName, instanceGuid, name);
+    if (!result) return void res.status(404).json({ ok: false, error: 'Not found' });
+    res.json({ ok: true, ...result });
+  } catch (err) { next(err); }
+});
+
+router.get('/:region/:subdomain/spaces/:spaceName/instances/:instanceGuid', requireAdmin, async (req, res, next) => {
+  try {
+    const { region, subdomain, spaceName, instanceGuid } = req.params as Record<string, string>;
+    if (await isSubaccountRestricted(region, subdomain)) return void res.status(403).json(RESTRICTED);
+    const names = await getInstanceDestinationNames(region, subdomain, spaceName, instanceGuid);
+    res.json({ ok: true, names });
+  } catch (err) { next(err); }
+});
+
+router.put('/:region/:subdomain/spaces/:spaceName/instances/:instanceGuid/:name', requireAdmin, async (req, res, next) => {
+  try {
+    const { region, subdomain, spaceName, instanceGuid, name } = req.params as Record<string, string>;
+    if (await isSubaccountRestricted(region, subdomain)) return void res.status(403).json(RESTRICTED);
+    const { data, username = 'admin' } = req.body as { data: Record<string, unknown>; username?: string };
+    const authReq      = req as AuthRequest;
+    const sessionUser  = authReq.authSession?.email || authReq.authSession?.firstName || username;
+    if (!data || typeof data !== 'object') return void res.status(400).json({ ok: false, error: 'data required' });
+    await saveInstanceDestinationEntry(region, subdomain, spaceName, instanceGuid, name, data, sessionUser);
+    res.json({ ok: true });
+  } catch (err) { next(err); }
+});
+
+// ── Subaccount destination names (proactive load) ────────────────────────────
+
 
 router.get('/:region/:subdomain', requireAdmin, async (req, res, next) => {
   try {

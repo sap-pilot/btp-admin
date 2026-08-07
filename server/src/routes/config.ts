@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { Router } from 'express';
 import { requireAuth, requireAdmin } from '../middleware/requireAuth.js';
 import type { AuthRequest } from '../middleware/requireAuth.js';
-import { readSubaccounts, refreshSubaccounts, saveSubaccounts, exportConfig, subaccountsFileExists, importSubaccounts } from '../services/subaccountsService.js';
+import { readSubaccounts, refreshSubaccounts, saveSubaccounts, saveSpaceSettings, exportConfig, subaccountsFileExists, importSubaccounts } from '../services/subaccountsService.js';
 import type { SubaccountEntry } from '../services/subaccountsService.js';
 import { readTabs, saveTabs, tabsFileExists, importTabs } from '../services/tabsService.js';
 import type { TabEntry } from '../services/tabsService.js';
@@ -32,6 +32,16 @@ router.post('/subaccounts/refresh', requireAdmin, async (req, res, next) => {
       return;
     }
     res.json({ ok: true, data: result.data, warnings: result.warnings });
+  } catch (err) { next(err); }
+});
+
+router.post('/subaccounts/:region/:subdomain/spaces', requireAdmin, async (req, res, next) => {
+  try {
+    const { region, subdomain } = req.params as { region: string; subdomain: string };
+    const { spaces } = req.body as { spaces?: { spaceId: string; manageDest: boolean }[] };
+    if (!Array.isArray(spaces)) return void res.status(400).json({ ok: false, error: 'spaces array required' });
+    const data = await saveSpaceSettings(region, subdomain, spaces, reqUser(req));
+    res.json({ ok: true, data });
   } catch (err) { next(err); }
 });
 

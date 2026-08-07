@@ -6,6 +6,7 @@ import {
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
 import { useSidebar, useSettings } from '@/components/AppLayout';
+import { useAuth } from '@/hooks/useAuth';
 import SubaccountsTable, { type SubaccountEntry, type RefreshProgress } from '@/components/config/SubaccountsTable';
 import SubaccountDetailModal from '@/components/config/SubaccountDetailModal';
 import TabsTable, { type TabEntry } from '@/components/config/TabsTable';
@@ -22,6 +23,7 @@ export default function ConfigPage() {
   const [searchParams]    = useSearchParams();
   const { toggle, collapsed } = useSidebar();
   const { refreshSettings } = useSettings();
+  const { isAdmin }       = useAuth();
   const activeTab: Tab    = VALID_TABS.has(tabParam as Tab) ? (tabParam as Tab) : 'subaccounts';
   const initialSection    = searchParams.get('section') ?? undefined;
 
@@ -301,6 +303,22 @@ export default function ConfigPage() {
     if (isSettingsDirty && !window.confirm('Discard unsaved changes?')) return;
     setSettingsData(originalSettings);
     setIsSettingsDirty(false);
+  }
+
+  async function handleSpaceSave(region: string, subdomain: string, spaces: { spaceId: string; manageDest: boolean }[]) {
+    const res = await fetch(`/api/config/subaccounts/${encodeURIComponent(region)}/${encodeURIComponent(subdomain)}/spaces`, {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ spaces }),
+    });
+    if (!res.ok) throw new Error(`Failed to save space settings: ${res.status}`);
+    const json = await res.json() as { ok: boolean; data?: SubaccountEntry };
+    if (json.data) {
+      setSasData(prev => prev.map(sa =>
+        sa.region === json.data!.region && sa.subdomain === json.data!.subdomain ? json.data! : sa,
+      ));
+      setSelectedSa(json.data);
+    }
   }
 
   async function handleSettingsSave() {
@@ -683,6 +701,8 @@ export default function ConfigPage() {
         onClose={() => setSelectedSa(null)}
         cockpit={settingsData?.homepage.cockpit}
         cockpitMenu={cockpitMenu}
+        isAdmin={isAdmin}
+        onSpaceSave={handleSpaceSave}
       />
 
       {/* Subaccounts refresh confirm dialog */}

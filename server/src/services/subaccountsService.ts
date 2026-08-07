@@ -18,8 +18,9 @@ const CONFIG_DIR        = join(config.LOCAL_STORE_DIR, 'conf');
 const SUBACCOUNTS_PATH  = join(CONFIG_DIR, 'subaccounts.json');
 
 export interface SpaceEntry {
-  spaceId:   string;
-  spaceName: string;
+  spaceId:    string;
+  spaceName:  string;
+  manageDest?: boolean;
 }
 
 export interface ServiceInstanceEntry {
@@ -377,6 +378,41 @@ export async function saveSubaccounts(data: SubaccountEntry[], user = 'system'):
   const diff   = diffSubaccounts(before, data);
   await writeSubaccounts(data);
   await appendConfigChangelog('Update', user, 'subaccounts.json', diff);
+}
+
+export async function saveSpaceSettings(
+  region:    string,
+  subdomain: string,
+  spaces:    { spaceId: string; manageDest: boolean }[],
+  user:      string,
+): Promise<SubaccountEntry> {
+  const { subaccounts, globalAccounts } = await readSubaccountsFile();
+  const idx = subaccounts.findIndex(
+    sa => sa.region === region && sa.subdomain.toLowerCase() === subdomain.toLowerCase(),
+  );
+  if (idx < 0) throw Object.assign(new Error('Subaccount not found'), { status: 404 });
+
+  const sa = subaccounts[idx]!;
+  if (!sa.org) throw Object.assign(new Error('Subaccount has no CF org'), { status: 400 });
+
+  const spaceMap = new Map(spaces.map(s => [s.spaceId, s.manageDest]));
+  const updatedSpaces = sa.org.spaces.map(s => {
+    const v = spaceMap.get(s.spaceId);
+    return v !== undefined ? { ...s, manageDest: v } : s;
+  });
+  const diffLines = updatedSpaces
+    .filter(s => {
+      const orig = sa.org!.spaces.find(o => o.spaceId === s.spaceId);
+      return orig && orig.manageDest !== s.manageDest;
+    })
+    .map(s => `  ${s.spaceName} (${s.spaceId}): manageDest=${String(s.manageDest)}`)
+    .join('\n');
+
+  const updated: SubaccountEntry = { ...sa, org: { ...sa.org, spaces: updatedSpaces } };
+  subaccounts[idx] = updated;
+  await writeSubaccounts(subaccounts, globalAccounts);
+  await appendConfigChangelog('Update', user, 'subaccounts.json', `space manageDest changes:\n${diffLines}`);
+  return updated;
 }
 
 export async function subaccountsFileExists(): Promise<boolean> {

@@ -2,8 +2,9 @@ import { useRef, useState } from 'react';
 import { GripVertical, RefreshCw, RotateCcw, Save, ShieldBan, X } from 'lucide-react';
 
 export interface SpaceEntry {
-  spaceId:   string;
-  spaceName: string;
+  spaceId:    string;
+  spaceName:  string;
+  manageDest?: boolean;
 }
 
 export interface ServiceInstanceEntry {
@@ -71,6 +72,17 @@ function updateSa(data: SubaccountEntry[], subaccountId: string, patch: Partial<
   return data.map(s => s.subaccountId === subaccountId ? { ...s, ...patch } : s);
 }
 
+function toggleAllColumn(
+  data:    SubaccountEntry[],
+  field:   'inHomepage' | 'manageDestinations' | 'manageRoles',
+  checked: boolean,
+): SubaccountEntry[] {
+  return data.map(sa => {
+    if (field !== 'inHomepage' && sa.restricted) return sa;
+    return { ...sa, [field]: checked };
+  });
+}
+
 function matchesFilter(sa: SubaccountEntry, filter: string): boolean {
   if (!filter) return true;
   const f = filter.toLowerCase();
@@ -121,6 +133,13 @@ export default function SubaccountsTable({
 
   const filtered   = sorted.filter(sa => matchesFilter(sa, filter));
   const isFiltered = filter.trim() !== '';
+
+  const eligibleDest  = data.filter(sa => !sa.restricted);
+  const eligibleRoles = data.filter(sa => !sa.restricted);
+
+  const allHome  = data.length > 0  && data.every(sa => sa.inHomepage);
+  const allDest  = eligibleDest.length > 0  && eligibleDest.every(sa => sa.manageDestinations);
+  const allRoles = eligibleRoles.length > 0 && eligibleRoles.every(sa => sa.manageRoles);
 
   function startResize(e: React.MouseEvent, colIdx: number) {
     e.preventDefault();
@@ -316,17 +335,26 @@ export default function SubaccountsTable({
                 Alias
                 <div className={rszHdl} onMouseDown={e => startResize(e, 7)} />
               </th>
-              <th className={`${thCls} text-center`}>
+              <th className={`${thCls} text-center cursor-pointer select-none hover:bg-muted/60 transition-colors`}
+                onClick={() => onChange(toggleAllColumn(data, 'inHomepage', !allHome))}
+                title={allHome ? 'Uncheck all Home' : 'Check all Home'}
+              >
                 Home
-                <div className={rszHdl} onMouseDown={e => startResize(e, 8)} />
+                <div className={rszHdl} onMouseDown={e => { e.stopPropagation(); startResize(e, 8); }} />
               </th>
-              <th className={`${thCls} text-center`}>
+              <th className={`${thCls} text-center cursor-pointer select-none hover:bg-muted/60 transition-colors`}
+                onClick={() => onChange(toggleAllColumn(data, 'manageDestinations', !allDest))}
+                title={allDest ? 'Uncheck all Dest' : 'Check all Dest'}
+              >
                 Dest
-                <div className={rszHdl} onMouseDown={e => startResize(e, 9)} />
+                <div className={rszHdl} onMouseDown={e => { e.stopPropagation(); startResize(e, 9); }} />
               </th>
-              <th className={`${thCls} text-center`} title="Manage Role Collections">
+              <th className={`${thCls} text-center cursor-pointer select-none hover:bg-muted/60 transition-colors`}
+                onClick={() => onChange(toggleAllColumn(data, 'manageRoles', !allRoles))}
+                title={allRoles ? 'Uncheck all Roles' : 'Check all Roles'}
+              >
                 Roles
-                <div className={rszHdl} onMouseDown={e => startResize(e, 10)} />
+                <div className={rszHdl} onMouseDown={e => { e.stopPropagation(); startResize(e, 10); }} />
               </th>
               <th className={`${thCls} text-center`}>
                 Sub
