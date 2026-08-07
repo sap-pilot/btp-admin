@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown, Filter, ShieldBan, X } from 'lucide-react';
+import { ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown, Filter, RotateCcw, Save, ShieldBan, X } from 'lucide-react';
 import * as DialogPrimitive from '@radix-ui/react-dialog';
 import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator,
@@ -9,10 +9,12 @@ import type { SubaccountEntry, SpaceEntry } from './SubaccountsTable';
 import type { CockpitMenuItem } from '@/components/home/HomepageContent';
 
 interface Props {
-  sa:          SubaccountEntry | null;
-  onClose:     () => void;
-  cockpit?:    { idp: string; host: string };
+  sa:           SubaccountEntry | null;
+  onClose:      () => void;
+  cockpit?:     { idp: string; host: string };
   cockpitMenu?: CockpitMenuItem | null;
+  isAdmin?:     boolean;
+  onSpaceSave?: (region: string, subdomain: string, spaces: { spaceId: string; manageDest: boolean }[]) => Promise<void>;
 }
 
 type ModalTab = 'info' | 'subscriptions' | 'services';
@@ -131,17 +133,25 @@ function Field({ label, value, mono }: { label: string; value: string; mono?: bo
 const thCls = 'text-left px-2 py-1.5 text-[10px] font-medium text-muted-foreground border-b border-border';
 const tdCls = 'px-2 py-1.5 border-b border-border text-xs';
 
-export default function SubaccountDetailModal({ sa, onClose, cockpit, cockpitMenu }: Props) {
-  const [activeTab, setActiveTab]     = useState<ModalTab>('info');
-  const [svcFilter, setSvcFilter]     = useState('');
-  const [subFilter, setSubFilter]     = useState('');
-  const [svcExpanded, setSvcExpanded] = useState<Set<string>>(new Set());
+export default function SubaccountDetailModal({ sa, onClose, cockpit, cockpitMenu, isAdmin, onSpaceSave }: Props) {
+  const [activeTab, setActiveTab]           = useState<ModalTab>('info');
+  const [svcFilter, setSvcFilter]           = useState('');
+  const [subFilter, setSubFilter]           = useState('');
+  const [svcExpanded, setSvcExpanded]       = useState<Set<string>>(new Set());
+  const [spaceDests, setSpaceDests]         = useState<Map<string, boolean>>(new Map());
+  const [spaceDestsOrig, setSpaceDestsOrig] = useState<Map<string, boolean>>(new Map());
+  const [spaceSaving, setSpaceSaving]       = useState(false);
+
+  const canManageSpaces = isAdmin || window.location.hostname === 'localhost';
 
   useEffect(() => {
     if (!sa) return;
     setSvcFilter('');
     setSubFilter('');
     setSvcExpanded(new Set(sa.serviceInstances.map(svc => svc.spaceId ?? '')));
+    const m = new Map((sa.org?.spaces ?? []).map(s => [s.spaceId, s.manageDest ?? false]));
+    setSpaceDests(new Map(m));
+    setSpaceDestsOrig(new Map(m));
   }, [sa]);
 
   const tabCls = (t: ModalTab) =>
@@ -150,6 +160,19 @@ export default function SubaccountDetailModal({ sa, onClose, cockpit, cockpitMen
         ? 'border-primary text-foreground'
         : 'border-transparent text-muted-foreground hover:text-foreground'
     }`;
+
+  const spaceDestsDirty = [...spaceDests.entries()].some(([id, v]) => spaceDestsOrig.get(id) !== v);
+
+  async function handleSpaceSave() {
+    if (!sa || !onSpaceSave) return;
+    setSpaceSaving(true);
+    try {
+      await onSpaceSave(sa.region, sa.subdomain, [...spaceDests.entries()].map(([spaceId, manageDest]) => ({ spaceId, manageDest })));
+      setSpaceDestsOrig(new Map(spaceDests));
+    } finally {
+      setSpaceSaving(false);
+    }
+  }
 
   const btnOutline = 'inline-flex items-center gap-1 px-2 py-1 rounded text-xs font-medium border border-border hover:bg-accent hover:text-accent-foreground transition-colors disabled:opacity-50 disabled:cursor-not-allowed';
 
@@ -182,6 +205,24 @@ export default function SubaccountDetailModal({ sa, onClose, cockpit, cockpitMen
                     </span>
                   )}
                 </div>
+                {canManageSpaces && sa.org && sa.org.spaces.length > 0 && (
+                  <>
+                    <button
+                      className={btnOutline}
+                      disabled={!spaceDestsDirty}
+                      onClick={() => setSpaceDests(new Map(spaceDestsOrig))}
+                    >
+                      <RotateCcw className="h-3 w-3" /> Reset
+                    </button>
+                    <button
+                      className={btnOutline}
+                      disabled={!spaceDestsDirty || spaceSaving || !onSpaceSave}
+                      onClick={() => void handleSpaceSave()}
+                    >
+                      <Save className="h-3 w-3" /> {spaceSaving ? 'Saving…' : 'Save'}
+                    </button>
+                  </>
+                )}
                 {cockpit && cockpitMenu && (() => {
                   const ctx     = buildCtx(sa, cockpit);
                   const url     = cockpitMenu.url ? resolveUrl(cockpitMenu.url, ctx) : undefined;
@@ -276,6 +317,7 @@ export default function SubaccountDetailModal({ sa, onClose, cockpit, cockpitMen
                               <tr className="bg-muted/30">
                                 <th className={thCls}>Space Name</th>
                                 <th className={`${thCls} font-mono`}>Space ID</th>
+                                {canManageSpaces && <th className={`${thCls} text-center`}>Dest</th>}
                               </tr>
                             </thead>
                             <tbody>
@@ -292,6 +334,16 @@ export default function SubaccountDetailModal({ sa, onClose, cockpit, cockpitMen
                                       }
                                     </td>
                                     <td className={`${tdCls} font-mono text-muted-foreground`}>{s.spaceId}</td>
+                                    {canManageSpaces && (
+                                      <td className={`${tdCls} text-center`}>
+                                        <input
+                                          type="checkbox"
+                                          checked={spaceDests.get(s.spaceId) ?? false}
+                                          onChange={e => setSpaceDests(prev => new Map(prev).set(s.spaceId, e.target.checked))}
+                                          className="cursor-pointer"
+                                        />
+                                      </td>
+                                    )}
                                   </tr>
                                 );
                               })}

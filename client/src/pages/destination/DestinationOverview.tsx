@@ -36,12 +36,14 @@ interface Buckets { generic: string[]; s4: string[]; cep: string[]; others: stri
 interface ModalState { sa: SubaccountEntry; allNames: string[]; initialName?: string; initialTab?: 'properties' | 'changelog' | 'test'; initialShowList?: boolean }
 
 interface DestSearchResult {
-  region:     string;
-  subdomain:  string;
-  org_id:     string;
-  name:       string;
-  matchField: string;
-  matchValue: string;
+  region:        string;
+  subdomain:     string;
+  org_id:        string;
+  name:          string;
+  matchField:    string;
+  matchValue:    string;
+  spaceName?:    string;
+  instanceName?: string;
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -159,6 +161,8 @@ export default function DestinationOverview() {
   const [showCompareModal,   setShowCompareModal]   = useState(false);
   const [showCompareDropdown, setShowCompareDropdown] = useState(false);
   const compareDropdownRef = useRef<HTMLDivElement>(null);
+  // Ephemeral compare: instant compare from SubaccountDestModal Compare(N) — not added to basket
+  const [ephemeralCompareDests, setEphemeralCompareDests] = useState<SelectedDest[] | null>(null);
 
   // Global changelog (Change History tab)
   const [globalChangelog,        setGlobalChangelog]        = useState('');
@@ -286,9 +290,15 @@ export default function DestinationOverview() {
 
   function toggleCompare(d: SelectedDest) {
     setSelectedDests(prev => {
-      const exists = prev.some(x => x.region === d.region && x.subdomain === d.subdomain && x.name === d.name);
+      const exists = prev.some(x =>
+        x.region === d.region && x.subdomain === d.subdomain && x.name === d.name &&
+        (d.instanceGuid ? x.instanceGuid === d.instanceGuid : !x.instanceGuid),
+      );
       return exists
-        ? prev.filter(x => !(x.region === d.region && x.subdomain === d.subdomain && x.name === d.name))
+        ? prev.filter(x => !(
+            x.region === d.region && x.subdomain === d.subdomain && x.name === d.name &&
+            (d.instanceGuid ? x.instanceGuid === d.instanceGuid : !x.instanceGuid)
+          ))
         : [...prev, d];
     });
   }
@@ -346,12 +356,13 @@ export default function DestinationOverview() {
   const allDestSas = saData.filter(sa => sa.manageDestinations && !!sa.org?.orgId);
   const isFiltered = filterResults !== null;
 
-  // orgId → Set of matched destination names
-  const matchedByOrg = new Map<string, Set<string>>();
+  // orgId → Map<compositeKey, DestSearchResult> — composite key = "name|spaceName|instanceName"
+  const matchedByOrg = new Map<string, Map<string, DestSearchResult>>();
   if (isFiltered) {
     for (const r of filterResults) {
-      if (!matchedByOrg.has(r.org_id)) matchedByOrg.set(r.org_id, new Set());
-      matchedByOrg.get(r.org_id)!.add(r.name);
+      if (!matchedByOrg.has(r.org_id)) matchedByOrg.set(r.org_id, new Map());
+      const key = `${r.name}|${r.spaceName ?? ''}|${r.instanceName ?? ''}`;
+      matchedByOrg.get(r.org_id)!.set(key, r);
     }
   }
 
@@ -359,15 +370,15 @@ export default function DestinationOverview() {
     return !isFiltered || matchedByOrg.has(saOrgId(sa));
   }
 
-  // null = no filter active (show all); Set = only these names
-  function matchedForSa(sa: SubaccountEntry): Set<string> | null {
+  // null = no filter active (show all); Map = only these results
+  function matchedForSa(sa: SubaccountEntry): Map<string, DestSearchResult> | null {
     if (!isFiltered) return null;
-    return matchedByOrg.get(saOrgId(sa)) ?? new Set();
+    return matchedByOrg.get(saOrgId(sa)) ?? new Map();
   }
 
-  function filterDestItems(items: DestItem[], matched: Set<string> | null): DestItem[] {
+  function filterDestItems(items: DestItem[], matched: Map<string, DestSearchResult> | null): DestItem[] {
     if (!matched) return items;
-    return items.filter(d => matched.has(d.name));
+    return items.filter(d => [...matched.values()].some(r => r.name === d.name && !r.spaceName));
   }
 
   const isChangeHistory = tabParam === 'change-history';
@@ -460,9 +471,9 @@ export default function DestinationOverview() {
                 </div>
               ) : (
                 selectedDests.map(d => (
-                  <div key={`${d.region}/${d.subdomain}/${d.name}`} className="flex items-center gap-2 px-3 py-1.5 text-xs hover:bg-muted/40">
+                  <div key={`${d.region}/${d.subdomain}/${d.spaceName ?? ''}/${d.instanceName ?? ''}/${d.name}`} className="flex items-center gap-2 px-3 py-1.5 text-xs hover:bg-muted/40">
                     <span className="flex-1 font-mono truncate">
-                      <span className="text-muted-foreground">{d.region} → {d.subdomain} → </span>{d.name}
+                      <span className="text-muted-foreground">{d.region} → {d.subdomain}{d.spaceName ? ` → ${d.spaceName} → ${d.instanceName} → ` : ' → '}</span>{d.name}
                     </span>
                     <button
                       onClick={() => toggleCompare(d)}
@@ -550,9 +561,11 @@ export default function DestinationOverview() {
 
         let msg: string;
         if (progress.type === 'progress') {
-          msg = `Processing ${progress.current ?? 0} of ${progress.total} subaccounts: ${progress.name ?? ''}${progress.received > 0 ? `, received ${progress.received} destinations` : ''}`;
+          msg = `Refreshing ${progress.current ?? 0} of ${progress.total} subaccounts/spaces: ${progress.name ?? ''}${progress.received > 0 ? `, received ${progress.received} destinations` : ''}`;
         } else {
-          msg = `Refreshed ${progress.refreshed ?? 0} of ${progress.total} subaccounts, received ${progress.received} destinations, created ${progress.created ?? 0}, updated ${progress.updated ?? 0} and deleted ${progress.deleted ?? 0} destinations`;
+          const hasErrs = (progress.issues?.length ?? 0) > 0;
+          const errNote = hasErrs ? ` — ${progress.issues!.length} warning${progress.issues!.length !== 1 ? 's' : ''}` : '';
+          msg = `Refreshed ${progress.total} subaccounts/spaces, received ${progress.received} destinations, created ${progress.created ?? 0}, updated ${progress.updated ?? 0}, deleted ${progress.deleted ?? 0}${errNote}`;
         }
 
         return (
@@ -762,16 +775,19 @@ export default function DestinationOverview() {
                       </thead>
                       <tbody>
                         {isFiltered ? (() => {
-                          // Flat search view: one row per matched destination name (union across all SAs)
-                          const allMatchedNames = [
-                            ...new Set(
-                              saBuckets.flatMap(({ sa }) => {
-                                const m = matchedByOrg.get(saOrgId(sa));
-                                return m ? [...m] : [];
-                              })
-                            ),
-                          ].sort();
-                          if (allMatchedNames.length === 0) {
+                          // Flat search view: one row per matched result (composite key = name|spaceName|instanceName)
+                          type RowEntry = { compositeKey: string; result: DestSearchResult };
+                          const seen = new Set<string>();
+                          const allRows: RowEntry[] = [];
+                          for (const { sa } of saBuckets) {
+                            const m = matchedByOrg.get(saOrgId(sa));
+                            if (!m) continue;
+                            for (const [key, result] of m) {
+                              if (!seen.has(key)) { seen.add(key); allRows.push({ compositeKey: key, result }); }
+                            }
+                          }
+                          allRows.sort((a, b) => a.compositeKey.localeCompare(b.compositeKey));
+                          if (allRows.length === 0) {
                             return (
                               <tr>
                                 <td colSpan={visibleSas.length + 1} className={`${tdCls} text-center text-muted-foreground`}>
@@ -780,23 +796,32 @@ export default function DestinationOverview() {
                               </tr>
                             );
                           }
-                          return allMatchedNames.map(name => (
-                            <tr key={name} className="hover:bg-muted/20">
+                          return allRows.map(({ compositeKey, result: rowResult }) => (
+                            <tr key={compositeKey} className="hover:bg-muted/20">
                               <td className={`${catTdCls} font-mono text-[11px] text-foreground`}>
-                                <Highlight text={name} query={activeFilter} />
+                                {rowResult.spaceName
+                                  ? (
+                                    <span>
+                                      <span className="text-muted-foreground">{rowResult.spaceName} › {rowResult.instanceName} › </span>
+                                      <Highlight text={rowResult.name} query={activeFilter} />
+                                    </span>
+                                  )
+                                  : <Highlight text={rowResult.name} query={activeFilter} />
+                                }
                               </td>
                               {saBuckets.map(({ sa, allDests }) => {
                                 const matched = matchedByOrg.get(saOrgId(sa));
-                                const present = matched?.has(name) ?? false;
+                                const present = matched?.has(compositeKey) ?? false;
+                                const r = matched?.get(compositeKey);
                                 return (
                                   <td key={sa.subaccountId} className={`${tdCls} text-left`}>
-                                    {present
+                                    {present && r
                                       ? (
                                         <button
                                           className="font-mono text-[11px] hover:underline text-left text-foreground"
-                                          onClick={() => setModal({ sa, allNames: allDests.map(d => d.name).sort(), initialName: name, initialShowList: false })}
+                                          onClick={() => setModal({ sa, allNames: allDests.map(d => d.name).sort(), initialName: r.spaceName ? undefined : r.name, initialShowList: !r.spaceName })}
                                         >
-                                          <Highlight text={name} query={activeFilter} />
+                                          <Highlight text={r.name} query={activeFilter} />
                                         </button>
                                       )
                                       : <span className="text-muted-foreground/30 text-[11px]">—</span>
@@ -931,6 +956,7 @@ export default function DestinationOverview() {
           }}
           selectedDests={selectedDests}
           onToggleCompare={toggleCompare}
+          onOpenCompare={dests => { setEphemeralCompareDests(dests); }}
         />
       )}
 
@@ -938,6 +964,13 @@ export default function DestinationOverview() {
         <CompareModal
           selected={selectedDests}
           onClose={() => setShowCompareModal(false)}
+        />
+      )}
+
+      {ephemeralCompareDests && ephemeralCompareDests.length > 0 && (
+        <CompareModal
+          selected={ephemeralCompareDests}
+          onClose={() => setEphemeralCompareDests(null)}
         />
       )}
 

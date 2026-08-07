@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import {
-  ChevronDown, Download, Eye, EyeOff, GitCompare, Lock, Maximize2, Minimize2, PanelLeft, Plus, RefreshCw, RotateCcw, Save, Search, Send, Trash2, Upload, X,
+  ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown, CheckSquare, Download, Eye, EyeOff, GitCompare, Lock, Maximize2, Minimize2, PanelLeft, Plus, RefreshCw, RotateCcw, Save, Search, Send, Square, Trash2, Upload, X,
 } from 'lucide-react';
 import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator,
@@ -12,9 +12,12 @@ import type { SubaccountEntry, SpaceEntry } from '@/components/config/Subaccount
 import type { CockpitMenuItem } from '@/components/home/HomepageContent';
 
 export interface SelectedDest {
-  region:    string;
-  subdomain: string;
-  name:      string;
+  region:        string;
+  subdomain:     string;
+  name:          string;
+  spaceName?:    string;
+  instanceName?: string;
+  instanceGuid?: string;
 }
 
 // ─── Cockpit URL helpers ──────────────────────────────────────────────────────
@@ -115,6 +118,7 @@ export interface SubaccountDestModalProps {
   onClose:           () => void;
   selectedDests?:    SelectedDest[];
   onToggleCompare?:  (d: SelectedDest) => void;
+  onOpenCompare?:    (dests: SelectedDest[]) => void;
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -589,7 +593,7 @@ function TestTab() {
 
 // ─── Main modal ───────────────────────────────────────────────────────────────
 
-export default function SubaccountDestModal({ org, allNames, initialName, initialTab, initialShowList, onClose, selectedDests, onToggleCompare }: SubaccountDestModalProps) {
+export default function SubaccountDestModal({ org, allNames, initialName, initialTab, initialShowList, onClose, selectedDests, onToggleCompare, onOpenCompare }: SubaccountDestModalProps) {
   const auth                        = useAuth();
   const { settings, cockpitMenu }   = useSettings();
   const cockpit                     = settings?.homepage.cockpit ?? { idp: '', host: '' };
@@ -619,6 +623,127 @@ export default function SubaccountDestModal({ org, allNames, initialName, initia
   // Left-panel visibility toggle
   const [showList,   setShowList]   = useState(initialShowList ?? true);
   const [maximized,  setMaximized]  = useState(false);
+
+  // Space destination tree
+  const hasSpaceDests = (org.org?.spaces ?? []).some(s => s.manageDest);
+  // Tree node keys: `space:{spaceId}` or `inst:{instanceGuid}`
+  const [treeSelectedKeys,  setTreeSelectedKeys]  = useState<Set<string>>(new Set());
+  const [lastTreeClickKey,  setLastTreeClickKey]  = useState<string>('');
+  // Ordered flat list of all tree node keys (spaces then their instances, in render order) for shift-click
+  const [treeExpanded,      setTreeExpanded]      = useState<Set<string>>(new Set());
+  const [instanceNames,     setInstanceNames]     = useState<Map<string, string[]>>(new Map()); // key=instanceGuid → dest names
+  // key=spaceId → instances from local store (loaded once from GET .../spaces)
+  const [spaceInstances,    setSpaceInstances]    = useState<Map<string, Array<{ instanceGuid: string; instanceName: string }>>>(new Map());
+  const [allInstancesLoaded, setAllInstancesLoaded] = useState(false);
+  // Multi-select for instance/space dest list; key = `{instanceGuid}/{name}` or `sa/{name}`
+  const [selectedDestKeys,  setSelectedDestKeys]  = useState<Set<string>>(new Set());
+  const [lastClickDestKey,  setLastClickDestKey]  = useState<string>('');
+
+  // Horizontal split (left panel width as % of total)
+  const [splitPct,  setSplitPct]  = useState(50);
+  // Vertical split within left panel (tree height as % of left panel)
+  const [treeSplitPct, setTreeSplitPct] = useState(40);
+  const bodyRef              = useRef<HTMLDivElement>(null);
+  const splitResizeRef       = useRef<{ startX: number; startPct: number; containerW: number } | null>(null);
+  const treeSplitResizeRef   = useRef<{ startY: number; startPct: number; containerH: number } | null>(null);
+
+  function startSplitResize(e: React.MouseEvent) {
+    e.preventDefault();
+    if (!bodyRef.current) return;
+    splitResizeRef.current = { startX: e.clientX, startPct: splitPct, containerW: bodyRef.current.offsetWidth };
+    function onMove(ev: MouseEvent) {
+      if (!splitResizeRef.current) return;
+      const { startX, startPct, containerW } = splitResizeRef.current;
+      const deltaPct = ((ev.clientX - startX) / containerW) * 100;
+      setSplitPct(Math.min(75, Math.max(20, startPct + deltaPct)));
+    }
+    function onUp() {
+      splitResizeRef.current = null;
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+    }
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+  }
+
+  function startTreeSplitResize(e: React.MouseEvent) {
+    e.preventDefault();
+    const container = (e.target as HTMLElement).closest('.tree-split-container') as HTMLElement | null;
+    if (!container) return;
+    treeSplitResizeRef.current = { startY: e.clientY, startPct: treeSplitPct, containerH: container.offsetHeight };
+    function onMove(ev: MouseEvent) {
+      if (!treeSplitResizeRef.current) return;
+      const { startY, startPct, containerH } = treeSplitResizeRef.current;
+      const deltaPct = ((ev.clientY - startY) / containerH) * 100;
+      setTreeSplitPct(Math.min(70, Math.max(15, startPct + deltaPct)));
+    }
+    function onUp() {
+      treeSplitResizeRef.current = null;
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+    }
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+  }
+
+  // Load all space instances from local store in one shot (keyed by spaceId from org.spaces)
+  async function loadAllSpaceInstances() {
+    if (allInstancesLoaded) return;
+    try {
+      const res  = await fetch(`/api/destinations/${enc(org.region)}/${enc(org.subdomain)}/spaces`);
+      const json = await res.json() as { ok: boolean; data: Array<{ spaceName: string; instanceGuid: string; instanceName: string }> };
+      if (!json.ok) return;
+      // Build spaceId → instances map using org.spaces to resolve spaceId from spaceName
+      const nameToId = new Map((org.org?.spaces ?? []).map(s => [s.spaceName, s.spaceId]));
+      const bySpace = new Map<string, Array<{ instanceGuid: string; instanceName: string }>>();
+      for (const item of (json.data ?? [])) {
+        const spaceId = nameToId.get(item.spaceName);
+        if (!spaceId) continue;
+        const arr = bySpace.get(spaceId) ?? [];
+        arr.push({ instanceGuid: item.instanceGuid, instanceName: item.instanceName });
+        bySpace.set(spaceId, arr);
+      }
+      setSpaceInstances(bySpace);
+      setAllInstancesLoaded(true);
+      // Eagerly load dest names for all instances so counts are populated immediately
+      for (const item of (json.data ?? [])) {
+        void loadInstanceDestNames(item.instanceGuid, item.spaceName);
+      }
+    } catch { /* ignore */ }
+  }
+
+  async function loadInstanceDestNames(instanceGuid: string, spaceName: string) {
+    if (instanceNames.has(instanceGuid)) return;
+    try {
+      const res  = await fetch(`/api/destinations/${enc(org.region)}/${enc(org.subdomain)}/spaces/${enc(spaceName)}/instances/${enc(instanceGuid)}`);
+      const json = await res.json() as { ok: boolean; names: string[] };
+      if (json.ok) setInstanceNames(prev => new Map(prev).set(instanceGuid, json.names ?? []));
+    } catch { /* ignore */ }
+  }
+
+  // activeInstScope tracks the single dest being viewed in the right panel (for save/breadcrumb)
+  const [activeInstScope, setActiveInstScope] = useState<{ spaceName: string; instanceGuid: string; instanceName: string } | null>(null);
+
+  function loadInstDest(spaceName: string, instanceGuid: string, instanceName: string, name: string) {
+    setActiveInstScope({ spaceName, instanceGuid, instanceName });
+    setSelectedName(name);
+    setSelectedNames(new Set([name]));
+    setIsCreating(false);
+    void loadInstDestData(spaceName, instanceGuid, name);
+  }
+
+  async function loadInstDestData(spaceName: string, instanceGuid: string, name: string) {
+    setIsLoading(true);
+    try {
+      const res  = await fetch(`/api/destinations/${enc(org.region)}/${enc(org.subdomain)}/spaces/${enc(spaceName)}/instances/${enc(instanceGuid)}/${enc(name)}`);
+      const json = await res.json() as { ok: boolean; data: Record<string, unknown>; sensitiveFields: string[] };
+      if (json.ok) {
+        const props = toProps(json.data, json.sensitiveFields);
+        setServerProps(props);
+        setEditedProps(structuredClone(props));
+      }
+    } catch { /* ignore */ } finally { setIsLoading(false); }
+  }
 
   // Create mode (new destination from scratch)
   const [isCreating,    setIsCreating]    = useState(false);
@@ -715,6 +840,40 @@ export default function SubaccountDestModal({ org, allNames, initialName, initia
     })();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Load all space instances from local store as soon as the modal opens (if this SA has manageDest spaces)
+  useEffect(() => {
+    if (hasSpaceDests) void loadAllSpaceInstances();
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // When tree selection changes, load dest names for any selected instances not yet loaded
+  useEffect(() => {
+    for (const key of treeSelectedKeys) {
+      if (!key.startsWith('inst:')) continue;
+      const instanceGuid = key.slice(5);
+      if (instanceNames.has(instanceGuid)) continue;
+      // Find the spaceName for this instance
+      for (const [spaceId, insts] of spaceInstances) {
+        const inst = insts.find(i => i.instanceGuid === instanceGuid);
+        if (inst) {
+          const space = (org.org?.spaces ?? []).find(s => s.spaceId === spaceId);
+          if (space) void loadInstanceDestNames(instanceGuid, space.spaceName);
+          break;
+        }
+      }
+    }
+    // Also load all instances under selected spaces
+    for (const key of treeSelectedKeys) {
+      if (!key.startsWith('space:')) continue;
+      const spaceId = key.slice(6);
+      const insts = spaceInstances.get(spaceId) ?? [];
+      const space = (org.org?.spaces ?? []).find(s => s.spaceId === spaceId);
+      if (!space) continue;
+      for (const inst of insts) {
+        if (!instanceNames.has(inst.instanceGuid)) void loadInstanceDestNames(inst.instanceGuid, space.spaceName);
+      }
+    }
+  }, [treeSelectedKeys, spaceInstances]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // Close on Escape; cleanup timers on unmount
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
@@ -785,19 +944,26 @@ export default function SubaccountDestModal({ org, allNames, initialName, initia
 
   async function handleSave() {
     if (!selectedName || !isDirty) return;
-    setIsSaving(true); 
+    setIsSaving(true);
     if (bannerTimerRef.current) { clearTimeout(bannerTimerRef.current); bannerTimerRef.current = null; }
     setSaveBanner(null);
     try {
-      const res  = await fetch(`/api/destinations/${enc(org.region)}/${enc(org.subdomain)}/${enc(selectedName)}`, {
+      const url = activeInstScope
+        ? `/api/destinations/${enc(org.region)}/${enc(org.subdomain)}/spaces/${enc(activeInstScope.spaceName)}/instances/${enc(activeInstScope.instanceGuid)}/${enc(selectedName)}`
+        : `/api/destinations/${enc(org.region)}/${enc(org.subdomain)}/${enc(selectedName)}`;
+      const res  = await fetch(url, {
         method:  'PUT',
         headers: { 'Content-Type': 'application/json' },
         body:    JSON.stringify({ data: fromProps(selectedName, editedProps), username }),
       });
       const json = await res.json() as { ok: boolean; error?: string };
       if (!json.ok) throw new Error(json.error ?? 'Save failed');
-      await loadDest(selectedName);
-      if (activeTab === 'changelog') await loadChangelog(selectedName);
+      if (activeInstScope) {
+        await loadInstDestData(activeInstScope.spaceName, activeInstScope.instanceGuid, selectedName);
+      } else {
+        await loadDest(selectedName);
+        if (activeTab === 'changelog') await loadChangelog(selectedName);
+      }
       setSaveBanner({ type: 'success', message: `${org.region} → ${org.subdomain} → ${selectedName} saved` });
       bannerTimerRef.current = setTimeout(() => setSaveBanner(null), 3000);
     } catch (err) {
@@ -922,8 +1088,66 @@ export default function SubaccountDestModal({ org, allNames, initialName, initia
   const btnOutline = `${btnBase} border border-border hover:bg-accent hover:text-accent-foreground`;
   const exportCount = selectedNames.size;
   const exportTitle = exportCount > 1
-    ? `Download ${exportCount} selected destinations as {region}_{subdomain}_multi_destinations.json`
+    ? `Download ${exportCount} selected destinations as ${org.region}_${org.subdomain}_multi_destinations.json`
     : 'Download destination JSON — Ctrl/⌘+click or Shift+click to select multiple for bulk export';
+
+  // Inline filter-row toolbar helper (New, Import, Export, Compare)
+  function renderFilterToolbar(opts: {
+    onExport: () => void;
+    exportDisabled: boolean;
+    exportTitle: string;
+    exportCount: number;
+    compareCount: number;
+    onCompare: () => void;
+    isCreatingMode: boolean;
+  }) {
+    const { onExport, exportDisabled, compareCount, onCompare, isCreatingMode } = opts;
+    return (
+      <>
+        <button
+          onClick={handleCreateClick}
+          disabled={isCreatingMode}
+          className={btnOutline}
+          title="Create new destination"
+        >
+          <Plus className="h-3.5 w-3.5" />
+        </button>
+        <button
+          onClick={() => fileInputRef.current?.click()}
+          disabled={isImporting}
+          className={btnOutline}
+          title="Import destination(s) from JSON"
+        >
+          <Upload className="h-3.5 w-3.5" />
+          {maximized && <span className="ml-1">{isImporting ? 'Importing…' : 'Import'}</span>}
+        </button>
+        <button
+          onClick={onExport}
+          disabled={exportDisabled}
+          className={btnOutline}
+          title={opts.exportTitle}
+        >
+          <Download className="h-3.5 w-3.5" />
+          {maximized
+            ? <span className="ml-1">Export{opts.exportCount > 0 ? ` (${opts.exportCount})` : ''}</span>
+            : opts.exportCount > 0 ? <span className="text-[10px]">{opts.exportCount}</span> : null
+          }
+        </button>
+        <button
+          onClick={onCompare}
+          disabled={compareCount < 2}
+          className={btnOutline}
+          title={compareCount >= 2 ? `Compare ${compareCount} selected destinations` : 'Select 2+ destinations to compare'}
+        >
+          <GitCompare className="h-3.5 w-3.5" />
+          {maximized
+            ? <span className="ml-1">Compare{compareCount > 0 ? ` (${compareCount})` : ''}</span>
+            : compareCount > 0 ? <span className="text-[10px]">{compareCount}</span> : null
+          }
+        </button>
+      </>
+    );
+  }
 
   return (
     <div
@@ -934,7 +1158,7 @@ export default function SubaccountDestModal({ org, allNames, initialName, initia
         maximized ? 'w-full h-full rounded-none' : 'w-full max-w-5xl h-[90vh] rounded-xl'
       }`}>
 
-        {/* Modal header: breadcrumb + action buttons + Maximize + X */}
+        {/* Modal header: breadcrumb + Maximize + X */}
         <div className="flex items-center gap-2 px-4 border-b border-border shrink-0 min-h-[44px]">
           <div className="text-sm font-semibold min-w-0 flex items-center gap-1 flex-1 overflow-hidden">
             <span className="text-muted-foreground font-normal shrink-0">{org.region} ›</span>
@@ -967,47 +1191,18 @@ export default function SubaccountDestModal({ org, allNames, initialName, initia
                 })()
               : <span className="truncate">{org.alias || org.subaccountName} <span className="font-normal text-xs font-mono text-muted-foreground">({org.subdomain})</span></span>
             }
-            <span className="text-muted-foreground font-normal shrink-0">› Subaccount Destinations</span>
+            <span className="text-muted-foreground font-normal shrink-0">
+              {hasSpaceDests && treeSelectedKeys.size > 0 ? '› Instance Destinations' : '› Subaccount Destinations'}
+            </span>
           </div>
           <div className="flex items-center gap-1 shrink-0">
             <button
-              onClick={handleCreateClick}
-              disabled={isSaving || isImporting}
-              className={btnOutline}
-              title="Create a new destination from scratch"
-            >
-              <Plus className="h-3.5 w-3.5" />
-              <span className="hidden sm:inline">Create</span>
-            </button>
-            <button
-              onClick={() => fileInputRef.current?.click()}
-              disabled={isImporting || isSaving}
-              className={btnOutline}
-              title="Import single or multiple destinations into this subaccount."
-            >
-              <Upload className="h-3.5 w-3.5" />
-              <span className="hidden sm:inline">{isImporting ? 'Importing…' : 'Import'}</span>
-            </button>
-            <button
-              onClick={handleExport}
-              disabled={exportCount === 0 && !selectedName}
-              className={btnOutline}
-              title={exportTitle}
-            >
-              <Download className="h-3.5 w-3.5" />
-              <span className="hidden sm:inline">{exportCount > 1 ? `Export (${exportCount})` : 'Export'}</span>
-              {exportCount > 1 && <span className="sm:hidden text-[10px] font-bold leading-none">{exportCount}</span>}
-            </button>
-            <button
               onClick={() => void handleRefresh()}
-              disabled={subProgress?.type === 'refreshing' || isSaving || isImporting}
-              className={btnOutline}
-              title="Force-refresh destinations from the Destination API"
+              className="p-1.5 rounded text-muted-foreground hover:text-foreground hover:bg-accent/50 transition-colors"
+              title="Refresh subaccount destinations"
             >
-              <RefreshCw className={`h-3.5 w-3.5 ${subProgress?.type === 'refreshing' ? 'animate-spin' : ''}`} />
-              <span className="hidden sm:inline">{subProgress?.type === 'refreshing' ? 'Refreshing…' : 'Refresh'}</span>
+              <RefreshCw className="h-4 w-4" />
             </button>
-            <div className="w-px h-4 bg-border mx-0.5" />
             <button
               onClick={() => setMaximized(v => !v)}
               className="p-1.5 rounded text-muted-foreground hover:text-foreground hover:bg-accent/50 transition-colors"
@@ -1052,12 +1247,435 @@ export default function SubaccountDestModal({ org, allNames, initialName, initia
         )}
 
         {/* Body */}
-        <div className="flex flex-1 min-h-0">
-          {/* Left panel: destination list */}
+        <div ref={bodyRef} className="flex flex-1 min-h-0">
+          {/* Left panel: destination list (or tree + list when hasSpaceDests) */}
           {showList && (
-            <div className="w-60 border-r border-border flex flex-col shrink-0">
-              <div className="px-2 py-2 border-b border-border">
-                <div className="relative">
+            hasSpaceDests ? (
+              <>
+                <div
+                  className="tree-split-container border-r border-border flex flex-col shrink-0 min-w-0"
+                  style={{ width: `${splitPct}%` }}
+                >
+                  {/* Tree (top pane) */}
+                  <div className="flex flex-col overflow-hidden" style={{ height: `${treeSplitPct}%` }}>
+                    {/* Tree title bar */}
+                    <div className="flex items-center gap-1 px-2 border-b border-border shrink-0 min-h-[44px]">
+                      {/* Subaccount name — click to show subaccount-level dests */}
+                      <button
+                        onClick={() => setTreeSelectedKeys(new Set())}
+                        className={`text-xs font-semibold font-mono truncate flex-1 min-w-0 text-left px-1 py-0.5 rounded hover:bg-accent/50 transition-colors ${treeSelectedKeys.size === 0 ? 'text-primary' : 'text-foreground'}`}
+                        title="Show subaccount-level destinations"
+                      >
+                        {org.alias || org.subaccountName}
+                        <span className="font-normal text-[10px] text-muted-foreground ml-1">({org.subdomain})</span>
+                      </button>
+                      {/* Toolbar: Expand · Collapse · Select All · Unselect All */}
+                      <div className="flex items-center gap-0.5 shrink-0">
+                        <button
+                          onClick={() => {
+                            const allSpaceIds = (org.org?.spaces ?? []).filter(s => s.manageDest).map(s => s.spaceId);
+                            setTreeExpanded(new Set(allSpaceIds));
+                            if (!allInstancesLoaded) void loadAllSpaceInstances();
+                          }}
+                          className={btnOutline}
+                          title="Expand all spaces"
+                        >
+                          <ChevronsUpDown className="h-3.5 w-3.5" />
+                          {maximized && <span className="ml-1">Expand</span>}
+                        </button>
+                        <button
+                          onClick={() => setTreeExpanded(new Set())}
+                          className={btnOutline}
+                          title="Collapse all spaces"
+                        >
+                          <ChevronsDownUp className="h-3.5 w-3.5" />
+                          {maximized && <span className="ml-1">Collapse</span>}
+                        </button>
+                        <div className="w-px h-3 bg-border mx-0.5" />
+                        <button
+                          onClick={() => {
+                            const keys: string[] = [];
+                            for (const sp of (org.org?.spaces ?? []).filter(s => s.manageDest)) {
+                              keys.push(`space:${sp.spaceId}`);
+                              for (const i of (spaceInstances.get(sp.spaceId) ?? [])) keys.push(`inst:${i.instanceGuid}`);
+                            }
+                            setTreeSelectedKeys(new Set(keys));
+                            setLastTreeClickKey(keys[keys.length - 1] ?? '');
+                          }}
+                          className={btnOutline}
+                          title="Select all"
+                        >
+                          <CheckSquare className="h-3.5 w-3.5" />
+                          {maximized && <span className="ml-1">All</span>}
+                        </button>
+                        <button
+                          onClick={() => { setTreeSelectedKeys(new Set()); setLastTreeClickKey(''); }}
+                          className={btnOutline}
+                          title="Unselect all"
+                        >
+                          <Square className="h-3.5 w-3.5" />
+                          {maximized && <span className="ml-1">None</span>}
+                        </button>
+                      </div>
+                    </div>
+                    {/* Tree table */}
+                    <div
+                      className="flex-1 overflow-auto"
+                      tabIndex={0}
+                      onKeyDown={e => {
+                        if ((e.ctrlKey || e.metaKey) && e.key === 'a') {
+                          e.preventDefault();
+                          const keys: string[] = [];
+                          for (const sp of (org.org?.spaces ?? []).filter(s => s.manageDest)) {
+                            keys.push(`space:${sp.spaceId}`);
+                            for (const i of (spaceInstances.get(sp.spaceId) ?? [])) keys.push(`inst:${i.instanceGuid}`);
+                          }
+                          setTreeSelectedKeys(new Set(keys));
+                          setLastTreeClickKey(keys[keys.length - 1] ?? '');
+                        }
+                      }}
+                    >
+                      <table className="w-full border-collapse text-xs" style={{ tableLayout: 'fixed' }}>
+                        <colgroup>
+                          <col />
+                          <col style={{ width: '52px' }} />
+                        </colgroup>
+                        <thead className="sticky top-0 z-10">
+                          <tr className="bg-muted/40">
+                            <th className="px-2 py-1 text-left text-[10px] font-medium text-muted-foreground border-b border-border">Space / Instance</th>
+                            <th className="px-2 py-1 text-right text-[10px] font-medium text-muted-foreground border-b border-border">Dests</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                      {(() => {
+                        // Build ordered flat list of all visible tree nodes once (for shift-click range)
+                        const orderedKeys: string[] = [];
+                        for (const sp of (org.org?.spaces ?? []).filter(s => s.manageDest)) {
+                          orderedKeys.push(`space:${sp.spaceId}`);
+                          if (treeExpanded.has(sp.spaceId)) {
+                            for (const i of (spaceInstances.get(sp.spaceId) ?? [])) orderedKeys.push(`inst:${i.instanceGuid}`);
+                          }
+                        }
+
+                        function handleTreeClick(nodeKey: string, e: React.MouseEvent) {
+                          if (e.ctrlKey || e.metaKey) {
+                            setTreeSelectedKeys(prev => {
+                              const next = new Set(prev);
+                              if (next.has(nodeKey)) next.delete(nodeKey); else next.add(nodeKey);
+                              return next;
+                            });
+                            setLastTreeClickKey(nodeKey);
+                          } else if (e.shiftKey && lastTreeClickKey) {
+                            const a = orderedKeys.indexOf(lastTreeClickKey);
+                            const b = orderedKeys.indexOf(nodeKey);
+                            if (a >= 0 && b >= 0) {
+                              const [lo, hi] = a <= b ? [a, b] : [b, a];
+                              setTreeSelectedKeys(new Set(orderedKeys.slice(lo, hi + 1)));
+                            }
+                            setLastTreeClickKey(nodeKey);
+                          } else {
+                            setTreeSelectedKeys(new Set([nodeKey]));
+                            setLastTreeClickKey(nodeKey);
+                          }
+                        }
+
+                        return (org.org?.spaces ?? []).filter(s => s.manageDest).map(space => {
+                          const spaceNodeKey = `space:${space.spaceId}`;
+                          const isExpanded   = treeExpanded.has(space.spaceId);
+                          const isSpaceSel   = treeSelectedKeys.has(spaceNodeKey);
+                          const insts        = spaceInstances.get(space.spaceId) ?? [];
+                          // Dest count for the space = sum of all known instance dest counts
+                          const spaceDestCount = insts.reduce((sum, i) => sum + (instanceNames.get(i.instanceGuid)?.length ?? 0), 0);
+                          const rowCls       = (sel: boolean) => `cursor-pointer select-none hover:bg-muted/20 ${sel ? 'bg-primary/10 text-primary' : ''}`;
+                          return (
+                            <>
+                              {/* Space row */}
+                              <tr
+                                key={`space-${space.spaceId}`}
+                                className={rowCls(isSpaceSel)}
+                                onClick={e => {
+                                  handleTreeClick(spaceNodeKey, e);
+                                  if (!e.ctrlKey && !e.metaKey && !e.shiftKey) {
+                                    setTreeExpanded(prev => {
+                                      const next = new Set(prev);
+                                      if (next.has(space.spaceId)) next.delete(space.spaceId); else next.add(space.spaceId);
+                                      return next;
+                                    });
+                                    if (!allInstancesLoaded) void loadAllSpaceInstances();
+                                  }
+                                }}
+                              >
+                                <td className="px-2 py-1 border-b border-border/50 font-medium">
+                                  <span className="flex items-center gap-1">
+                                    {isExpanded ? <ChevronDown className="h-3 w-3 shrink-0" /> : <ChevronRight className="h-3 w-3 shrink-0" />}
+                                    <span className="truncate">{space.spaceName}</span>
+                                  </span>
+                                </td>
+                                <td className="px-2 py-1 border-b border-border/50 text-right text-muted-foreground text-[10px]">
+                                  {spaceInstances.has(space.spaceId) && spaceDestCount > 0 ? spaceDestCount : ''}
+                                </td>
+                              </tr>
+                              {/* Instance rows */}
+                              {isExpanded && (() => {
+                                if (!spaceInstances.has(space.spaceId)) {
+                                  return <tr key={`loading-${space.spaceId}`}><td colSpan={2} className="pl-6 pr-2 py-1 text-[10px] text-muted-foreground border-b border-border/50">{allInstancesLoaded ? 'No instances' : 'Loading…'}</td></tr>;
+                                }
+                                if (insts.length === 0) {
+                                  return <tr key={`empty-${space.spaceId}`}><td colSpan={2} className="pl-6 pr-2 py-1 text-[10px] text-muted-foreground border-b border-border/50">No instances</td></tr>;
+                                }
+                                return insts.map(inst => {
+                                  const instNodeKey = `inst:${inst.instanceGuid}`;
+                                  const isInstSel   = treeSelectedKeys.has(instNodeKey);
+                                  const instDestCount = instanceNames.get(inst.instanceGuid)?.length ?? 0;
+                                  return (
+                                    <tr
+                                      key={inst.instanceGuid}
+                                      className={rowCls(isInstSel)}
+                                      onClick={e => {
+                                        handleTreeClick(instNodeKey, e);
+                                        void loadInstanceDestNames(inst.instanceGuid, space.spaceName);
+                                      }}
+                                    >
+                                      <td className="pl-6 pr-2 py-1 border-b border-border/50 font-mono truncate">{inst.instanceName}</td>
+                                      <td className="px-2 py-1 border-b border-border/50 text-right text-muted-foreground text-[10px]">
+                                        {instanceNames.has(inst.instanceGuid) ? instDestCount : ''}
+                                      </td>
+                                    </tr>
+                                  );
+                                });
+                              })()}
+                            </>
+                          );
+                        });
+                      })()}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                  {/* Vertical drag divider */}
+                  <div
+                    onMouseDown={startTreeSplitResize}
+                    className="h-1.5 shrink-0 cursor-row-resize bg-border hover:bg-primary/50 transition-colors"
+                  />
+                  {/* Flat destination list (bottom pane) */}
+                  <div className="flex flex-col flex-1 min-h-0 overflow-hidden" style={{ height: `${100 - treeSplitPct}%` }}>
+                    {/* Search row — filter + inline action buttons */}
+                    <div className="px-2 py-2 border-b border-border shrink-0 flex items-center gap-1">
+                      <div className="relative flex-1 min-w-0">
+                        <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground pointer-events-none" />
+                        <input
+                          type="text"
+                          value={searchQuery}
+                          onChange={e => setSearchQuery(e.target.value)}
+                          placeholder="Search…"
+                          className={`w-full h-7 pl-7 text-xs border border-border rounded bg-background focus:outline-none focus:ring-1 focus:ring-ring placeholder:text-muted-foreground/50 ${searchQuery ? 'pr-6' : 'pr-2'}`}
+                        />
+                        {searchQuery && (
+                          <button onClick={() => setSearchQuery('')} className="absolute right-1.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors p-0.5" tabIndex={-1}>
+                            <X className="h-3 w-3" />
+                          </button>
+                        )}
+                      </div>
+                      {renderFilterToolbar({
+                        onExport: async () => {
+                          const toExport: { instanceGuid: string; spaceName: string; name: string }[] = [];
+                          for (const dk of selectedDestKeys) {
+                            const slashIdx = dk.indexOf('/');
+                            if (slashIdx < 0) continue;
+                            const prefix = dk.slice(0, slashIdx);
+                            const name   = dk.slice(slashIdx + 1);
+                            if (prefix !== 'sa') {
+                              let sName = '';
+                              for (const [sid, insts] of spaceInstances) {
+                                if (insts.find(x => x.instanceGuid === prefix)) {
+                                  sName = (org.org?.spaces ?? []).find(s => s.spaceId === sid)?.spaceName ?? '';
+                                  break;
+                                }
+                              }
+                              toExport.push({ instanceGuid: prefix, spaceName: sName, name });
+                            }
+                          }
+                          if (treeSelectedKeys.size === 0) { await handleExport(); return; }
+                          if (toExport.length === 0) return;
+                          const all: Record<string, unknown>[] = [];
+                          for (const { instanceGuid, spaceName, name } of toExport) {
+                            try {
+                              const res = await fetch(`/api/destinations/${enc(org.region)}/${enc(org.subdomain)}/spaces/${enc(spaceName)}/instances/${enc(instanceGuid)}/${enc(name)}/export`);
+                              if (res.ok) all.push(await res.json() as Record<string, unknown>);
+                            } catch { /* skip */ }
+                          }
+                          if (all.length === 0) return;
+                          const blob = new Blob([JSON.stringify(all.length === 1 ? all[0] : all, null, 2)], { type: 'application/json' });
+                          const href = URL.createObjectURL(blob);
+                          const a = Object.assign(document.createElement('a'), { href, download: `${org.region}_${org.subdomain}_instance_destinations.json` });
+                          document.body.appendChild(a); a.click(); document.body.removeChild(a); URL.revokeObjectURL(href);
+                        },
+                        exportDisabled: selectedDestKeys.size === 0,
+                        exportTitle: selectedDestKeys.size > 1 ? `Export ${selectedDestKeys.size} selected` : selectedDestKeys.size === 1 ? 'Export selected' : 'Select destinations to export',
+                        exportCount: selectedDestKeys.size,
+                        compareCount: selectedDestKeys.size,
+                        onCompare: () => {
+                          const destsForCompare: SelectedDest[] = [];
+                          for (const dk of selectedDestKeys) {
+                            const slashIdx = dk.indexOf('/');
+                            if (slashIdx < 0) continue;
+                            const prefix = dk.slice(0, slashIdx);
+                            const name   = dk.slice(slashIdx + 1);
+                            if (prefix === 'sa') {
+                              destsForCompare.push({ region: org.region, subdomain: org.subdomain, name });
+                            } else {
+                              let spaceName = ''; let instanceName = '';
+                              for (const [sid, insts] of spaceInstances) {
+                                const i = insts.find(x => x.instanceGuid === prefix);
+                                if (i) { instanceName = i.instanceName; spaceName = (org.org?.spaces ?? []).find(s => s.spaceId === sid)?.spaceName ?? ''; break; }
+                              }
+                              destsForCompare.push({ region: org.region, subdomain: org.subdomain, name, spaceName: spaceName || undefined, instanceName: instanceName || undefined, instanceGuid: prefix });
+                            }
+                          }
+                          onOpenCompare?.(destsForCompare);
+                        },
+                        isCreatingMode: isCreating,
+                      })}
+                    </div>
+                    <div
+                      ref={listRef}
+                      className="flex-1 overflow-auto py-1"
+                      onKeyDown={e => {
+                        if ((e.ctrlKey || e.metaKey) && e.key === 'a') {
+                          e.preventDefault();
+                          // Select all currently visible dest keys in the list
+                          if (treeSelectedKeys.size === 0) {
+                            setSelectedDestKeys(new Set(filteredNames.map(n => `sa/${n}`)));
+                          } else {
+                            const allDks: string[] = [];
+                            const seen = new Set<string>();
+                            for (const nodeKey of treeSelectedKeys) {
+                              if (nodeKey.startsWith('inst:')) {
+                                const guid = nodeKey.slice(5);
+                                if (!seen.has(guid)) { seen.add(guid); for (const n of (instanceNames.get(guid) ?? [])) { if (!searchQuery || n.toLowerCase().includes(searchQuery.toLowerCase())) allDks.push(`${guid}/${n}`); } }
+                              } else if (nodeKey.startsWith('space:')) {
+                                const sid = nodeKey.slice(6);
+                                for (const inst of (spaceInstances.get(sid) ?? [])) {
+                                  if (!seen.has(inst.instanceGuid)) { seen.add(inst.instanceGuid); for (const n of (instanceNames.get(inst.instanceGuid) ?? [])) { if (!searchQuery || n.toLowerCase().includes(searchQuery.toLowerCase())) allDks.push(`${inst.instanceGuid}/${n}`); } }
+                                }
+                              }
+                            }
+                            setSelectedDestKeys(new Set(allDks));
+                            if (allDks.length > 0) setLastClickDestKey(allDks[allDks.length - 1]!);
+                          }
+                        }
+                      }}
+                      tabIndex={0}
+                    >
+                      {(() => {
+                        // Collect rows from all selected tree nodes; if nothing selected show subaccount dests
+                        if (treeSelectedKeys.size === 0) {
+                          return filteredNames.map((name, idx) => {
+                            const dk         = `sa/${name}`;
+                            const isPrimary  = name === selectedName && !isCreating && !activeInstScope;
+                            const isSelDest  = selectedDestKeys.has(dk);
+                            return (
+                              <button
+                                key={dk}
+                                data-selected={isPrimary ? 'true' : undefined}
+                                onClick={e => {
+                                  if (e.ctrlKey || e.metaKey) {
+                                    setSelectedDestKeys(prev => { const n = new Set(prev); n.has(dk) ? n.delete(dk) : n.add(dk); return n; });
+                                    setLastClickDestKey(dk);
+                                  } else if (e.shiftKey && lastClickDestKey) {
+                                    const allDks = filteredNames.map(n => `sa/${n}`);
+                                    const a = allDks.indexOf(lastClickDestKey), b = idx;
+                                    const [lo, hi] = a <= b ? [a, b] : [b, a];
+                                    setSelectedDestKeys(new Set(allDks.slice(lo, hi + 1)));
+                                  } else {
+                                    handleDestClick(name, idx, e);
+                                    setActiveInstScope(null);
+                                    setSelectedDestKeys(new Set([dk]));
+                                    setLastClickDestKey(dk);
+                                  }
+                                }}
+                                className={`w-full text-left px-3 py-1.5 text-xs font-mono truncate transition-colors select-none ${isPrimary ? 'bg-primary/20 text-primary font-semibold' : isSelDest ? 'bg-primary/10 text-primary' : 'text-foreground hover:bg-muted/40'}`}
+                              >
+                                {name}
+                              </button>
+                            );
+                          });
+                        }
+                        // Collect all instance dests for selected tree nodes
+                        type InstRow = { instanceGuid: string; instanceName: string; spaceName: string; name: string };
+                        const rows: InstRow[] = [];
+                        const seenInst = new Set<string>();
+                        for (const nodeKey of treeSelectedKeys) {
+                          if (nodeKey.startsWith('inst:')) {
+                            const instGuid = nodeKey.slice(5);
+                            if (seenInst.has(instGuid)) continue;
+                            seenInst.add(instGuid);
+                            let instName = ''; let sName = '';
+                            for (const [sid, insts] of spaceInstances) {
+                              const i = insts.find(x => x.instanceGuid === instGuid);
+                              if (i) { instName = i.instanceName; sName = (org.org?.spaces ?? []).find(s => s.spaceId === sid)?.spaceName ?? ''; break; }
+                            }
+                            for (const n of (instanceNames.get(instGuid) ?? [])) {
+                              if (!searchQuery || n.toLowerCase().includes(searchQuery.toLowerCase())) rows.push({ instanceGuid: instGuid, instanceName: instName, spaceName: sName, name: n });
+                            }
+                          } else if (nodeKey.startsWith('space:')) {
+                            const spaceId = nodeKey.slice(6);
+                            const space   = (org.org?.spaces ?? []).find(s => s.spaceId === spaceId);
+                            if (!space) continue;
+                            for (const inst of (spaceInstances.get(spaceId) ?? [])) {
+                              if (seenInst.has(inst.instanceGuid)) continue;
+                              seenInst.add(inst.instanceGuid);
+                              for (const n of (instanceNames.get(inst.instanceGuid) ?? [])) {
+                                if (!searchQuery || n.toLowerCase().includes(searchQuery.toLowerCase())) rows.push({ instanceGuid: inst.instanceGuid, instanceName: inst.instanceName, spaceName: space.spaceName, name: n });
+                              }
+                            }
+                          }
+                        }
+                        if (rows.length === 0) {
+                          return <div className="px-3 py-2 text-[10px] text-muted-foreground">{allInstancesLoaded ? 'No destinations found' : 'Loading…'}</div>;
+                        }
+                        return rows.map((row, rowIdx) => {
+                          const dk        = `${row.instanceGuid}/${row.name}`;
+                          const isPrimary  = row.name === selectedName && activeInstScope?.instanceGuid === row.instanceGuid;
+                          const isSelDest  = selectedDestKeys.has(dk);
+                          return (
+                            <button
+                              key={dk}
+                              data-selected={isPrimary ? 'true' : undefined}
+                              onClick={e => {
+                                if (e.ctrlKey || e.metaKey) {
+                                  setSelectedDestKeys(prev => { const n = new Set(prev); n.has(dk) ? n.delete(dk) : n.add(dk); return n; });
+                                  setLastClickDestKey(dk);
+                                } else if (e.shiftKey && lastClickDestKey) {
+                                  const allDks = rows.map(r => `${r.instanceGuid}/${r.name}`);
+                                  const a = allDks.indexOf(lastClickDestKey), b = rowIdx;
+                                  const [lo, hi] = a <= b ? [a, b] : [b, a];
+                                  setSelectedDestKeys(new Set(allDks.slice(lo, hi + 1)));
+                                } else {
+                                  setSelectedDestKeys(new Set([dk]));
+                                  setLastClickDestKey(dk);
+                                  loadInstDest(row.spaceName, row.instanceGuid, row.instanceName, row.name);
+                                }
+                              }}
+                              className={`w-full text-left px-3 py-1.5 text-xs font-mono truncate transition-colors select-none ${isPrimary ? 'bg-primary/20 text-primary font-semibold' : isSelDest ? 'bg-primary/10 text-primary' : 'text-foreground hover:bg-muted/40'}`}
+                            >
+                              <span className="text-muted-foreground text-[10px]">{row.instanceName} › </span>{row.name}
+                            </button>
+                          );
+                        });
+                      })()}
+                    </div>
+                  </div>
+                </div>
+                {/* Horizontal drag divider */}
+                <div onMouseDown={startSplitResize} className="w-1.5 shrink-0 cursor-col-resize bg-border hover:bg-primary/50 transition-colors" />
+              </>
+            ) : (
+            <>
+            <div className="border-r border-border flex flex-col shrink-0 min-w-0" style={{ width: `${splitPct}%` }}>
+              {/* Search row — filter + inline action buttons */}
+              <div className="px-2 py-2 border-b border-border flex items-center gap-1">
+                <div className="relative flex-1 min-w-0">
                   <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground pointer-events-none" />
                   <input
                     type="text"
@@ -1076,8 +1694,29 @@ export default function SubaccountDestModal({ org, allNames, initialName, initia
                     </button>
                   )}
                 </div>
+                {renderFilterToolbar({
+                  onExport: handleExport,
+                  exportDisabled: selectedNames.size === 0 && !selectedName,
+                  exportTitle,
+                  exportCount: selectedNames.size,
+                  compareCount: selectedNames.size,
+                  onCompare: () => onOpenCompare?.([...selectedNames].map(name => ({ region: org.region, subdomain: org.subdomain, name }))),
+                  isCreatingMode: isCreating,
+                })}
               </div>
-              <div ref={listRef} className="flex-1 overflow-auto py-1">
+              <div
+                ref={listRef}
+                className="flex-1 overflow-auto py-1"
+                onKeyDown={e => {
+                  if ((e.ctrlKey || e.metaKey) && e.key === 'a') {
+                    e.preventDefault();
+                    setSelectedNames(new Set(filteredNames));
+                    setSelectedDestKeys(new Set(filteredNames.map(n => `sa/${n}`)));
+                    if (filteredNames.length > 0) setLastClickName(filteredNames[filteredNames.length - 1]!);
+                  }
+                }}
+                tabIndex={0}
+              >
                 {filteredNames.length === 0 ? (
                   <div className="px-3 py-4 text-xs text-muted-foreground text-center">
                     {isSearching ? 'Searching…' : 'No destinations found'}
@@ -1102,12 +1741,11 @@ export default function SubaccountDestModal({ org, allNames, initialName, initia
                   );
                 })}
               </div>
-              {!isCreating && selectedNames.size > 1 && (
-                <div className="px-3 py-1.5 border-t border-border text-[10px] text-muted-foreground shrink-0">
-                  {selectedNames.size} selected · Ctrl/Shift+click to select
-                </div>
-              )}
             </div>
+            {/* Horizontal drag divider */}
+            <div onMouseDown={startSplitResize} className="w-1.5 shrink-0 cursor-col-resize bg-border hover:bg-primary/50 transition-colors" />
+            </>
+            )
           )}
 
           {/* Right panel */}
@@ -1135,24 +1773,36 @@ export default function SubaccountDestModal({ org, allNames, initialName, initia
                 <div className="flex items-center gap-1 shrink-0">
                   {onToggleCompare && (
                     <button
-                      onClick={() => onToggleCompare({ region: org.region, subdomain: org.subdomain, name: selectedName })}
+                      onClick={() => {
+                        onToggleCompare({
+                          region:       org.region,
+                          subdomain:    org.subdomain,
+                          name:         selectedName,
+                          spaceName:    activeInstScope?.spaceName,
+                          instanceName: activeInstScope?.instanceName,
+                          instanceGuid: activeInstScope?.instanceGuid,
+                        });
+                      }}
                       disabled={!selectedName}
                       className={(() => {
                         const compareSelected = selectedDests?.some(
-                          d => d.region === org.region && d.subdomain === org.subdomain && d.name === selectedName,
+                          d => d.region === org.region && d.subdomain === org.subdomain && d.name === selectedName &&
+                            (activeInstScope ? d.instanceGuid === activeInstScope.instanceGuid : !d.instanceGuid),
                         );
                         return compareSelected
                           ? `${btnBase} border border-primary bg-primary/10 text-primary`
                           : btnOutline;
                       })()}
-                      title={selectedDests?.some(d => d.region === org.region && d.subdomain === org.subdomain && d.name === selectedName)
+                      title={selectedDests?.some(d => d.region === org.region && d.subdomain === org.subdomain && d.name === selectedName && (activeInstScope ? d.instanceGuid === activeInstScope.instanceGuid : !d.instanceGuid))
                         ? 'Remove from comparison basket' : 'Add to comparison basket'}
                     >
                       <GitCompare className="h-3.5 w-3.5" />
-                      <span className="hidden sm:inline">
-                        {selectedDests?.some(d => d.region === org.region && d.subdomain === org.subdomain && d.name === selectedName)
-                          ? 'In Compare' : 'Select for Compare'}
-                      </span>
+                      {maximized && (
+                        <span className="hidden sm:inline">
+                          {selectedDests?.some(d => d.region === org.region && d.subdomain === org.subdomain && d.name === selectedName && (activeInstScope ? d.instanceGuid === activeInstScope.instanceGuid : !d.instanceGuid))
+                            ? 'In Compare' : 'Select for Compare'}
+                        </span>
+                      )}
                     </button>
                   )}
                   <button
@@ -1161,7 +1811,7 @@ export default function SubaccountDestModal({ org, allNames, initialName, initia
                     className={btnOutline}
                   >
                     <RotateCcw className="h-3.5 w-3.5" />
-                    <span className="hidden sm:inline">Reset</span>
+                    {maximized && <span className="hidden sm:inline">Reset</span>}
                   </button>
                   <button
                     onClick={handleSave}
@@ -1169,7 +1819,7 @@ export default function SubaccountDestModal({ org, allNames, initialName, initia
                     className={`${btnBase} bg-primary text-primary-foreground hover:bg-primary/90`}
                   >
                     <Save className="h-3.5 w-3.5" />
-                    <span className="hidden sm:inline">{isSaving ? 'Saving…' : 'Save'}</span>
+                    {maximized && <span className="hidden sm:inline">{isSaving ? 'Saving…' : 'Save'}</span>}
                   </button>
                 </div>
               )}

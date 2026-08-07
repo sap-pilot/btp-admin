@@ -1,5 +1,34 @@
 # Changelog
 
+## [v1.5.0] - unreleased
+
+### Added
+- **Space-level destinations** — flag individual CF spaces as `manageDest` to enable discovery and sync of destination service instances within those spaces:
+  - **`manageDest` flag** — new boolean field on `subaccounts[].org.spaces[]` in `subaccounts.json`; preserved across subaccount refresh via existing `mergeOrg()` spread
+  - **SubaccountDetailModal: Dest column** — checkbox column in the CF Spaces table (admin/localhost only); `Save` and `Reset` buttons in the modal titlebar persist changes to `subaccounts.json` and append a changelog entry; `POST /api/config/subaccounts/:region/:subdomain/spaces`
+  - **SubaccountsTable: click-to-toggle-all column headers** — clicking the Home, Dest, or Roles column header toggles all visible rows for that column (restricted rows skipped for Dest/Roles); replaces the previous header checkbox approach
+  - **Destination service instance discovery** — on global/subaccount refresh, spaces with `manageDest=true` are queried via CF API `GET /v3/service_instances?service_plan_names=lite&space_guids=...` (one paginated query per region); instances are filtered by `dashboard_url` containing `/destinations`
+  - **Credential resolution** — checks `destination-tokens.json` then `destination-keys.json`; falls back to `GET /v3/service_credential_bindings` (CF API, one paginated query per region); saves discovered keys to `destination-keys.json`
+  - **Instance-level destination sync** — fetches `GET {credential.uri}/destination-configuration/v1/instanceDestinations`; on 401 re-acquires token and retries once; saves to `dest/{region}/{subdomain}/{spaceName}/{guid}_{instanceName}/{destName}.json` with per-destination `.changelog.md`
+  - **SubaccountDestModal: tree view** — when the subaccount has `manageDest` spaces the left panel expands to 50% width (horizontally draggable, 20–75%); the left panel splits vertically into a collapsible space→instance tree and a flat destination list (15–70% vertical split, also draggable); selecting a scope updates the flat list; tree toolbar: Expand All, Collapse All, Select All, Unselect All; Ctrl/Cmd+A selects all spaces and instances; Refresh button moved to modal header
+  - **SubaccountDestModal: destination list UX** — multi-select with Ctrl/Shift/click and Ctrl/Cmd+A (select all); Export button shows selection count badge; Compare(N) button is instant/ephemeral — opens a CompareModal without marking destinations "In Compare" in the main basket; instance-level dest counts populated eagerly on modal open (not lazily on first expand)
+  - **CompareModal: Reset All / Save All** — bulk reset and save buttons in the header; animated progress bar under the header showing per-destination save progress; auto-dismisses after 3 s on full success; individual per-column Reset/Save also update the shared progress bar
+  - **CompareModal: Add Property** — `+ Add Property` button in the table footer appends an editable row; key + per-column value inputs; committed into all columns on Enter or when focus leaves the row (Escape discards); committed properties persist as normal editable rows (derived from `colEdits`, not `colData`)
+  - **Global search extension** — `GET /api/destinations/search` now also walks space/instance subdirectory levels; results include `spaceName` and `instanceName`; the search results table shows `{spaceName} › {instanceName} › {name}` for instance-level matches
+  - **Compare dropdown** — space-level destinations show the full `{region} → {subdomain} → {spaceName} → {instanceName} → {name}` path
+  - **New REST endpoints**:
+    - `GET  /api/destinations/:region/:subdomain/spaces` — list spaces with their destination service instances
+    - `GET  /api/destinations/:region/:subdomain/spaces/:spaceName/instances/:instanceGuid` — list dest names for an instance
+    - `GET  /api/destinations/:region/:subdomain/spaces/:spaceName/instances/:instanceGuid/:name` — get a single instance destination
+    - `GET  /api/destinations/:region/:subdomain/spaces/:spaceName/instances/:instanceGuid/:name/changelog` — per-destination changelog
+    - `GET  /api/destinations/:region/:subdomain/spaces/:spaceName/instances/:instanceGuid/:name/export` — download as JSON
+    - `PUT  /api/destinations/:region/:subdomain/spaces/:spaceName/instances/:instanceGuid/:name` — update an instance destination
+    - `POST /api/config/subaccounts/:region/:subdomain/spaces` — save space `manageDest` settings
+
+### Fixed
+- **Global refresh progress bar** — progress counter was advancing once per instance instead of once per space, causing `current > total`; space refresh now runs before the final `done` event so the bar reaches 100% and the completion message is shown; the done message includes created/updated/deleted totals and a warning count when errors occurred
+- **CompareModal: `allKeys` derived from `colEdits`** — new properties added via `+ Add Property` are committed into `colEdits`; previously `allKeys` was built from `colData` (original server data) so committed new properties immediately disappeared from the table
+
 ## [v1.4.0] - unreleased
 
 ### Added
