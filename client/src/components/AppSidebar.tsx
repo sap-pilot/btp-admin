@@ -8,6 +8,7 @@ import {
 import { useAuth } from '@/hooks/useAuth';
 import { useTheme } from '@/hooks/useTheme';
 import { useSidebar, useSettings } from '@/components/AppLayout';
+import { useExperimentalFeatures } from '@/hooks/useExperimentalFeatures';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import UserSettingsModal from '@/components/UserSettingsModal';
 import type { SiteConfig } from '@shared/types';
@@ -83,6 +84,7 @@ export default function AppSidebar() {
   const { theme, toggleTheme } = useTheme();
   const { collapsed, toggle }  = useSidebar();
   const { settings }           = useSettings();
+  const { experimentalFeatures } = useExperimentalFeatures();
   const [userSettingsOpen,    setUserSettingsOpen]    = useState(false);
   const [userSettingsSection, setUserSettingsSection] = useState<'account' | 'themes'>('themes');
   const [sites,          setSites]          = useState<SiteConfig[]>([]);
@@ -196,7 +198,8 @@ export default function AppSidebar() {
           <div>
             {NAV_ITEMS.filter(item =>
               (!item.restricted || !auth.enabled || auth.loggedIn) &&
-              (!item.adminOnly  || !auth.enabled || auth.isAdmin)
+              (!item.adminOnly  || !auth.enabled || auth.isAdmin)  &&
+              (!item.wip        || experimentalFeatures)
             ).map(item => {
               const active      = !item.disabled && !item.soon && location.pathname.startsWith(item.href);
               const disabledCls = itemBase(collapsed) + 'text-sidebar-foreground/40 cursor-not-allowed select-none';

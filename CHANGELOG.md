@@ -28,6 +28,11 @@
 ### Fixed
 - **Global refresh progress bar** — progress counter was advancing once per instance instead of once per space, causing `current > total`; space refresh now runs before the final `done` event so the bar reaches 100% and the completion message is shown; the done message includes created/updated/deleted totals and a warning count when errors occurred
 - **CompareModal: `allKeys` derived from `colEdits`** — new properties added via `+ Add Property` are committed into `colEdits`; previously `allKeys` was built from `colData` (original server data) so committed new properties immediately disappeared from the table
+- **Destination overview table: per-SA packed rows** — generic and cep category rows now fill from the top row down per subaccount (same as s4), instead of aligning by shared destination name across all subaccounts; eliminates spurious empty cells caused by name mismatches
+- **SubaccountDetailModal: spaces table** — "Dest" column header renamed to "Manage Dest"
+
+### Changed
+- **Experimental Features flag** — Destinations, Role Collections, and Users sidebar items are hidden by default; users enable them via a toggle in **User Settings → User Account → Features → Experimental Features**; the flag is stored in `localStorage` (`btp-admin:experimental`), is per-browser, persists across sessions, and is independent of login state
 
 ## [v1.4.0] - unreleased
 
