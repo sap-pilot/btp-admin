@@ -133,12 +133,9 @@ function renderGlobalChangelog(text: string, highlight?: string): React.ReactNod
 
 export default function DestinationOverview() {
   const { toggle, collapsed } = useSidebar();
-  const { tab: tabParam, region: regionParam, subdomain: subdomainParam, name: nameParam, destTab, spaceName: spaceNameParam, instanceSlug: instanceSlugParam } = useParams<{
-    tab?: string; region?: string; subdomain?: string; name?: string; destTab?: string; spaceName?: string; instanceSlug?: string;
+  const { tab: tabParam, region: regionParam, subdomain: subdomainParam, name: nameParam, destTab, spaceName: spaceNameParam, instanceName: instanceNameParam, instanceGuid: instanceGuidParam } = useParams<{
+    tab?: string; region?: string; subdomain?: string; name?: string; destTab?: string; spaceName?: string; instanceName?: string; instanceGuid?: string;
   }>();
-  // Parse instanceSlug: "{instanceName}_{instanceGuid}"
-  const instanceGuidParam = instanceSlugParam ? (() => { const i = instanceSlugParam.lastIndexOf('_'); return i >= 0 ? instanceSlugParam.slice(i + 1) : undefined; })() : undefined;
-  const instanceNameParam = instanceSlugParam ? (() => { const i = instanceSlugParam.lastIndexOf('_'); return i >= 0 ? instanceSlugParam.slice(0, i) : instanceSlugParam; })() : undefined;
   const navigate  = useNavigate();
   const location  = useLocation();
   const returnUrl = useRef<string>('/destinations');
@@ -272,7 +269,7 @@ export default function DestinationOverview() {
       deepLinkKey.current = ''; // navigated away — reset so the next deep-link always works
       return;
     }
-    const key = `${regionParam}/${subdomainParam}/${spaceNameParam ?? ''}/${instanceSlugParam ?? ''}/${nameParam ?? ''}/${destTab ?? ''}`;
+    const key = `${regionParam}/${subdomainParam}/${spaceNameParam ?? ''}/${instanceNameParam ?? ''}/${instanceGuidParam ?? ''}/${nameParam ?? ''}/${destTab ?? ''}`;
     if (deepLinkKey.current === key) return; // already opened this exact URL
     if (saData.length === 0) return; // wait for data
     const destSas = saData.filter(sa => sa.manageDestinations && !!sa.org?.orgId);
@@ -290,7 +287,7 @@ export default function DestinationOverview() {
       initialInstanceName: instanceNameParam || undefined,
       initialInstanceGuid: instanceGuidParam || undefined,
     });
-  }, [regionParam, subdomainParam, nameParam, destTab, spaceNameParam, instanceSlugParam, saData, destData]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [regionParam, subdomainParam, nameParam, destTab, spaceNameParam, instanceNameParam, instanceGuidParam, saData, destData]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Close compare dropdown on outside click
   useEffect(() => {
@@ -372,24 +369,25 @@ export default function DestinationOverview() {
   const allDestSas = saData.filter(sa => sa.manageDestinations && !!sa.org?.orgId);
   const isFiltered = filterResults !== null;
 
-  // orgId → Map<compositeKey, DestSearchResult> — composite key = "name|spaceName|instanceName"
+  // "region/subdomain" → Map<compositeKey, DestSearchResult> — composite key = "name|spaceName|instanceName"
   const matchedByOrg = new Map<string, Map<string, DestSearchResult>>();
   if (isFiltered) {
     for (const r of filterResults) {
-      if (!matchedByOrg.has(r.org_id)) matchedByOrg.set(r.org_id, new Map());
+      const saKey = `${r.region}/${r.subdomain}`;
+      if (!matchedByOrg.has(saKey)) matchedByOrg.set(saKey, new Map());
       const key = `${r.name}|${r.spaceName ?? ''}|${r.instanceName ?? ''}`;
-      matchedByOrg.get(r.org_id)!.set(key, r);
+      matchedByOrg.get(saKey)!.set(key, r);
     }
   }
 
   function saVisible(sa: SubaccountEntry): boolean {
-    return !isFiltered || matchedByOrg.has(saOrgId(sa));
+    return !isFiltered || matchedByOrg.has(`${sa.region}/${sa.subdomain}`);
   }
 
   // null = no filter active (show all); Map = only these results
   function matchedForSa(sa: SubaccountEntry): Map<string, DestSearchResult> | null {
     if (!isFiltered) return null;
-    return matchedByOrg.get(saOrgId(sa)) ?? new Map();
+    return matchedByOrg.get(`${sa.region}/${sa.subdomain}`) ?? new Map();
   }
 
   function filterDestItems(items: DestItem[], matched: Map<string, DestSearchResult> | null): DestItem[] {
@@ -796,7 +794,7 @@ export default function DestinationOverview() {
                           const seen = new Set<string>();
                           const allRows: RowEntry[] = [];
                           for (const { sa } of saBuckets) {
-                            const m = matchedByOrg.get(saOrgId(sa));
+                            const m = matchedByOrg.get(`${sa.region}/${sa.subdomain}`);
                             if (!m) continue;
                             for (const [key, result] of m) {
                               if (!seen.has(key)) { seen.add(key); allRows.push({ compositeKey: key, result }); }
@@ -826,7 +824,7 @@ export default function DestinationOverview() {
                                 }
                               </td>
                               {saBuckets.map(({ sa, allDests }) => {
-                                const matched = matchedByOrg.get(saOrgId(sa));
+                                const matched = matchedByOrg.get(`${sa.region}/${sa.subdomain}`);
                                 const present = matched?.has(compositeKey) ?? false;
                                 const r = matched?.get(compositeKey);
                                 return (

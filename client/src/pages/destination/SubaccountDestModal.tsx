@@ -6,6 +6,8 @@ import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator,
   DropdownMenuSub, DropdownMenuSubContent, DropdownMenuSubTrigger, DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { Button } from '@/components/ui/button';
 import { useAuth } from '@/hooks/useAuth';
 import { useSettings } from '@/components/AppLayout';
 import type { SubaccountEntry, SpaceEntry } from '@/components/config/SubaccountsTable';
@@ -108,6 +110,7 @@ interface DestProp {
 interface DestSearchResult { name: string; matchField: string; matchValue: string; spaceName?: string; instanceName?: string; instanceGuid?: string }
 type Tab        = 'properties' | 'changelog' | 'test';
 type HttpMethod = 'GET' | 'POST' | 'PUT' | 'DELETE' | 'PATCH';
+type ImportTarget = { type: 'sa' } | { type: 'inst'; spaceName: string; instanceGuid: string; instanceName: string };
 
 export interface SubaccountDestModalProps {
   org:                   SubaccountEntry;
@@ -594,6 +597,38 @@ function TestTab() {
   );
 }
 
+function getImportTargets(
+  treeSelectedKeys: Set<string>,
+  spaceInstances: Map<string, Array<{ instanceGuid: string; instanceName: string }>>,
+  org: SubaccountEntry,
+): ImportTarget[] {
+  const result: ImportTarget[] = [];
+  const hasSa   = treeSelectedKeys.size === 0 || treeSelectedKeys.has('sa:root');
+  const hasInst = [...treeSelectedKeys].some(k => k.startsWith('space:') || k.startsWith('inst:'));
+  if (hasSa || !hasInst) result.push({ type: 'sa' });
+  const seenGuids = new Set<string>();
+  for (const key of treeSelectedKeys) {
+    if (key.startsWith('inst:')) {
+      const guid = key.slice(5);
+      if (seenGuids.has(guid)) continue; seenGuids.add(guid);
+      let spaceName = ''; let instanceName = '';
+      for (const [sid, insts] of spaceInstances) {
+        const i = insts.find(x => x.instanceGuid === guid);
+        if (i) { spaceName = (org.org?.spaces ?? []).find(s => s.spaceId === sid)?.spaceName ?? ''; instanceName = i.instanceName; break; }
+      }
+      result.push({ type: 'inst', spaceName, instanceGuid: guid, instanceName });
+    } else if (key.startsWith('space:')) {
+      const sid = key.slice(6);
+      const spaceName = (org.org?.spaces ?? []).find(s => s.spaceId === sid)?.spaceName ?? '';
+      for (const inst of spaceInstances.get(sid) ?? []) {
+        if (seenGuids.has(inst.instanceGuid)) continue; seenGuids.add(inst.instanceGuid);
+        result.push({ type: 'inst', spaceName, instanceGuid: inst.instanceGuid, instanceName: inst.instanceName });
+      }
+    }
+  }
+  return result;
+}
+
 // ─── Main modal ───────────────────────────────────────────────────────────────
 
 export default function SubaccountDestModal({ org, allNames, initialName, initialTab, initialShowList, initialSpaceName, initialInstanceName, initialInstanceGuid, onClose, selectedDests, onToggleCompare, onOpenCompare }: SubaccountDestModalProps) {
@@ -622,7 +657,13 @@ export default function SubaccountDestModal({ org, allNames, initialName, initia
   const [editedProps, setEditedProps] = useState<DestProp[]>([]);
   const [isLoading,   setIsLoading]   = useState(false);
   const [isSaving,    setIsSaving]    = useState(false);
-  const [isImporting, setIsImporting] = useState(false);
+
+  // Import dialog state
+  const [importItems,      setImportItems]      = useState<Record<string, unknown>[]>([]);
+  const [importDialogOpen, setImportDialogOpen] = useState(false);
+  const [importProgress,   setImportProgress]   = useState<{ done: number; total: number; lastDest?: string; lastAction?: 'created' | 'updated' | 'error' } | null>(null);
+  const [importSummary,    setImportSummary]     = useState<{ created: number; updated: number; errors: string[] } | null>(null);
+  const isImportRunning = importProgress !== null && importSummary === null;
 
   // Left-panel visibility toggle
   const [showList,   setShowList]   = useState(initialShowList ?? true);
@@ -815,7 +856,7 @@ export default function SubaccountDestModal({ org, allNames, initialName, initia
     const tabSuffix = activeTab === 'changelog' ? '/history' : activeTab === 'test' ? '/test' : '';
     const base = `/destinations/${encodeURIComponent(org.region)}/${encodeURIComponent(org.subdomain)}`;
     const path = activeInstScope
-      ? `${base}/${encodeURIComponent(activeInstScope.spaceName)}/${encodeURIComponent(activeInstScope.instanceName)}_${encodeURIComponent(activeInstScope.instanceGuid)}/${encodeURIComponent(selectedName)}${tabSuffix}`
+      ? `${base}/${encodeURIComponent(activeInstScope.spaceName)}/${encodeURIComponent(activeInstScope.instanceName)}/${encodeURIComponent(activeInstScope.instanceGuid)}/${encodeURIComponent(selectedName)}${tabSuffix}`
       : `${base}/${encodeURIComponent(selectedName)}${tabSuffix}`;
     history.replaceState(null, '', path);
   }, [selectedName, activeTab, activeInstScope, org.region, org.subdomain]);
@@ -1023,29 +1064,68 @@ export default function SubaccountDestModal({ org, allNames, initialName, initia
     const file = e.target.files?.[0];
     if (!file) return;
     e.target.value = '';
-    setIsImporting(true); 
     try {
       const text   = await file.text();
       const parsed = JSON.parse(text) as Record<string, unknown> | Record<string, unknown>[];
-      const items  = Array.isArray(parsed) ? parsed : [parsed];
-      let lastName = '';
-      for (const item of items) {
-        const name = String(item['Name'] ?? '').trim();
-        if (!name) continue;
-        const res  = await fetch(`/api/destinations/${enc(org.region)}/${enc(org.subdomain)}/${enc(name)}`, {
-          method:  'PUT',
-          headers: { 'Content-Type': 'application/json' },
-          body:    JSON.stringify({ data: item, username }),
-        });
-        const json = await res.json() as { ok: boolean; error?: string };
-        if (!json.ok) throw new Error(`Import failed for ${name}: ${json.error ?? 'unknown error'}`);
-        setLocalAllNames(prev => [...new Set([...prev, name])].sort());
-        lastName = name;
+      const items  = (Array.isArray(parsed) ? parsed : [parsed]).filter(i => typeof i['Name'] === 'string' && (i['Name'] as string).trim());
+      if (items.length === 0) { setSaveBanner({ type: 'error', message: 'No valid destinations in file' }); return; }
+      setImportItems(items);
+      setImportProgress(null);
+      setImportSummary(null);
+      setImportDialogOpen(true);
+    } catch {
+      setSaveBanner({ type: 'error', message: 'Invalid JSON file' });
+    }
+  }
+
+  async function runImport(targets: ImportTarget[]) {
+    const total = importItems.length * targets.length;
+    setImportProgress({ done: 0, total });
+    setImportSummary(null);
+    let done = 0; let created = 0; let updated = 0;
+    const errors: string[]  = [];
+    const changes: Array<{ region: string; subdomain: string; name: string; action: 'created' | 'updated'; spaceName?: string; instanceGuid?: string; instanceName?: string }> = [];
+
+    for (const item of importItems) {
+      const name = String(item['Name']).trim();
+      for (const target of targets) {
+        let lastAction: 'created' | 'updated' | 'error' = 'updated';
+        try {
+          const url = target.type === 'sa'
+            ? `/api/destinations/${enc(org.region)}/${enc(org.subdomain)}/${enc(name)}`
+            : `/api/destinations/${enc(org.region)}/${enc(org.subdomain)}/spaces/${enc(target.spaceName)}/instances/${enc(target.instanceGuid)}/${enc(name)}`;
+          const isNew = target.type === 'sa'
+            ? !localAllNames.includes(name)
+            : !(instanceNames.get(target.instanceGuid) ?? []).includes(name);
+          const res  = await fetch(url, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ data: item, username, action: 'import' }) });
+          const json = await res.json() as { ok: boolean; error?: string };
+          if (!json.ok) throw new Error(json.error ?? 'PUT failed');
+          lastAction = isNew ? 'created' : 'updated';
+          if (isNew) { created++; } else { updated++; }
+          changes.push({ region: org.region, subdomain: org.subdomain, name, action: isNew ? 'created' : 'updated', ...(target.type === 'inst' ? { spaceName: target.spaceName, instanceGuid: target.instanceGuid, instanceName: target.instanceName } : {}) });
+          if (target.type === 'sa') setLocalAllNames(prev => [...new Set([...prev, name])].sort());
+          else setInstanceNames(prev => { const m = new Map(prev); m.set(target.instanceGuid, [...new Set([...(m.get(target.instanceGuid) ?? []), name])].sort()); return m; });
+        } catch (err) {
+          lastAction = 'error';
+          errors.push(`${name}${target.type === 'inst' ? ` (${target.instanceName})` : ''}: ${err instanceof Error ? err.message : 'error'}`);
+        }
+        done++;
+        setImportProgress({ done, total, lastDest: name, lastAction });
       }
-      if (lastName) { selectDest(lastName); setActiveTab('properties'); setIsCreating(false); }
-    } catch (err) {
-      setSaveBanner({ type: 'error', message: err instanceof Error ? err.message : 'Import failed' });
-    } finally { setIsImporting(false); }
+    }
+
+    // Write one grouped global changelog entry
+    if (changes.length > 0) {
+      try {
+        await fetch('/api/destinations/batch-changelog', {
+          method:  'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body:    JSON.stringify({ changes }),
+        });
+      } catch { /* non-fatal */ }
+    }
+
+    setImportSummary({ created, updated, errors });
   }
 
   async function handleCreateSave() {
@@ -1135,12 +1215,12 @@ export default function SubaccountDestModal({ org, allNames, initialName, initia
         </button>
         <button
           onClick={() => fileInputRef.current?.click()}
-          disabled={isImporting}
+          disabled={isImportRunning}
           className={btnOutline}
           title="Import destination(s) from JSON"
         >
           <Upload className="h-3.5 w-3.5" />
-          {maximized && <span className="ml-1 max-[680px]:hidden">{isImporting ? 'Importing…' : 'Import'}</span>}
+          {maximized && <span className="ml-1 max-[680px]:hidden">Import</span>}
         </button>
         <button
           onClick={onExport}
@@ -1957,7 +2037,7 @@ export default function SubaccountDestModal({ org, allNames, initialName, initia
                   )}
                   <button
                     onClick={() => { setEditedProps(structuredClone(serverProps)); setSaveBanner(null); }}
-                    disabled={!isDirty || isSaving || isImporting}
+                    disabled={!isDirty || isSaving || isImportRunning}
                     className={btnOutline}
                   >
                     <RotateCcw className="h-3.5 w-3.5" />
@@ -1965,7 +2045,7 @@ export default function SubaccountDestModal({ org, allNames, initialName, initia
                   </button>
                   <button
                     onClick={handleSave}
-                    disabled={!selectedName || !isDirty || isSaving || isImporting}
+                    disabled={!selectedName || !isDirty || isSaving || isImportRunning}
                     className={`${btnBase} bg-primary text-primary-foreground hover:bg-primary/90`}
                   >
                     <Save className="h-3.5 w-3.5" />
@@ -2025,8 +2105,122 @@ export default function SubaccountDestModal({ org, allNames, initialName, initia
           className="hidden"
           onChange={handleFileChange}
         />
+        <ImportDialog
+          open={importDialogOpen}
+          onClose={() => setImportDialogOpen(false)}
+          org={org}
+          spaceInstances={spaceInstances}
+          treeSelectedKeys={treeSelectedKeys}
+          importItems={importItems}
+          onConfirm={targets => void runImport(targets)}
+          progress={importProgress}
+          summary={importSummary}
+        />
       </div>
     </div>
+  );
+}
+
+function ImportDialog({ open, onClose, org, spaceInstances, treeSelectedKeys, importItems, onConfirm, progress, summary }: {
+  open: boolean; onClose: () => void;
+  org: SubaccountEntry;
+  spaceInstances: Map<string, Array<{ instanceGuid: string; instanceName: string }>>;
+  treeSelectedKeys: Set<string>;
+  importItems: Record<string, unknown>[];
+  onConfirm: (targets: ImportTarget[]) => void;
+  progress: { done: number; total: number; lastDest?: string; lastAction?: 'created' | 'updated' | 'error' } | null;
+  summary: { created: number; updated: number; errors: string[] } | null;
+}) {
+  const targets   = getImportTargets(treeSelectedKeys, spaceInstances, org);
+  const isRunning = progress !== null && progress.done < progress.total;
+  const isDone    = summary !== null;
+  return (
+    <Dialog open={open} onOpenChange={v => { if (!v && !isRunning) onClose(); }}>
+      <DialogContent className="max-w-2xl w-full">
+        <DialogHeader>
+          <DialogTitle>Import Destinations</DialogTitle>
+        </DialogHeader>
+
+        <div className="flex gap-3 min-h-[160px] max-h-[360px]">
+          <div className="flex-1 overflow-auto border rounded p-2 space-y-0.5 text-xs">
+            <p className="font-medium text-muted-foreground mb-1.5">Import into ({targets.length} scope{targets.length !== 1 ? 's' : ''})</p>
+            {targets.map((t, i) => (
+              <div key={i} className="text-foreground truncate py-0.5">
+                {t.type === 'sa'
+                  ? `${org.alias ?? org.subdomain} — subaccount`
+                  : `${t.spaceName} › ${t.instanceName}`}
+              </div>
+            ))}
+          </div>
+          <div className="flex-1 overflow-auto border rounded p-2 space-y-0.5 text-xs">
+            <p className="font-medium text-muted-foreground mb-1.5">{importItems.length} destination{importItems.length !== 1 ? 's' : ''}</p>
+            {importItems.map((item, i) => (
+              <div key={i} className="font-mono text-foreground truncate py-0.5">{String(item['Name'])}</div>
+            ))}
+          </div>
+        </div>
+
+        {/* Status / summary banner */}
+        <div className={`relative px-3 py-2 rounded border text-xs overflow-hidden ${
+            isDone && summary!.errors.length > 0 && summary!.created + summary!.updated === 0
+              ? 'bg-destructive/5 border-destructive/20 text-destructive'
+              : isDone && summary!.errors.length > 0
+              ? 'bg-amber-500/5 border-amber-500/20 text-amber-700 dark:text-amber-400'
+              : isDone
+              ? 'bg-green-500/5 border-green-500/20 text-green-700 dark:text-green-400'
+              : isRunning
+              ? 'bg-muted/30 border-border text-muted-foreground'
+              : 'bg-muted/20 border-border text-muted-foreground'
+          }`}>
+            {isRunning && progress && (
+              <div className="absolute bottom-0 left-0 h-0.5 w-full bg-primary/20">
+                <div
+                  className="h-full bg-primary transition-all duration-200"
+                  style={{ width: `${progress.total > 0 ? Math.round(progress.done / progress.total * 100) : 0}%` }}
+                />
+              </div>
+            )}
+            {isRunning && progress && (
+              <span>
+                {progress.done} of {progress.total} {progress.lastAction === 'created' ? 'created' : progress.lastAction === 'updated' ? 'updated' : progress.lastAction === 'error' ? 'failed' : 'pending'}
+                {progress.lastDest ? `: ${progress.lastDest}` : ''}
+              </span>
+            )}
+            {isDone && summary!.errors.length === 0 && (
+              <span>
+                Success: {summary!.created + summary!.updated} destination{summary!.created + summary!.updated !== 1 ? 's' : ''} imported
+                ({summary!.created} created, {summary!.updated} updated) in {targets.length} scope{targets.length !== 1 ? 's' : ''}
+              </span>
+            )}
+            {isDone && summary!.errors.length > 0 && (
+              <div className="space-y-1">
+                <span className="font-medium">
+                  {summary!.created + summary!.updated > 0 ? 'Warning' : 'Error'}:{' '}
+                  {summary!.created + summary!.updated} of {progress?.total ?? (importItems.length * targets.length)} destinations imported
+                  ({summary!.created} created, {summary!.updated} updated) in {targets.length} scope{targets.length !== 1 ? 's' : ''};
+                  however the following destinations failed:
+                </span>
+                <ul className="mt-1 space-y-0.5 list-none">
+                  {summary!.errors.map((e, i) => <li key={i} className="font-mono truncate">{e}</li>)}
+                </ul>
+              </div>
+            )}
+            {!isRunning && !isDone && (
+              <span>Existing destinations with matching names will be overwritten.</span>
+            )}
+          </div>
+
+        <DialogFooter>
+          {!isDone && <Button variant="outline" size="sm" onClick={onClose} disabled={isRunning}>Cancel</Button>}
+          {!isDone && (
+            <Button size="sm" onClick={() => onConfirm(targets)} disabled={isRunning || targets.length === 0 || importItems.length === 0}>
+              Import {importItems.length} destination{importItems.length !== 1 ? 's' : ''}
+            </Button>
+          )}
+          {isDone && <Button size="sm" onClick={onClose}>Close</Button>}
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 

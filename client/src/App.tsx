@@ -71,8 +71,8 @@ export default function App() {
               <Route path="/home/:tab" element={<HomePage />} />
               <Route path="/destinations" element={<DestinationOverview />} />
               <Route path="/destinations/:tab" element={<DestinationOverview />} />
-              <Route path="/destinations/:region/:subdomain/:spaceName/:instanceSlug/:name/:destTab" element={<DestinationOverview />} />
-              <Route path="/destinations/:region/:subdomain/:spaceName/:instanceSlug/:name" element={<DestinationOverview />} />
+              <Route path="/destinations/:region/:subdomain/:spaceName/:instanceName/:instanceGuid/:name/:destTab" element={<DestinationOverview />} />
+              <Route path="/destinations/:region/:subdomain/:spaceName/:instanceName/:instanceGuid/:name" element={<DestinationOverview />} />
               <Route path="/destinations/:region/:subdomain/:name/:destTab" element={<DestinationOverview />} />
               <Route path="/destinations/:region/:subdomain/:name" element={<DestinationOverview />} />
               <Route path="/role-collections" element={<RoleCollectionsOverview />} />
