@@ -796,7 +796,7 @@ function parseGlobalRefreshTsFromChangelog(text: string): number | null {
 // Applies the same 2 MB rotation as writeGlobalChangelog.
 async function appendSubaccountGlobalChangelog(
   mode:     'auto' | 'manual',
-  action:   'refresh' | 'update' | 'import',
+  action:   'refresh' | 'update' | 'import' | 'delete',
   username: string,
   changes:  DestChange[],
 ): Promise<void> {
@@ -822,6 +822,8 @@ async function appendSubaccountGlobalChangelog(
   const scopeWord  = action === 'import' ? (hasInst ? 'subaccount/instances' : 'subaccount') : 'subaccount';
   const summary    = action === 'import'
     ? `Import: created ${created}, updated ${updated} destinations`
+    : action === 'delete'
+    ? `Manual delete: deleted ${deleted} destinations`
     : `${action === 'update' ? 'Manual update' : 'Refresh'}: created ${created}, updated ${updated} and deleted ${deleted} destinations`;
 
   let entry = `## [${modeLabel}] ${scopeWord} destinations ${action} by <${username}> at ${dateStr}\n\n${summary}`;
@@ -1851,6 +1853,40 @@ export async function saveDestinationEntry(
   if (diffLines.length > 0) notifyCallbacks();
   emit('dest', { region, subdomain, name, ts: Date.now() });
   return { isNew, changed: diffLines.length > 0 };
+}
+
+export async function deleteDestinationEntry(
+  region: string, subdomain: string, name: string, username: string,
+): Promise<void> {
+  const { jsonPath, changelogPath } = guardDestPath(region, subdomain, name);
+  if (!existsSync(jsonPath)) throw Object.assign(new Error('Destination not found'), { status: 404 });
+  const dateStr = new Date().toISOString().replace('T', ' ').slice(0, 19) + ' UTC';
+  const entry   = `## [Manual] destination deleted by <${username}> at ${dateStr}\n\n`;
+  const prev    = existsSync(changelogPath) ? await readFile(changelogPath, 'utf-8') : '';
+  await writeFile(changelogPath, entry + prev, 'utf-8');
+  await rename(jsonPath, join(jsonPath.replace(/\.json$/, '.deleted.json')));
+  await appendSubaccountGlobalChangelog('manual', 'delete', username, [{ region, subdomain, name, action: 'deleted' }])
+    .catch(err => logger.error({ err }, 'Failed to write global changelog after delete'));
+  emit('dest', { region, subdomain, name, ts: Date.now() });
+}
+
+export async function deleteInstanceDestinationEntry(
+  region: string, subdomain: string, spaceName: string, instanceGuid: string, name: string, username: string,
+): Promise<void> {
+  const { jsonPath, changelogPath, instanceDir } = await guardSpaceDestPath(region, subdomain, spaceName, instanceGuid, name);
+  if (!existsSync(jsonPath)) throw Object.assign(new Error('Destination not found'), { status: 404 });
+  // resolve instanceName from directory name ({guid}_{instanceName})
+  const dirBasename  = instanceDir.split(sep).pop() ?? '';
+  const underscoreIdx = dirBasename.indexOf('_');
+  const instanceName = underscoreIdx >= 0 ? dirBasename.slice(underscoreIdx + 1) : dirBasename;
+  const dateStr = new Date().toISOString().replace('T', ' ').slice(0, 19) + ' UTC';
+  const entry   = `## [Manual] destination deleted by <${username}> at ${dateStr}\n\n`;
+  const prev    = existsSync(changelogPath) ? await readFile(changelogPath, 'utf-8') : '';
+  await writeFile(changelogPath, entry + prev, 'utf-8');
+  await rename(jsonPath, join(jsonPath.replace(/\.json$/, '.deleted.json')));
+  await appendSubaccountGlobalChangelog('manual', 'delete', username, [{ region, subdomain, name, action: 'deleted', spaceName, instanceName, instanceGuid }])
+    .catch(err => logger.error({ err }, 'Failed to write global changelog after instance delete'));
+  emit('dest', { region, subdomain, name, ts: Date.now() });
 }
 
 export type ImportTarget =

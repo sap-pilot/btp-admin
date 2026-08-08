@@ -665,6 +665,12 @@ export default function SubaccountDestModal({ org, allNames, initialName, initia
   const [importSummary,    setImportSummary]     = useState<{ created: number; updated: number; errors: string[] } | null>(null);
   const isImportRunning = importProgress !== null && importSummary === null;
 
+  // Delete dialog state
+  const [deleteTargets,   setDeleteTargets]   = useState<DeleteTarget[]>([]);
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
+  const [deleteProgress,   setDeleteProgress]   = useState<{ done: number; total: number; lastName?: string } | null>(null);
+  const [deleteSummary,    setDeleteSummary]     = useState<{ deleted: number; errors: string[] } | null>(null);
+
   // Left-panel visibility toggle
   const [showList,   setShowList]   = useState(initialShowList ?? true);
   const [maximized,  setMaximized]  = useState(false);
@@ -1128,6 +1134,39 @@ export default function SubaccountDestModal({ org, allNames, initialName, initia
     setImportSummary({ created, updated, errors });
   }
 
+  async function runDelete(targets: DeleteTarget[]) {
+    setDeleteProgress({ done: 0, total: targets.length });
+    setDeleteSummary(null);
+    let done = 0; let deleted = 0;
+    const errors: string[] = [];
+    for (const t of targets) {
+      try {
+        const url = t.instanceGuid && t.spaceName
+          ? `/api/destinations/${enc(org.region)}/${enc(org.subdomain)}/spaces/${enc(t.spaceName)}/instances/${enc(t.instanceGuid)}/${enc(t.name)}`
+          : `/api/destinations/${enc(org.region)}/${enc(org.subdomain)}/${enc(t.name)}`;
+        const res  = await fetch(url, { method: 'DELETE' });
+        const json = await res.json() as { ok: boolean; error?: string };
+        if (!json.ok) throw new Error(json.error ?? 'DELETE failed');
+        deleted++;
+        if (t.instanceGuid) setInstanceNames(prev => { const m = new Map(prev); m.set(t.instanceGuid!, (m.get(t.instanceGuid!) ?? []).filter(n => n !== t.name)); return m; });
+        else {
+          setLocalAllNames(prev => prev.filter(n => n !== t.name));
+          setFilteredNames(prev => prev.filter(n => n !== t.name));
+          if (selectedName === t.name) selectDest('');
+        }
+      } catch (err) {
+        errors.push(`${t.name}${t.instanceName ? ` (${t.instanceName})` : ''}: ${err instanceof Error ? err.message : 'error'}`);
+      }
+      done++;
+      setDeleteProgress({ done, total: targets.length, lastName: t.name });
+    }
+    setDeleteSummary({ deleted, errors });
+    if (errors.length === 0) {
+      setSelectedDestKeys(new Set());
+      setSelectedNames(new Set());
+    }
+  }
+
   async function handleCreateSave() {
     const name = newName.trim();
     if (!name) { setCreateError('Destination name is required'); return; }
@@ -1200,9 +1239,11 @@ export default function SubaccountDestModal({ org, allNames, initialName, initia
     exportCount: number;
     compareCount: number;
     onCompare: () => void;
+    deleteCount: number;
+    onDelete: () => void;
     isCreatingMode: boolean;
   }) {
-    const { onExport, exportDisabled, compareCount, onCompare, isCreatingMode } = opts;
+    const { onExport, exportDisabled, compareCount, onCompare, deleteCount, onDelete, isCreatingMode } = opts;
     return (
       <>
         <button
@@ -1244,6 +1285,18 @@ export default function SubaccountDestModal({ org, allNames, initialName, initia
           {maximized
             ? <span className="ml-1 max-[680px]:hidden">Compare{compareCount > 0 ? ` (${compareCount})` : ''}</span>
             : compareCount > 0 ? <span className="text-[10px]">{compareCount}</span> : null
+          }
+        </button>
+        <button
+          onClick={onDelete}
+          disabled={deleteCount === 0}
+          className={`${btnOutline} ${deleteCount > 0 ? 'text-destructive border-destructive/40 hover:bg-destructive/10' : ''}`}
+          title={deleteCount > 0 ? `Delete ${deleteCount} selected destination${deleteCount !== 1 ? 's' : ''}` : 'Select destinations to delete'}
+        >
+          <Trash2 className="h-3.5 w-3.5" />
+          {maximized
+            ? <span className="ml-1 max-[680px]:hidden">Delete{deleteCount > 0 ? ` (${deleteCount})` : ''}</span>
+            : deleteCount > 0 ? <span className="text-[10px]">{deleteCount}</span> : null
           }
         </button>
       </>
@@ -1729,6 +1782,30 @@ export default function SubaccountDestModal({ org, allNames, initialName, initia
                           }
                           onOpenCompare?.(destsForCompare);
                         },
+                        deleteCount: selectedDestKeys.size,
+                        onDelete: () => {
+                          const targets: DeleteTarget[] = [];
+                          for (const dk of selectedDestKeys) {
+                            const slashIdx = dk.indexOf('/');
+                            if (slashIdx < 0) continue;
+                            const prefix = dk.slice(0, slashIdx);
+                            const name   = dk.slice(slashIdx + 1);
+                            if (prefix === 'sa') {
+                              targets.push({ name });
+                            } else {
+                              let spaceName = ''; let instanceName = '';
+                              for (const [sid, insts] of spaceInstances) {
+                                const i = insts.find(x => x.instanceGuid === prefix);
+                                if (i) { instanceName = i.instanceName; spaceName = (org.org?.spaces ?? []).find(s => s.spaceId === sid)?.spaceName ?? ''; break; }
+                              }
+                              targets.push({ name, instanceGuid: prefix, instanceName, spaceName });
+                            }
+                          }
+                          setDeleteTargets(targets);
+                          setDeleteProgress(null);
+                          setDeleteSummary(null);
+                          setDeleteDialogOpen(true);
+                        },
                         isCreatingMode: isCreating,
                       })}
                     </div>
@@ -1926,6 +2003,13 @@ export default function SubaccountDestModal({ org, allNames, initialName, initia
                   exportCount: selectedNames.size,
                   compareCount: selectedNames.size,
                   onCompare: () => onOpenCompare?.([...selectedNames].map(name => ({ region: org.region, subdomain: org.subdomain, name }))),
+                  deleteCount: selectedNames.size,
+                  onDelete: () => {
+                    setDeleteTargets([...selectedNames].map(name => ({ name })));
+                    setDeleteProgress(null);
+                    setDeleteSummary(null);
+                    setDeleteDialogOpen(true);
+                  },
                   isCreatingMode: isCreating,
                 })}
               </div>
@@ -2116,6 +2200,15 @@ export default function SubaccountDestModal({ org, allNames, initialName, initia
           progress={importProgress}
           summary={importSummary}
         />
+        <DeleteDialog
+          open={deleteDialogOpen}
+          onClose={() => setDeleteDialogOpen(false)}
+          org={org}
+          targets={deleteTargets}
+          onConfirm={() => void runDelete(deleteTargets)}
+          progress={deleteProgress}
+          summary={deleteSummary}
+        />
       </div>
     </div>
   );
@@ -2215,6 +2308,90 @@ function ImportDialog({ open, onClose, org, spaceInstances, treeSelectedKeys, im
           {!isDone && (
             <Button size="sm" onClick={() => onConfirm(targets)} disabled={isRunning || targets.length === 0 || importItems.length === 0}>
               Import {importItems.length} destination{importItems.length !== 1 ? 's' : ''}
+            </Button>
+          )}
+          {isDone && <Button size="sm" onClick={onClose}>Close</Button>}
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+type DeleteTarget = { name: string; instanceGuid?: string; instanceName?: string; spaceName?: string };
+
+function DeleteDialog({ open, onClose, org, targets, onConfirm, progress, summary }: {
+  open: boolean; onClose: () => void;
+  org: SubaccountEntry;
+  targets: DeleteTarget[];
+  onConfirm: () => void;
+  progress: { done: number; total: number; lastName?: string } | null;
+  summary: { deleted: number; errors: string[] } | null;
+}) {
+  const isRunning = progress !== null && summary === null;
+  const isDone    = summary !== null;
+  const pct       = progress && progress.total > 0 ? Math.round(progress.done / progress.total * 100) : 0;
+  const saLabel   = org.alias ?? org.subdomain;
+
+  return (
+    <Dialog open={open} onOpenChange={v => { if (!v && !isRunning) onClose(); }}>
+      <DialogContent className="max-w-xl w-full">
+        <DialogHeader>
+          <DialogTitle>Delete Destinations</DialogTitle>
+        </DialogHeader>
+
+        <div className="border rounded overflow-auto max-h-[300px]">
+          <ul className="text-xs divide-y divide-border">
+            {targets.map((t, i) => (
+              <li key={i} className="px-3 py-1.5 font-mono truncate text-foreground">
+                {org.region} &gt; {saLabel} ({org.subdomain}){t.spaceName ? ` > ${t.spaceName} > ${t.instanceName}` : ''} &gt; <span className="font-semibold">{t.name}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+
+        {/* Status / summary banner */}
+        <div className={`relative px-3 py-2 rounded border text-xs overflow-hidden ${
+          isDone && summary!.errors.length > 0 && summary!.deleted === 0
+            ? 'bg-destructive/5 border-destructive/20 text-destructive'
+            : isDone && summary!.errors.length > 0
+            ? 'bg-amber-500/5 border-amber-500/20 text-amber-700 dark:text-amber-400'
+            : isDone
+            ? 'bg-green-500/5 border-green-500/20 text-green-700 dark:text-green-400'
+            : isRunning
+            ? 'bg-muted/30 border-border text-muted-foreground'
+            : 'bg-amber-500/5 border-amber-500/20 text-amber-700 dark:text-amber-400'
+        }`}>
+          {isRunning && progress && (
+            <div className="absolute bottom-0 left-0 h-0.5 w-full bg-primary/20">
+              <div className="h-full bg-primary transition-all duration-200" style={{ width: `${pct}%` }} />
+            </div>
+          )}
+          {!isRunning && !isDone && (
+            <span>This operation is not reversible. Consider exporting destinations as a backup before proceeding.</span>
+          )}
+          {isRunning && progress && (
+            <span>{progress.done} of {progress.total} deleted{progress.lastName ? `: ${progress.lastName}` : ''}</span>
+          )}
+          {isDone && summary!.errors.length === 0 && (
+            <span>Success: {summary!.deleted} destination{summary!.deleted !== 1 ? 's' : ''} deleted.</span>
+          )}
+          {isDone && summary!.errors.length > 0 && (
+            <div className="space-y-1">
+              <span className="font-medium">
+                {summary!.deleted > 0 ? 'Warning' : 'Error'}: {summary!.deleted} of {targets.length} destination{targets.length !== 1 ? 's' : ''} deleted; however the following failed:
+              </span>
+              <ul className="mt-1 space-y-0.5 list-none">
+                {summary!.errors.map((e, i) => <li key={i} className="font-mono truncate">{e}</li>)}
+              </ul>
+            </div>
+          )}
+        </div>
+
+        <DialogFooter>
+          {!isDone && <Button variant="outline" size="sm" onClick={onClose} disabled={isRunning}>Cancel</Button>}
+          {!isDone && (
+            <Button variant="destructive" size="sm" onClick={onConfirm} disabled={isRunning || targets.length === 0}>
+              Delete {targets.length} destination{targets.length !== 1 ? 's' : ''}
             </Button>
           )}
           {isDone && <Button size="sm" onClick={onClose}>Close</Button>}
