@@ -691,7 +691,7 @@ export interface RefreshResult {
   skipped?:  boolean;
 }
 
-interface DestChange { region: string; subdomain: string; name: string; action: 'created' | 'updated' | 'deleted' }
+interface DestChange { region: string; subdomain: string; name: string; action: 'created' | 'updated' | 'deleted'; spaceName?: string; instanceName?: string; instanceGuid?: string }
 
 function formatChangelogTs(d: Date): string {
   const p = (n: number) => String(n).padStart(2, '0');
@@ -796,7 +796,7 @@ function parseGlobalRefreshTsFromChangelog(text: string): number | null {
 // Applies the same 2 MB rotation as writeGlobalChangelog.
 async function appendSubaccountGlobalChangelog(
   mode:     'auto' | 'manual',
-  action:   'refresh' | 'update',
+  action:   'refresh' | 'update' | 'import',
   username: string,
   changes:  DestChange[],
 ): Promise<void> {
@@ -813,17 +813,24 @@ async function appendSubaccountGlobalChangelog(
     }
   } catch { /* file may not exist yet */ }
 
-  const modeLabel = mode === 'auto' ? 'Auto' : 'Manual';
-  const dateStr   = new Date().toISOString().replace('T', ' ').slice(0, 19) + ' UTC';
-  const created   = changes.filter(c => c.action === 'created').length;
-  const updated   = changes.filter(c => c.action === 'updated').length;
-  const deleted   = changes.filter(c => c.action === 'deleted').length;
-  const summary   = `${action === 'update' ? 'Manual update' : 'Refresh'}: created ${created}, updated ${updated} and deleted ${deleted} destinations`;
+  const modeLabel  = mode === 'auto' ? 'Auto' : 'Manual';
+  const dateStr    = new Date().toISOString().replace('T', ' ').slice(0, 19) + ' UTC';
+  const created    = changes.filter(c => c.action === 'created').length;
+  const updated    = changes.filter(c => c.action === 'updated').length;
+  const deleted    = changes.filter(c => c.action === 'deleted').length;
+  const hasInst    = changes.some(c => c.spaceName);
+  const scopeWord  = action === 'import' ? (hasInst ? 'subaccount/instances' : 'subaccount') : 'subaccount';
+  const summary    = action === 'import'
+    ? `Import: created ${created}, updated ${updated} destinations`
+    : `${action === 'update' ? 'Manual update' : 'Refresh'}: created ${created}, updated ${updated} and deleted ${deleted} destinations`;
 
-  let entry = `## [${modeLabel}] subaccount destination ${action} by <${username}> at ${dateStr}\n\n${summary}`;
+  let entry = `## [${modeLabel}] ${scopeWord} destinations ${action} by <${username}> at ${dateStr}\n\n${summary}`;
   for (const c of changes) {
-    const histPath = `/destinations/${encodeURIComponent(c.region)}/${encodeURIComponent(c.subdomain)}/${encodeURIComponent(c.name)}/history`;
-    entry += `\n- ${c.action}: ${c.region}.${c.subdomain} -> ${c.name} ([History](${histPath}))`;
+    const histPath = c.spaceName
+      ? `/destinations/${encodeURIComponent(c.region)}/${encodeURIComponent(c.subdomain)}/${encodeURIComponent(c.spaceName)}/${encodeURIComponent(c.instanceName ?? '')}/${encodeURIComponent(c.instanceGuid ?? '')}/${encodeURIComponent(c.name)}/history`
+      : `/destinations/${encodeURIComponent(c.region)}/${encodeURIComponent(c.subdomain)}/${encodeURIComponent(c.name)}/history`;
+    const scopeLabel = c.spaceName ? ` > ${c.spaceName} > ${c.instanceName}` : '';
+    entry += `\n- ${c.action}: ${c.region} > ${c.subdomain}${scopeLabel} → ${c.name} ([History](${histPath}))`;
   }
   entry += '\n\n';
 
@@ -1484,7 +1491,9 @@ export async function saveInstanceDestinationEntry(
   name:        string,
   incoming:    Record<string, unknown>,
   username:    string,
-): Promise<void> {
+  action:      'update' | 'import' = 'update',
+  skipGlobalChangelog = false,
+): Promise<{ isNew: boolean; changed: boolean; instanceName: string }> {
   const { instanceDir, jsonPath, changelogPath } = await guardSpaceDestPath(region, subdomain, spaceName, instanceGuid, name);
 
   // Derive instanceName from the resolved instanceDir name
@@ -1494,6 +1503,7 @@ export async function saveInstanceDestinationEntry(
 
   let existing: Record<string, unknown> = {};
   try { existing = JSON.parse(await readFile(jsonPath, 'utf-8')) as Record<string, unknown>; } catch { /* new */ }
+  const isNew = Object.keys(existing).length === 0;
 
   // Restore redacted sentinel
   const merged: Record<string, unknown> = {};
@@ -1544,15 +1554,24 @@ export async function saveInstanceDestinationEntry(
 
   if (diffLines.length > 0) {
     const dateStr = new Date().toISOString().replace('T', ' ').slice(0, 19) + ' UTC';
-    const entry   = `## Manual update by <${username}> at ${dateStr}\n${diffLines.join('\n')}\n\n`;
-    const prev    = existsSync(changelogPath) ? await readFile(changelogPath, 'utf-8') : '';
+    const heading = action === 'import'
+      ? `## [Manual] destination imported by <${username}> at ${dateStr}`
+      : `## Manual update by <${username}> at ${dateStr}`;
+    const entry = `${heading}\n\n~${diffLines.length} field${diffLines.length !== 1 ? 's' : ''} updated:\n${diffLines.join('\n')}\n\n`;
+    const prev  = existsSync(changelogPath) ? await readFile(changelogPath, 'utf-8') : '';
     await writeFile(changelogPath, entry + prev, 'utf-8');
     notifyCallbacks();
     emit('dest', { region, subdomain, ts: Date.now() });
-    logger.info({ user: username, location, changes: diffLines }, 'Instance destination updated');
+    if (!skipGlobalChangelog) {
+      await appendSubaccountGlobalChangelog('manual', action === 'import' ? 'import' : 'update', username, [{
+        region, subdomain, name, action: isNew ? 'created' : 'updated', spaceName, instanceName,
+      }]).catch(err => logger.error({ err }, 'Failed to write subaccount global changelog'));
+    }
+    logger.info({ user: username, location, changes: diffLines }, action === 'import' ? 'Instance destination imported' : 'Instance destination updated');
   } else {
     logger.info({ user: username, location }, 'Instance destination saved (no changes)');
   }
+  return { isNew, changed: diffLines.length > 0, instanceName };
 }
 
 // ─── Public: search ───────────────────────────────────────────────────────────
@@ -1576,6 +1595,7 @@ export async function searchDestinations(query: string, scopeRegion?: string, sc
 
   const allSas         = await readSubaccounts();
   const restrictedKeys = new Set(allSas.filter(sa => sa.restricted).map(sa => `${sa.region}/${sa.subdomain}`));
+  const managedKeys    = new Set(allSas.filter(sa => sa.manageDestinations).map(sa => `${sa.region}/${sa.subdomain}`));
   const orgIndex = new Map<string, string>();
   for (const sa of allSas) {
     if (sa.manageDestinations && sa.org?.orgId) orgIndex.set(`${sa.region}/${sa.subdomain}`, sa.org.orgId);
@@ -1611,7 +1631,7 @@ export async function searchDestinations(query: string, scopeRegion?: string, sc
     try {
       const { stdout } = await execFileAsync(
         'grep',
-        ['-rnwil', dir, '--include=*.json', '-e', query],
+        ['-ril', dir, '--include=*.json', '-e', query],
         { maxBuffer: 10 * 1024 * 1024 },
       );
       return stdout.trim() ? stdout.trim().split('\n') : [];
@@ -1652,7 +1672,7 @@ export async function searchDestinations(query: string, scopeRegion?: string, sc
 
   if (scopeRegion && scopeSubdomain) {
     // Fast path: grep the entire subaccount directory in one shot
-    if (!restrictedKeys.has(`${scopeRegion}/${scopeSubdomain}`)) {
+    if (!restrictedKeys.has(`${scopeRegion}/${scopeSubdomain}`) && managedKeys.has(`${scopeRegion}/${scopeSubdomain}`)) {
       const subDir = join(LOCAL_DEST_DIR, scopeRegion, scopeSubdomain);
       if (existsSync(subDir)) await processDir(scopeRegion, scopeSubdomain, subDir);
     }
@@ -1666,6 +1686,7 @@ export async function searchDestinations(query: string, scopeRegion?: string, sc
       const subdomains = await readdir(regionDir).catch(() => [] as string[]);
       for (const subdomain of subdomains) {
         if (restrictedKeys.has(`${region}/${subdomain}`)) continue;
+        if (!managedKeys.has(`${region}/${subdomain}`)) continue;
         const subDir = join(regionDir, subdomain);
         try { if (!(await stat(subDir)).isDirectory()) continue; } catch { continue; }
         await processDir(region, subdomain, subDir);
@@ -1781,11 +1802,14 @@ export async function saveDestinationEntry(
   name:     string,
   incoming: Record<string, unknown>,
   username: string,
-): Promise<void> {
+  action:   'update' | 'import' = 'update',
+  skipGlobalChangelog = false,
+): Promise<{ isNew: boolean; changed: boolean }> {
   const { jsonPath, changelogPath } = guardDestPath(region, subdomain, name);
 
   let existing: Record<string, unknown> = {};
   try { existing = JSON.parse(await readFile(jsonPath, 'utf-8')) as Record<string, unknown>; } catch { /* new */ }
+  const isNew = Object.keys(existing).length === 0;
 
   // Restore original sensitive values when the client sent the redacted sentinel
   const merged: Record<string, unknown> = {};
@@ -1807,12 +1831,17 @@ export async function saveDestinationEntry(
 
   if (diffLines.length > 0) {
     const dateStr = new Date().toISOString().replace('T', ' ').slice(0, 19) + ' UTC';
-    const entry   = `## Manual update done by <${username}> at ${dateStr}\n${diffLines.join('\n')}\n\n`;
-    const prev    = existsSync(changelogPath) ? await readFile(changelogPath, 'utf-8') : '';
+    const heading = action === 'import'
+      ? `## [Manual] destination imported by <${username}> at ${dateStr}`
+      : `## Manual update done by <${username}> at ${dateStr}`;
+    const entry = `${heading}\n\n~${diffLines.length} field${diffLines.length !== 1 ? 's' : ''} updated:\n${diffLines.join('\n')}\n\n`;
+    const prev  = existsSync(changelogPath) ? await readFile(changelogPath, 'utf-8') : '';
     await writeFile(changelogPath, entry + prev, 'utf-8');
-    await appendSubaccountGlobalChangelog('manual', 'update', username, [{ region, subdomain, name, action: 'updated' }])
-      .catch(err => logger.error({ err }, 'Failed to write subaccount global changelog'));
-    logger.info({ user: username, destination: `${region}.${subdomain}/${name}`, changes: diffLines }, 'Destination updated');
+    if (!skipGlobalChangelog) {
+      await appendSubaccountGlobalChangelog('manual', action === 'import' ? 'import' : 'update', username, [{ region, subdomain, name, action: isNew ? 'created' : 'updated' }])
+        .catch(err => logger.error({ err }, 'Failed to write subaccount global changelog'));
+    }
+    logger.info({ user: username, destination: `${region}.${subdomain}/${name}`, changes: diffLines }, action === 'import' ? 'Destination imported' : 'Destination updated');
   } else {
     logger.info({ user: username, destination: `${region}.${subdomain}/${name}` }, 'Destination saved (no changes)');
   }
@@ -1821,6 +1850,70 @@ export async function saveDestinationEntry(
   await writeFile(jsonPath, JSON.stringify(merged, null, 2), 'utf-8');
   if (diffLines.length > 0) notifyCallbacks();
   emit('dest', { region, subdomain, name, ts: Date.now() });
+  return { isNew, changed: diffLines.length > 0 };
+}
+
+export type ImportTarget =
+  | { type: 'sa' }
+  | { type: 'inst'; spaceName: string; instanceGuid: string; instanceName: string };
+
+export interface BatchImportResult {
+  created: number;
+  updated: number;
+  errors: Array<{ name: string; target: string; message: string }>;
+}
+
+export async function batchImportDestinations(
+  region:    string,
+  subdomain: string,
+  items:     Record<string, unknown>[],
+  targets:   ImportTarget[],
+  username:  string,
+): Promise<BatchImportResult> {
+  const allChanges: DestChange[] = [];
+  let created = 0; let updated = 0;
+  const errors: BatchImportResult['errors'] = [];
+
+  for (const item of items) {
+    const name = String(item['Name'] ?? '').trim();
+    if (!name) continue;
+    for (const target of targets) {
+      try {
+        if (target.type === 'sa') {
+          const r = await saveDestinationEntry(region, subdomain, name, item, username, 'import', true);
+          if (r.changed) { allChanges.push({ region, subdomain, name, action: r.isNew ? 'created' : 'updated' }); }
+          if (r.isNew) created++; else updated++;
+        } else {
+          const r = await saveInstanceDestinationEntry(region, subdomain, target.spaceName, target.instanceGuid, name, item, username, 'import', true);
+          if (r.changed) {
+            allChanges.push({ region, subdomain, name, action: r.isNew ? 'created' : 'updated', spaceName: target.spaceName, instanceGuid: target.instanceGuid, instanceName: r.instanceName });
+          }
+          if (r.isNew) created++; else updated++;
+        }
+      } catch (err) {
+        const targetLabel = target.type === 'sa' ? subdomain : `${target.spaceName}/${target.instanceName}`;
+        errors.push({ name, target: targetLabel, message: err instanceof Error ? err.message : 'unknown error' });
+      }
+    }
+  }
+
+  if (allChanges.length > 0) {
+    // Build a single grouped global changelog entry for the entire import batch
+    const hasInstances = allChanges.some(c => c.spaceName);
+    const scopeLabel   = hasInstances ? 'subaccount/instances' : 'subaccount';
+    await appendSubaccountGlobalChangelog('manual', 'import', username, allChanges)
+      .catch(err => logger.error({ err }, 'Failed to write batch import global changelog'));
+    logger.info({ user: username, region, subdomain, created, updated, scope: scopeLabel }, 'Batch destination import complete');
+  }
+
+  return { created, updated, errors };
+}
+
+export async function appendImportGlobalChangelog(
+  username: string,
+  changes: Array<{ region: string; subdomain: string; name: string; action: 'created' | 'updated'; spaceName?: string; instanceGuid?: string; instanceName?: string }>,
+): Promise<void> {
+  await appendSubaccountGlobalChangelog('manual', 'import', username, changes);
 }
 
 export async function getDestinationChangelog(region: string, subdomain: string, name: string): Promise<string> {

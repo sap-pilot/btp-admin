@@ -23,6 +23,9 @@ import {
   exportInstanceDestination,
   saveInstanceDestinationEntry,
   countDestinationFiles,
+  batchImportDestinations,
+  appendImportGlobalChangelog,
+  type ImportTarget,
 } from '../services/destinationService.js';
 import { getAutoGlobalRefreshMs, getAutoSubaccountRefreshMs } from '../services/configService.js';
 
@@ -93,6 +96,39 @@ router.post('/refresh', requireAdmin, async (req, res, next) => {
       return;
     }
     res.json({ ok: true, result });
+  } catch (err) { next(err); }
+});
+
+router.post('/batch-import', requireAdmin, async (req, res, next) => {
+  try {
+    const authReq  = req as AuthRequest;
+    const username = authReq.authSession?.email || authReq.authSession?.firstName || 'admin';
+    const { region, subdomain, items, targets } = req.body as {
+      region: string; subdomain: string;
+      items: Record<string, unknown>[];
+      targets: ImportTarget[];
+    };
+    if (!region || !subdomain || !Array.isArray(items) || !Array.isArray(targets)) {
+      return void res.status(400).json({ ok: false, error: 'region, subdomain, items and targets are required' });
+    }
+    if (await isSubaccountRestricted(region, subdomain)) return void res.status(403).json({ ok: false, error: 'Access to this subaccount is restricted' });
+    const result = await batchImportDestinations(region, subdomain, items, targets, username);
+    res.json({ ok: true, ...result });
+  } catch (err) { next(err); }
+});
+
+router.post('/batch-changelog', requireAdmin, async (req, res, next) => {
+  try {
+    const authReq  = req as AuthRequest;
+    const username = authReq.authSession?.email || authReq.authSession?.firstName || 'admin';
+    const { changes } = req.body as {
+      changes: Array<{ region: string; subdomain: string; name: string; action: 'created' | 'updated'; spaceName?: string; instanceGuid?: string; instanceName?: string }>;
+    };
+    if (!Array.isArray(changes) || changes.length === 0) {
+      return void res.status(400).json({ ok: false, error: 'changes array is required' });
+    }
+    await appendImportGlobalChangelog(username, changes);
+    res.json({ ok: true });
   } catch (err) { next(err); }
 });
 
@@ -185,11 +221,11 @@ router.put('/:region/:subdomain/spaces/:spaceName/instances/:instanceGuid/:name'
   try {
     const { region, subdomain, spaceName, instanceGuid, name } = req.params as Record<string, string>;
     if (await isSubaccountRestricted(region, subdomain)) return void res.status(403).json(RESTRICTED);
-    const { data, username = 'admin' } = req.body as { data: Record<string, unknown>; username?: string };
+    const { data, username = 'admin', action } = req.body as { data: Record<string, unknown>; username?: string; action?: 'update' | 'import' };
     const authReq      = req as AuthRequest;
     const sessionUser  = authReq.authSession?.email || authReq.authSession?.firstName || username;
     if (!data || typeof data !== 'object') return void res.status(400).json({ ok: false, error: 'data required' });
-    await saveInstanceDestinationEntry(region, subdomain, spaceName, instanceGuid, name, data, sessionUser);
+    await saveInstanceDestinationEntry(region, subdomain, spaceName, instanceGuid, name, data, sessionUser, action);
     res.json({ ok: true });
   } catch (err) { next(err); }
 });
@@ -246,11 +282,11 @@ router.put('/:region/:subdomain/:name', requireAdmin, async (req, res, next) => 
   try {
     const { region, subdomain, name } = req.params as { region: string; subdomain: string; name: string };
     if (await isSubaccountRestricted(region, subdomain)) return void res.status(403).json(RESTRICTED);
-    const { data, username = 'admin' } = req.body as { data: Record<string, unknown>; username?: string };
+    const { data, username = 'admin', action } = req.body as { data: Record<string, unknown>; username?: string; action?: 'update' | 'import' };
     const authReq   = req as AuthRequest;
     const sessionUser = authReq.authSession?.email || authReq.authSession?.firstName || username;
     if (!data || typeof data !== 'object') return void res.status(400).json({ ok: false, error: 'data required' });
-    await saveDestinationEntry(region, subdomain, name, data, sessionUser);
+    await saveDestinationEntry(region, subdomain, name, data, sessionUser, action);
     res.json({ ok: true });
   } catch (err) { next(err); }
 });
