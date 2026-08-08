@@ -33,7 +33,7 @@ interface RefreshProgress {
 
 interface Buckets { generic: string[]; s4: string[]; cep: string[]; others: string[] }
 
-interface ModalState { sa: SubaccountEntry; allNames: string[]; initialName?: string; initialTab?: 'properties' | 'changelog' | 'test'; initialShowList?: boolean }
+interface ModalState { sa: SubaccountEntry; allNames: string[]; initialName?: string; initialTab?: 'properties' | 'changelog' | 'test'; initialShowList?: boolean; initialSpaceName?: string; initialInstanceName?: string; initialInstanceGuid?: string }
 
 interface DestSearchResult {
   region:        string;
@@ -44,6 +44,7 @@ interface DestSearchResult {
   matchValue:    string;
   spaceName?:    string;
   instanceName?: string;
+  instanceGuid?: string;
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -132,9 +133,12 @@ function renderGlobalChangelog(text: string, highlight?: string): React.ReactNod
 
 export default function DestinationOverview() {
   const { toggle, collapsed } = useSidebar();
-  const { tab: tabParam, region: regionParam, subdomain: subdomainParam, name: nameParam, destTab } = useParams<{
-    tab?: string; region?: string; subdomain?: string; name?: string; destTab?: string;
+  const { tab: tabParam, region: regionParam, subdomain: subdomainParam, name: nameParam, destTab, spaceName: spaceNameParam, instanceSlug: instanceSlugParam } = useParams<{
+    tab?: string; region?: string; subdomain?: string; name?: string; destTab?: string; spaceName?: string; instanceSlug?: string;
   }>();
+  // Parse instanceSlug: "{instanceName}_{instanceGuid}"
+  const instanceGuidParam = instanceSlugParam ? (() => { const i = instanceSlugParam.lastIndexOf('_'); return i >= 0 ? instanceSlugParam.slice(i + 1) : undefined; })() : undefined;
+  const instanceNameParam = instanceSlugParam ? (() => { const i = instanceSlugParam.lastIndexOf('_'); return i >= 0 ? instanceSlugParam.slice(0, i) : instanceSlugParam; })() : undefined;
   const navigate  = useNavigate();
   const location  = useLocation();
   const returnUrl = useRef<string>('/destinations');
@@ -146,6 +150,7 @@ export default function DestinationOverview() {
   const [isRefreshing,    setIsRefreshing]    = useState(false);
   const [progress,        setProgress]        = useState<RefreshProgress | null>(null);
   const [globalRefreshTs, setGlobalRefreshTs] = useState<number | null>(null);
+  const [totalDestCount,  setTotalDestCount]  = useState<number | null>(null);
   const [modal,        setModal]        = useState<ModalState | null>(null);
   const [showRefreshDialog,      setShowRefreshDialog]      = useState(false);
   const [showForceRefreshDialog, setShowForceRefreshDialog] = useState(false);
@@ -179,8 +184,11 @@ export default function DestinationOverview() {
   async function fetchStatus() {
     try {
       const res  = await fetch('/api/destinations/status');
-      const json = await res.json() as { ok: boolean; globalRefreshTs: number | null };
-      if (json.ok) setGlobalRefreshTs(json.globalRefreshTs);
+      const json = await res.json() as { ok: boolean; globalRefreshTs: number | null; totalDestCount?: number };
+      if (json.ok) {
+        setGlobalRefreshTs(json.globalRefreshTs);
+        if (json.totalDestCount != null) setTotalDestCount(json.totalDestCount);
+      }
     } catch { /* ignore */ }
   }
 
@@ -258,13 +266,13 @@ export default function DestinationOverview() {
     }
   }, [location.pathname, regionParam, subdomainParam]);
 
-  // Open modal from deep-link URL: /destinations/:region/:subdomain/:name[/:destTab]
+  // Open modal from deep-link URL: /destinations/:region/:subdomain/[:space/:instanceSlug/]:name[/:destTab]
   useEffect(() => {
     if (!regionParam || !subdomainParam) {
       deepLinkKey.current = ''; // navigated away — reset so the next deep-link always works
       return;
     }
-    const key = `${regionParam}/${subdomainParam}/${nameParam ?? ''}/${destTab ?? ''}`;
+    const key = `${regionParam}/${subdomainParam}/${spaceNameParam ?? ''}/${instanceSlugParam ?? ''}/${nameParam ?? ''}/${destTab ?? ''}`;
     if (deepLinkKey.current === key) return; // already opened this exact URL
     if (saData.length === 0) return; // wait for data
     const destSas = saData.filter(sa => sa.manageDestinations && !!sa.org?.orgId);
@@ -273,8 +281,16 @@ export default function DestinationOverview() {
     deepLinkKey.current = key;
     const names = (destData[saOrgId(sa)] ?? []).map(d => d.name).sort();
     const initialTab = destTab === 'history' ? 'changelog' : destTab === 'test' ? 'test' : 'properties';
-    setModal({ sa, allNames: names, initialName: nameParam ?? names[0], initialTab, initialShowList: !nameParam });
-  }, [regionParam, subdomainParam, nameParam, destTab, saData, destData]);
+    setModal({
+      sa, allNames: names,
+      initialName: nameParam ?? names[0],
+      initialTab,
+      initialShowList: !nameParam || !!spaceNameParam,
+      initialSpaceName:    spaceNameParam    || undefined,
+      initialInstanceName: instanceNameParam || undefined,
+      initialInstanceGuid: instanceGuidParam || undefined,
+    });
+  }, [regionParam, subdomainParam, nameParam, destTab, spaceNameParam, instanceSlugParam, saData, destData]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Close compare dropdown on outside click
   useEffect(() => {
@@ -507,7 +523,7 @@ export default function DestinationOverview() {
             value={filterInput}
             onChange={e => setFilterInput(e.target.value)}
             onKeyDown={handleFilterKeyDown}
-            placeholder="Full-text search"
+            placeholder={totalDestCount != null ? `Search in ${totalDestCount} destinations` : 'Full-text search'}
             className="h-8 pl-7 pr-[4.5rem] text-xs border border-border rounded bg-background text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring w-[140px] sm:w-[240px]"
           />
           <div className="absolute right-1.5 flex items-center gap-1">
@@ -819,7 +835,15 @@ export default function DestinationOverview() {
                                       ? (
                                         <button
                                           className="font-mono text-[11px] hover:underline text-left text-foreground"
-                                          onClick={() => setModal({ sa, allNames: allDests.map(d => d.name).sort(), initialName: r.spaceName ? undefined : r.name, initialShowList: !r.spaceName })}
+                                          onClick={() => setModal({
+                                            sa,
+                                            allNames: allDests.map(d => d.name).sort(),
+                                            initialName: r.name,
+                                            initialShowList: !r.spaceName,
+                                            initialSpaceName:    r.spaceName    || undefined,
+                                            initialInstanceName: r.instanceName || undefined,
+                                            initialInstanceGuid: r.instanceGuid || undefined,
+                                          })}
                                         >
                                           <Highlight text={r.name} query={activeFilter} />
                                         </button>
@@ -924,6 +948,9 @@ export default function DestinationOverview() {
           initialName={modal.initialName}
           initialTab={modal.initialTab}
           initialShowList={modal.initialShowList}
+          initialSpaceName={modal.initialSpaceName}
+          initialInstanceName={modal.initialInstanceName}
+          initialInstanceGuid={modal.initialInstanceGuid}
           onClose={() => {
             setModal(null);
             navigate(returnUrl.current, { replace: true });
