@@ -22,6 +22,7 @@ import {
   getInstanceDestinationChangelog,
   exportInstanceDestination,
   saveInstanceDestinationEntry,
+  countDestinationFiles,
 } from '../services/destinationService.js';
 import { getAutoGlobalRefreshMs, getAutoSubaccountRefreshMs } from '../services/configService.js';
 
@@ -42,11 +43,14 @@ router.get('/status', requireAdmin, async (req, res, next) => {
       void refreshDestinations(username, 'auto').catch(() => {});
     }
 
+    const totalDestCount = await countDestinationFiles();
+
     res.json({
       ok:                       true,
       globalRefreshTs:          globalTs,
       autoGlobalRefreshHrs:     autoGlobalMs / 3_600_000,
       autoSubaccountRefreshMins: autoSaMs   / 60_000,
+      totalDestCount,
     });
   } catch (err) { next(err); }
 });

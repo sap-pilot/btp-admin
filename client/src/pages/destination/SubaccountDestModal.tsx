@@ -105,20 +105,23 @@ interface DestProp {
   revealed:    boolean;
 }
 
-interface DestSearchResult { name: string; matchField: string; matchValue: string }
+interface DestSearchResult { name: string; matchField: string; matchValue: string; spaceName?: string; instanceName?: string; instanceGuid?: string }
 type Tab        = 'properties' | 'changelog' | 'test';
 type HttpMethod = 'GET' | 'POST' | 'PUT' | 'DELETE' | 'PATCH';
 
 export interface SubaccountDestModalProps {
-  org:               SubaccountEntry;
-  allNames:          string[];
-  initialName?:      string;
-  initialTab?:       Tab;
-  initialShowList?:  boolean;
-  onClose:           () => void;
-  selectedDests?:    SelectedDest[];
-  onToggleCompare?:  (d: SelectedDest) => void;
-  onOpenCompare?:    (dests: SelectedDest[]) => void;
+  org:                   SubaccountEntry;
+  allNames:              string[];
+  initialName?:          string;
+  initialTab?:           Tab;
+  initialShowList?:      boolean;
+  initialSpaceName?:     string;
+  initialInstanceName?:  string;
+  initialInstanceGuid?:  string;
+  onClose:               () => void;
+  selectedDests?:        SelectedDest[];
+  onToggleCompare?:      (d: SelectedDest) => void;
+  onOpenCompare?:        (dests: SelectedDest[]) => void;
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -593,17 +596,18 @@ function TestTab() {
 
 // ─── Main modal ───────────────────────────────────────────────────────────────
 
-export default function SubaccountDestModal({ org, allNames, initialName, initialTab, initialShowList, onClose, selectedDests, onToggleCompare, onOpenCompare }: SubaccountDestModalProps) {
+export default function SubaccountDestModal({ org, allNames, initialName, initialTab, initialShowList, initialSpaceName, initialInstanceName, initialInstanceGuid, onClose, selectedDests, onToggleCompare, onOpenCompare }: SubaccountDestModalProps) {
   const auth                        = useAuth();
   const { settings, cockpitMenu }   = useSettings();
   const cockpit                     = settings?.homepage.cockpit ?? { idp: '', host: '' };
   const username = auth.email || auth.firstName || 'admin';
 
   // Left panel
-  const [localAllNames, setLocalAllNames] = useState<string[]>(allNames);
-  const [searchQuery,   setSearchQuery]   = useState('');
-  const [filteredNames, setFilteredNames] = useState<string[]>(allNames);
-  const [isSearching,   setIsSearching]   = useState(false);
+  const [localAllNames,    setLocalAllNames]    = useState<string[]>(allNames);
+  const [searchQuery,      setSearchQuery]      = useState('');
+  const [filteredNames,    setFilteredNames]    = useState<string[]>(allNames);
+  const [matchedInstKeys,  setMatchedInstKeys]  = useState<Set<string> | null>(null); // "{guid}/{name}" — non-null after a search
+  const [isSearching,      setIsSearching]      = useState(false);
   const [selectedName,  setSelectedName]  = useState(initialName ?? allNames[0] ?? '');
   const [selectedNames, setSelectedNames] = useState<Set<string>>(
     () => new Set(initialName ? [initialName] : allNames[0] ? [allNames[0]] : []),
@@ -626,11 +630,12 @@ export default function SubaccountDestModal({ org, allNames, initialName, initia
 
   // Space destination tree
   const hasSpaceDests = (org.org?.spaces ?? []).some(s => s.manageDest);
-  // Tree node keys: `space:{spaceId}` or `inst:{instanceGuid}`
+  // Tree node keys: `sa:root` | `space:{spaceId}` | `inst:{instanceGuid}`
   const [treeSelectedKeys,  setTreeSelectedKeys]  = useState<Set<string>>(new Set());
   const [lastTreeClickKey,  setLastTreeClickKey]  = useState<string>('');
   // Ordered flat list of all tree node keys (spaces then their instances, in render order) for shift-click
-  const [treeExpanded,      setTreeExpanded]      = useState<Set<string>>(new Set());
+  const [treeExpanded,      setTreeExpanded]      = useState<Set<string>>(new Set(['__sa__'])); // SA root always expanded
+  const [treeFilter,        setTreeFilter]        = useState('');
   const [instanceNames,     setInstanceNames]     = useState<Map<string, string[]>>(new Map()); // key=instanceGuid → dest names
   // key=spaceId → instances from local store (loaded once from GET .../spaces)
   const [spaceInstances,    setSpaceInstances]    = useState<Map<string, Array<{ instanceGuid: string; instanceName: string }>>>(new Map());
@@ -722,7 +727,11 @@ export default function SubaccountDestModal({ org, allNames, initialName, initia
   }
 
   // activeInstScope tracks the single dest being viewed in the right panel (for save/breadcrumb)
-  const [activeInstScope, setActiveInstScope] = useState<{ spaceName: string; instanceGuid: string; instanceName: string } | null>(null);
+  const [activeInstScope, setActiveInstScope] = useState<{ spaceName: string; instanceGuid: string; instanceName: string } | null>(
+    initialInstanceGuid && initialSpaceName && initialInstanceName
+      ? { spaceName: initialSpaceName, instanceGuid: initialInstanceGuid, instanceName: initialInstanceName }
+      : null,
+  );
 
   function loadInstDest(spaceName: string, instanceGuid: string, instanceName: string, name: string) {
     setActiveInstScope({ spaceName, instanceGuid, instanceName });
@@ -765,7 +774,6 @@ export default function SubaccountDestModal({ org, allNames, initialName, initia
   const [saveBanner,     setSaveBanner]     = useState<SaveBanner | null>(null);
   const bannerTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const searchTimer  = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const listRef      = useRef<HTMLDivElement>(null);
   const isDirty      = JSON.stringify(editedProps) !== JSON.stringify(serverProps);
@@ -784,35 +792,33 @@ export default function SubaccountDestModal({ org, allNames, initialName, initia
     el?.scrollIntoView({ block: 'nearest' });
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Debounced search scoped to this subdomain
-  useEffect(() => {
-    clearTimeout(searchTimer.current);
-    const q = searchQuery.trim();
-    if (!q) { setFilteredNames(localAllNames); return; }
+  // Enter-triggered full-text search scoped to this subdomain
+  async function runSearch(q: string) {
+    if (!q.trim()) { setFilteredNames(localAllNames); setMatchedInstKeys(null); return; }
     setIsSearching(true);
-    searchTimer.current = setTimeout(async () => {
-      try {
-        const url = `/api/destinations/search?q=${encodeURIComponent(q)}&region=${encodeURIComponent(org.region)}&subdomain=${encodeURIComponent(org.subdomain)}`;
-        const res  = await fetch(url);
-        const json = await res.json() as { ok: boolean; data: DestSearchResult[] };
-        if (json.ok) {
-          const matched = new Set(json.data.map(r => r.name));
-          setFilteredNames(localAllNames.filter(n => matched.has(n)));
-        }
-      } catch { /* ignore */ } finally { setIsSearching(false); }
-    }, 300);
-    return () => clearTimeout(searchTimer.current);
-  }, [searchQuery, localAllNames, org.region, org.subdomain]);
+    try {
+      const url = `/api/destinations/search?q=${encodeURIComponent(q.trim())}&region=${encodeURIComponent(org.region)}&subdomain=${encodeURIComponent(org.subdomain)}`;
+      const res  = await fetch(url);
+      const json = await res.json() as { ok: boolean; data: DestSearchResult[] };
+      if (json.ok) {
+        const saMatched   = new Set(json.data.filter(r => !r.spaceName).map(r => r.name));
+        const instMatched = new Set(json.data.filter(r => r.spaceName && r.instanceGuid).map(r => `${r.instanceGuid}/${r.name}`));
+        setFilteredNames(localAllNames.filter(n => saMatched.has(n)));
+        setMatchedInstKeys(instMatched);
+      }
+    } catch { /* ignore */ } finally { setIsSearching(false); }
+  }
 
   // Sync browser URL with selected destination and active tab
   useEffect(() => {
     if (!selectedName) return;
     const tabSuffix = activeTab === 'changelog' ? '/history' : activeTab === 'test' ? '/test' : '';
-    history.replaceState(
-      null, '',
-      `/destinations/${encodeURIComponent(org.region)}/${encodeURIComponent(org.subdomain)}/${encodeURIComponent(selectedName)}${tabSuffix}`,
-    );
-  }, [selectedName, activeTab, org.region, org.subdomain]);
+    const base = `/destinations/${encodeURIComponent(org.region)}/${encodeURIComponent(org.subdomain)}`;
+    const path = activeInstScope
+      ? `${base}/${encodeURIComponent(activeInstScope.spaceName)}/${encodeURIComponent(activeInstScope.instanceName)}_${encodeURIComponent(activeInstScope.instanceGuid)}/${encodeURIComponent(selectedName)}${tabSuffix}`
+      : `${base}/${encodeURIComponent(selectedName)}${tabSuffix}`;
+    history.replaceState(null, '', path);
+  }, [selectedName, activeTab, activeInstScope, org.region, org.subdomain]);
 
   // Proactive destination load on mount — silently loads local data; only shows
   // progress banner if an actual API refresh ran (stale data) or an error occurred.
@@ -845,7 +851,22 @@ export default function SubaccountDestModal({ org, allNames, initialName, initia
     if (hasSpaceDests) void loadAllSpaceInstances();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // When tree selection changes, load dest names for any selected instances not yet loaded
+  // When opened with an initial instance dest (from deep-link or global search click):
+  // once spaceInstances are loaded, select the instance node in the tree + load the dest content.
+  useEffect(() => {
+    if (!initialInstanceGuid || !initialSpaceName || !initialName) return;
+    if (!allInstancesLoaded) return; // wait until instances are fetched
+    // Select the instance node in the tree
+    setTreeSelectedKeys(new Set([`inst:${initialInstanceGuid}`]));
+    setLastTreeClickKey(`inst:${initialInstanceGuid}`);
+    // Expand the space that contains this instance
+    const space = (org.org?.spaces ?? []).find(s => s.spaceName === initialSpaceName);
+    if (space) setTreeExpanded(prev => new Set([...prev, space.spaceId]));
+    // Load the dest content
+    void loadInstDestData(initialSpaceName, initialInstanceGuid, initialName);
+  }, [allInstancesLoaded]); // eslint-disable-line react-hooks/exhaustive-deps
+
+
   useEffect(() => {
     for (const key of treeSelectedKeys) {
       if (!key.startsWith('inst:')) continue;
@@ -1119,7 +1140,7 @@ export default function SubaccountDestModal({ org, allNames, initialName, initia
           title="Import destination(s) from JSON"
         >
           <Upload className="h-3.5 w-3.5" />
-          {maximized && <span className="ml-1">{isImporting ? 'Importing…' : 'Import'}</span>}
+          {maximized && <span className="ml-1 max-[680px]:hidden">{isImporting ? 'Importing…' : 'Import'}</span>}
         </button>
         <button
           onClick={onExport}
@@ -1129,7 +1150,7 @@ export default function SubaccountDestModal({ org, allNames, initialName, initia
         >
           <Download className="h-3.5 w-3.5" />
           {maximized
-            ? <span className="ml-1">Export{opts.exportCount > 0 ? ` (${opts.exportCount})` : ''}</span>
+            ? <span className="ml-1 max-[680px]:hidden">Export{opts.exportCount > 0 ? ` (${opts.exportCount})` : ''}</span>
             : opts.exportCount > 0 ? <span className="text-[10px]">{opts.exportCount}</span> : null
           }
         </button>
@@ -1141,7 +1162,7 @@ export default function SubaccountDestModal({ org, allNames, initialName, initia
         >
           <GitCompare className="h-3.5 w-3.5" />
           {maximized
-            ? <span className="ml-1">Compare{compareCount > 0 ? ` (${compareCount})` : ''}</span>
+            ? <span className="ml-1 max-[680px]:hidden">Compare{compareCount > 0 ? ` (${compareCount})` : ''}</span>
             : compareCount > 0 ? <span className="text-[10px]">{compareCount}</span> : null
           }
         </button>
@@ -1192,16 +1213,24 @@ export default function SubaccountDestModal({ org, allNames, initialName, initia
               : <span className="truncate">{org.alias || org.subaccountName} <span className="font-normal text-xs font-mono text-muted-foreground">({org.subdomain})</span></span>
             }
             <span className="text-muted-foreground font-normal shrink-0">
-              {hasSpaceDests && treeSelectedKeys.size > 0 ? '› Instance Destinations' : '› Subaccount Destinations'}
+              {(() => {
+                if (!hasSpaceDests || treeSelectedKeys.size === 0) return '› Subaccount Destinations';
+                const hasSa   = treeSelectedKeys.has('sa:root');
+                const hasInst = [...treeSelectedKeys].some(k => k.startsWith('space:') || k.startsWith('inst:'));
+                if (hasSa && hasInst) return '› Subaccount & Instance Destinations';
+                if (hasSa)           return '› Subaccount Destinations';
+                return '› Instance Destinations';
+              })()}
             </span>
           </div>
           <div className="flex items-center gap-1 shrink-0">
             <button
               onClick={() => void handleRefresh()}
-              className="p-1.5 rounded text-muted-foreground hover:text-foreground hover:bg-accent/50 transition-colors"
+              className={`inline-flex items-center gap-1.5 p-1.5 rounded text-muted-foreground hover:text-foreground hover:bg-accent/50 transition-colors text-xs font-medium`}
               title="Refresh subaccount destinations"
             >
               <RefreshCw className="h-4 w-4" />
+              {maximized && <span className="max-[680px]:hidden">Refresh</span>}
             </button>
             <button
               onClick={() => setMaximized(v => !v)}
@@ -1260,41 +1289,48 @@ export default function SubaccountDestModal({ org, allNames, initialName, initia
                   <div className="flex flex-col overflow-hidden" style={{ height: `${treeSplitPct}%` }}>
                     {/* Tree title bar */}
                     <div className="flex items-center gap-1 px-2 border-b border-border shrink-0 min-h-[44px]">
-                      {/* Subaccount name — click to show subaccount-level dests */}
-                      <button
-                        onClick={() => setTreeSelectedKeys(new Set())}
-                        className={`text-xs font-semibold font-mono truncate flex-1 min-w-0 text-left px-1 py-0.5 rounded hover:bg-accent/50 transition-colors ${treeSelectedKeys.size === 0 ? 'text-primary' : 'text-foreground'}`}
-                        title="Show subaccount-level destinations"
-                      >
-                        {org.alias || org.subaccountName}
-                        <span className="font-normal text-[10px] text-muted-foreground ml-1">({org.subdomain})</span>
-                      </button>
+                      {/* Filter input */}
+                      <div className="relative flex-1 min-w-0">
+                        <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground pointer-events-none" />
+                        <input
+                          type="text"
+                          value={treeFilter}
+                          onChange={e => setTreeFilter(e.target.value)}
+                          placeholder="Filter spaces / instances…"
+                          className={`w-full h-7 pl-7 text-xs border border-border rounded bg-background focus:outline-none focus:ring-1 focus:ring-ring placeholder:text-muted-foreground/50 ${treeFilter ? 'pr-6' : 'pr-2'}`}
+                        />
+                        {treeFilter && (
+                          <button onClick={() => setTreeFilter('')} className="absolute right-1.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors p-0.5" tabIndex={-1}>
+                            <X className="h-3 w-3" />
+                          </button>
+                        )}
+                      </div>
                       {/* Toolbar: Expand · Collapse · Select All · Unselect All */}
                       <div className="flex items-center gap-0.5 shrink-0">
                         <button
                           onClick={() => {
                             const allSpaceIds = (org.org?.spaces ?? []).filter(s => s.manageDest).map(s => s.spaceId);
-                            setTreeExpanded(new Set(allSpaceIds));
+                            setTreeExpanded(new Set(['__sa__', ...allSpaceIds]));
                             if (!allInstancesLoaded) void loadAllSpaceInstances();
                           }}
                           className={btnOutline}
                           title="Expand all spaces"
                         >
                           <ChevronsUpDown className="h-3.5 w-3.5" />
-                          {maximized && <span className="ml-1">Expand</span>}
+                          {maximized && <span className="ml-1 max-[680px]:hidden">Expand</span>}
                         </button>
                         <button
-                          onClick={() => setTreeExpanded(new Set())}
+                          onClick={() => setTreeExpanded(new Set(['__sa__']))}
                           className={btnOutline}
-                          title="Collapse all spaces"
+                          title="Collapse to space level"
                         >
                           <ChevronsDownUp className="h-3.5 w-3.5" />
-                          {maximized && <span className="ml-1">Collapse</span>}
+                          {maximized && <span className="ml-1 max-[680px]:hidden">Collapse</span>}
                         </button>
                         <div className="w-px h-3 bg-border mx-0.5" />
                         <button
                           onClick={() => {
-                            const keys: string[] = [];
+                            const keys: string[] = ['sa:root'];
                             for (const sp of (org.org?.spaces ?? []).filter(s => s.manageDest)) {
                               keys.push(`space:${sp.spaceId}`);
                               for (const i of (spaceInstances.get(sp.spaceId) ?? [])) keys.push(`inst:${i.instanceGuid}`);
@@ -1306,7 +1342,7 @@ export default function SubaccountDestModal({ org, allNames, initialName, initia
                           title="Select all"
                         >
                           <CheckSquare className="h-3.5 w-3.5" />
-                          {maximized && <span className="ml-1">All</span>}
+                          {maximized && <span className="ml-1 max-[680px]:hidden">All</span>}
                         </button>
                         <button
                           onClick={() => { setTreeSelectedKeys(new Set()); setLastTreeClickKey(''); }}
@@ -1314,7 +1350,7 @@ export default function SubaccountDestModal({ org, allNames, initialName, initia
                           title="Unselect all"
                         >
                           <Square className="h-3.5 w-3.5" />
-                          {maximized && <span className="ml-1">None</span>}
+                          {maximized && <span className="ml-1 max-[680px]:hidden">None</span>}
                         </button>
                       </div>
                     </div>
@@ -1325,7 +1361,7 @@ export default function SubaccountDestModal({ org, allNames, initialName, initia
                       onKeyDown={e => {
                         if ((e.ctrlKey || e.metaKey) && e.key === 'a') {
                           e.preventDefault();
-                          const keys: string[] = [];
+                          const keys: string[] = ['sa:root'];
                           for (const sp of (org.org?.spaces ?? []).filter(s => s.manageDest)) {
                             keys.push(`space:${sp.spaceId}`);
                             for (const i of (spaceInstances.get(sp.spaceId) ?? [])) keys.push(`inst:${i.instanceGuid}`);
@@ -1342,18 +1378,27 @@ export default function SubaccountDestModal({ org, allNames, initialName, initia
                         </colgroup>
                         <thead className="sticky top-0 z-10">
                           <tr className="bg-muted/40">
-                            <th className="px-2 py-1 text-left text-[10px] font-medium text-muted-foreground border-b border-border">Space / Instance</th>
+                            <th className="px-2 py-1 text-left text-[10px] font-medium text-muted-foreground border-b border-border">Subaccount › Spaces › Destination Instances</th>
                             <th className="px-2 py-1 text-right text-[10px] font-medium text-muted-foreground border-b border-border">Dests</th>
                           </tr>
                         </thead>
                         <tbody>
                       {(() => {
+                        const filterLc = treeFilter.toLowerCase();
                         // Build ordered flat list of all visible tree nodes once (for shift-click range)
-                        const orderedKeys: string[] = [];
-                        for (const sp of (org.org?.spaces ?? []).filter(s => s.manageDest)) {
+                        const orderedKeys: string[] = ['sa:root'];
+                        const visibleSpaces = (org.org?.spaces ?? []).filter(s => s.manageDest && (
+                          !filterLc || s.spaceName.toLowerCase().includes(filterLc) ||
+                          (spaceInstances.get(s.spaceId) ?? []).some(i => i.instanceName.toLowerCase().includes(filterLc))
+                        ));
+                        for (const sp of visibleSpaces) {
                           orderedKeys.push(`space:${sp.spaceId}`);
                           if (treeExpanded.has(sp.spaceId)) {
-                            for (const i of (spaceInstances.get(sp.spaceId) ?? [])) orderedKeys.push(`inst:${i.instanceGuid}`);
+                            for (const i of (spaceInstances.get(sp.spaceId) ?? [])) {
+                              if (!filterLc || i.instanceName.toLowerCase().includes(filterLc) || sp.spaceName.toLowerCase().includes(filterLc)) {
+                                orderedKeys.push(`inst:${i.instanceGuid}`);
+                              }
+                            }
                           }
                         }
 
@@ -1379,74 +1424,100 @@ export default function SubaccountDestModal({ org, allNames, initialName, initia
                           }
                         }
 
-                        return (org.org?.spaces ?? []).filter(s => s.manageDest).map(space => {
-                          const spaceNodeKey = `space:${space.spaceId}`;
-                          const isExpanded   = treeExpanded.has(space.spaceId);
-                          const isSpaceSel   = treeSelectedKeys.has(spaceNodeKey);
-                          const insts        = spaceInstances.get(space.spaceId) ?? [];
-                          // Dest count for the space = sum of all known instance dest counts
-                          const spaceDestCount = insts.reduce((sum, i) => sum + (instanceNames.get(i.instanceGuid)?.length ?? 0), 0);
-                          const rowCls       = (sel: boolean) => `cursor-pointer select-none hover:bg-muted/20 ${sel ? 'bg-primary/10 text-primary' : ''}`;
-                          return (
-                            <>
-                              {/* Space row */}
-                              <tr
-                                key={`space-${space.spaceId}`}
-                                className={rowCls(isSpaceSel)}
-                                onClick={e => {
-                                  handleTreeClick(spaceNodeKey, e);
-                                  if (!e.ctrlKey && !e.metaKey && !e.shiftKey) {
-                                    setTreeExpanded(prev => {
-                                      const next = new Set(prev);
-                                      if (next.has(space.spaceId)) next.delete(space.spaceId); else next.add(space.spaceId);
-                                      return next;
+                        const saRootSel = treeSelectedKeys.has('sa:root');
+                        const saDestCount = localAllNames.length;
+                        const rowCls = (sel: boolean) => `cursor-pointer select-none hover:bg-muted/20 ${sel ? 'bg-primary/10 text-primary' : ''}`;
+
+                        return (
+                          <>
+                            {/* SA root node */}
+                            <tr
+                              className={rowCls(saRootSel)}
+                              onClick={e => handleTreeClick('sa:root', e)}
+                            >
+                              <td className="px-2 py-1 border-b border-border/50 font-semibold">
+                                <span className="flex items-center gap-1">
+                                  <ChevronDown className="h-3 w-3 shrink-0 opacity-60" />
+                                  <span className="truncate font-mono">{org.alias || org.subaccountName}</span>
+                                  <span className="font-normal text-[10px] text-muted-foreground shrink-0">({org.subdomain})</span>
+                                </span>
+                              </td>
+                              <td className="px-2 py-1 border-b border-border/50 text-right text-muted-foreground text-[10px]">
+                                {saDestCount > 0 ? saDestCount : ''}
+                              </td>
+                            </tr>
+
+                            {/* Space + instance rows */}
+                            {visibleSpaces.map(space => {
+                              const spaceNodeKey   = `space:${space.spaceId}`;
+                              const isExpanded     = treeExpanded.has(space.spaceId);
+                              const isSpaceSel     = treeSelectedKeys.has(spaceNodeKey);
+                              const insts          = (spaceInstances.get(space.spaceId) ?? []).filter(i =>
+                                !filterLc || i.instanceName.toLowerCase().includes(filterLc) || space.spaceName.toLowerCase().includes(filterLc)
+                              );
+                              const spaceDestCount = insts.reduce((sum, i) => sum + (instanceNames.get(i.instanceGuid)?.length ?? 0), 0);
+                              return (
+                                <>
+                                  {/* Space row */}
+                                  <tr
+                                    key={`space-${space.spaceId}`}
+                                    className={rowCls(isSpaceSel)}
+                                    onClick={e => {
+                                      handleTreeClick(spaceNodeKey, e);
+                                      if (!e.ctrlKey && !e.metaKey && !e.shiftKey) {
+                                        setTreeExpanded(prev => {
+                                          const next = new Set(prev);
+                                          if (next.has(space.spaceId)) next.delete(space.spaceId); else next.add(space.spaceId);
+                                          return next;
+                                        });
+                                        if (!allInstancesLoaded) void loadAllSpaceInstances();
+                                      }
+                                    }}
+                                  >
+                                    <td className="pl-5 pr-2 py-1 border-b border-border/50 font-medium">
+                                      <span className="flex items-center gap-1">
+                                        {isExpanded ? <ChevronDown className="h-3 w-3 shrink-0" /> : <ChevronRight className="h-3 w-3 shrink-0" />}
+                                        <span className="truncate">{space.spaceName}</span>
+                                      </span>
+                                    </td>
+                                    <td className="px-2 py-1 border-b border-border/50 text-right text-muted-foreground text-[10px]">
+                                      {spaceInstances.has(space.spaceId) && spaceDestCount > 0 ? spaceDestCount : ''}
+                                    </td>
+                                  </tr>
+                                  {/* Instance rows */}
+                                  {isExpanded && (() => {
+                                    if (!spaceInstances.has(space.spaceId)) {
+                                      return <tr key={`loading-${space.spaceId}`}><td colSpan={2} className="pl-10 pr-2 py-1 text-[10px] text-muted-foreground border-b border-border/50">{allInstancesLoaded ? 'No instances' : 'Loading…'}</td></tr>;
+                                    }
+                                    if (insts.length === 0) {
+                                      return <tr key={`empty-${space.spaceId}`}><td colSpan={2} className="pl-10 pr-2 py-1 text-[10px] text-muted-foreground border-b border-border/50">No instances</td></tr>;
+                                    }
+                                    return insts.map(inst => {
+                                      const instNodeKey   = `inst:${inst.instanceGuid}`;
+                                      const isInstSel     = treeSelectedKeys.has(instNodeKey);
+                                      const instDestCount = instanceNames.get(inst.instanceGuid)?.length ?? 0;
+                                      return (
+                                        <tr
+                                          key={inst.instanceGuid}
+                                          className={rowCls(isInstSel)}
+                                          onClick={e => {
+                                            handleTreeClick(instNodeKey, e);
+                                            void loadInstanceDestNames(inst.instanceGuid, space.spaceName);
+                                          }}
+                                        >
+                                          <td className="pl-10 pr-2 py-1 border-b border-border/50 font-mono truncate">{inst.instanceName}</td>
+                                          <td className="px-2 py-1 border-b border-border/50 text-right text-muted-foreground text-[10px]">
+                                            {instanceNames.has(inst.instanceGuid) ? instDestCount : ''}
+                                          </td>
+                                        </tr>
+                                      );
                                     });
-                                    if (!allInstancesLoaded) void loadAllSpaceInstances();
-                                  }
-                                }}
-                              >
-                                <td className="px-2 py-1 border-b border-border/50 font-medium">
-                                  <span className="flex items-center gap-1">
-                                    {isExpanded ? <ChevronDown className="h-3 w-3 shrink-0" /> : <ChevronRight className="h-3 w-3 shrink-0" />}
-                                    <span className="truncate">{space.spaceName}</span>
-                                  </span>
-                                </td>
-                                <td className="px-2 py-1 border-b border-border/50 text-right text-muted-foreground text-[10px]">
-                                  {spaceInstances.has(space.spaceId) && spaceDestCount > 0 ? spaceDestCount : ''}
-                                </td>
-                              </tr>
-                              {/* Instance rows */}
-                              {isExpanded && (() => {
-                                if (!spaceInstances.has(space.spaceId)) {
-                                  return <tr key={`loading-${space.spaceId}`}><td colSpan={2} className="pl-6 pr-2 py-1 text-[10px] text-muted-foreground border-b border-border/50">{allInstancesLoaded ? 'No instances' : 'Loading…'}</td></tr>;
-                                }
-                                if (insts.length === 0) {
-                                  return <tr key={`empty-${space.spaceId}`}><td colSpan={2} className="pl-6 pr-2 py-1 text-[10px] text-muted-foreground border-b border-border/50">No instances</td></tr>;
-                                }
-                                return insts.map(inst => {
-                                  const instNodeKey = `inst:${inst.instanceGuid}`;
-                                  const isInstSel   = treeSelectedKeys.has(instNodeKey);
-                                  const instDestCount = instanceNames.get(inst.instanceGuid)?.length ?? 0;
-                                  return (
-                                    <tr
-                                      key={inst.instanceGuid}
-                                      className={rowCls(isInstSel)}
-                                      onClick={e => {
-                                        handleTreeClick(instNodeKey, e);
-                                        void loadInstanceDestNames(inst.instanceGuid, space.spaceName);
-                                      }}
-                                    >
-                                      <td className="pl-6 pr-2 py-1 border-b border-border/50 font-mono truncate">{inst.instanceName}</td>
-                                      <td className="px-2 py-1 border-b border-border/50 text-right text-muted-foreground text-[10px]">
-                                        {instanceNames.has(inst.instanceGuid) ? instDestCount : ''}
-                                      </td>
-                                    </tr>
-                                  );
-                                });
-                              })()}
-                            </>
-                          );
-                        });
+                                  })()}
+                                </>
+                              );
+                            })}
+                          </>
+                        );
                       })()}
                         </tbody>
                       </table>
@@ -1461,21 +1532,65 @@ export default function SubaccountDestModal({ org, allNames, initialName, initia
                   <div className="flex flex-col flex-1 min-h-0 overflow-hidden" style={{ height: `${100 - treeSplitPct}%` }}>
                     {/* Search row — filter + inline action buttons */}
                     <div className="px-2 py-2 border-b border-border shrink-0 flex items-center gap-1">
-                      <div className="relative flex-1 min-w-0">
-                        <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground pointer-events-none" />
-                        <input
-                          type="text"
-                          value={searchQuery}
-                          onChange={e => setSearchQuery(e.target.value)}
-                          placeholder="Search…"
-                          className={`w-full h-7 pl-7 text-xs border border-border rounded bg-background focus:outline-none focus:ring-1 focus:ring-ring placeholder:text-muted-foreground/50 ${searchQuery ? 'pr-6' : 'pr-2'}`}
-                        />
-                        {searchQuery && (
-                          <button onClick={() => setSearchQuery('')} className="absolute right-1.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors p-0.5" tabIndex={-1}>
-                            <X className="h-3 w-3" />
-                          </button>
-                        )}
-                      </div>
+                      {(() => {
+                        const hasSaSel   = treeSelectedKeys.has('sa:root') || treeSelectedKeys.size === 0;
+                        const hasInstSel = [...treeSelectedKeys].some(k => k.startsWith('space:') || k.startsWith('inst:'));
+                        let instTotal = 0; let instFiltered = 0;
+                        if (hasInstSel) {
+                          const seen = new Set<string>();
+                          for (const nodeKey of treeSelectedKeys) {
+                            const guids: string[] = [];
+                            if (nodeKey.startsWith('inst:')) { guids.push(nodeKey.slice(5)); }
+                            else if (nodeKey.startsWith('space:')) { for (const i of (spaceInstances.get(nodeKey.slice(6)) ?? [])) guids.push(i.instanceGuid); }
+                            for (const g of guids) {
+                              if (seen.has(g)) continue; seen.add(g);
+                              const names = instanceNames.get(g) ?? [];
+                              instTotal    += names.length;
+                              if (searchQuery) {
+                                instFiltered += matchedInstKeys !== null
+                                  ? names.filter(n => matchedInstKeys.has(`${g}/${n}`)).length
+                                  : names.filter(n => n.toLowerCase().includes(searchQuery.toLowerCase())).length;
+                              } else {
+                                instFiltered += names.length;
+                              }
+                            }
+                          }
+                        }
+                        const saTotal       = hasSaSel ? localAllNames.length : 0;
+                        const saFiltered    = hasSaSel ? filteredNames.length  : 0;
+                        const totalDests    = saTotal    + instTotal;
+                        const filteredDests = saFiltered + instFiltered;
+                        const matchLabel    = searchQuery && filteredDests !== totalDests ? `${filteredDests} of ${totalDests} matched` : null;
+                        const hasMatchLabel = matchLabel !== null;
+                        return (
+                          <div className="relative flex-1 min-w-0">
+                            <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground pointer-events-none" />
+                            <input
+                              type="text"
+                              value={searchQuery}
+                              onChange={e => {
+                                setSearchQuery(e.target.value);
+                                if (!e.target.value.trim()) { setFilteredNames(localAllNames); setMatchedInstKeys(null); }
+                              }}
+                              onKeyDown={e => { if (e.key === 'Enter') void runSearch(searchQuery); }}
+                              placeholder={`Search within ${totalDests} destinations`}
+                              className={`w-full h-7 pl-7 text-xs border border-border rounded bg-background focus:outline-none focus:ring-1 focus:ring-ring placeholder:text-muted-foreground/50 ${searchQuery ? (hasMatchLabel ? 'pr-28' : 'pr-6') : 'pr-2'}`}
+                            />
+                            {isSearching && <RefreshCw className="absolute right-6 top-1/2 -translate-y-1/2 h-3 w-3 animate-spin text-muted-foreground pointer-events-none" />}
+                            {!isSearching && hasMatchLabel && (
+                              <span className="absolute right-6 top-1/2 -translate-y-1/2 text-[10px] text-muted-foreground/60 pointer-events-none whitespace-nowrap">{matchLabel}</span>
+                            )}
+                            {!isSearching && searchQuery && !hasMatchLabel && (
+                              <span className="absolute right-6 top-1/2 -translate-y-1/2 text-[10px] text-muted-foreground/40 pointer-events-none">↵</span>
+                            )}
+                            {searchQuery && (
+                              <button onClick={() => { setSearchQuery(''); setFilteredNames(localAllNames); setMatchedInstKeys(null); }} className="absolute right-1.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors p-0.5" tabIndex={-1}>
+                                <X className="h-3 w-3" />
+                              </button>
+                            )}
+                          </div>
+                        );
+                      })()}
                       {renderFilterToolbar({
                         onExport: async () => {
                           const toExport: { instanceGuid: string; spaceName: string; name: string }[] = [];
@@ -1543,98 +1658,115 @@ export default function SubaccountDestModal({ org, allNames, initialName, initia
                       onKeyDown={e => {
                         if ((e.ctrlKey || e.metaKey) && e.key === 'a') {
                           e.preventDefault();
-                          // Select all currently visible dest keys in the list
-                          if (treeSelectedKeys.size === 0) {
-                            setSelectedDestKeys(new Set(filteredNames.map(n => `sa/${n}`)));
-                          } else {
-                            const allDks: string[] = [];
+                          const hasSaSelected   = treeSelectedKeys.has('sa:root') || treeSelectedKeys.size === 0;
+                          const hasInstSelected = [...treeSelectedKeys].some(k => k.startsWith('space:') || k.startsWith('inst:'));
+                          const allDks: string[] = [];
+                          if (hasSaSelected) {
+                            for (const n of filteredNames) allDks.push(`sa/${n}`);
+                          }
+                          if (hasInstSelected) {
                             const seen = new Set<string>();
                             for (const nodeKey of treeSelectedKeys) {
                               if (nodeKey.startsWith('inst:')) {
                                 const guid = nodeKey.slice(5);
-                                if (!seen.has(guid)) { seen.add(guid); for (const n of (instanceNames.get(guid) ?? [])) { if (!searchQuery || n.toLowerCase().includes(searchQuery.toLowerCase())) allDks.push(`${guid}/${n}`); } }
+                                if (!seen.has(guid)) { seen.add(guid); for (const n of (instanceNames.get(guid) ?? [])) { const ik = `${guid}/${n}`; if (!searchQuery || (matchedInstKeys !== null ? matchedInstKeys.has(ik) : n.toLowerCase().includes(searchQuery.toLowerCase()))) allDks.push(ik); } }
                               } else if (nodeKey.startsWith('space:')) {
                                 const sid = nodeKey.slice(6);
                                 for (const inst of (spaceInstances.get(sid) ?? [])) {
-                                  if (!seen.has(inst.instanceGuid)) { seen.add(inst.instanceGuid); for (const n of (instanceNames.get(inst.instanceGuid) ?? [])) { if (!searchQuery || n.toLowerCase().includes(searchQuery.toLowerCase())) allDks.push(`${inst.instanceGuid}/${n}`); } }
+                                  if (!seen.has(inst.instanceGuid)) { seen.add(inst.instanceGuid); for (const n of (instanceNames.get(inst.instanceGuid) ?? [])) { const ik = `${inst.instanceGuid}/${n}`; if (!searchQuery || (matchedInstKeys !== null ? matchedInstKeys.has(ik) : n.toLowerCase().includes(searchQuery.toLowerCase()))) allDks.push(ik); } }
                                 }
                               }
                             }
-                            setSelectedDestKeys(new Set(allDks));
-                            if (allDks.length > 0) setLastClickDestKey(allDks[allDks.length - 1]!);
                           }
+                          setSelectedDestKeys(new Set(allDks));
+                          if (allDks.length > 0) setLastClickDestKey(allDks[allDks.length - 1]!);
                         }
                       }}
                       tabIndex={0}
                     >
                       {(() => {
                         // Collect rows from all selected tree nodes; if nothing selected show subaccount dests
-                        if (treeSelectedKeys.size === 0) {
-                          return filteredNames.map((name, idx) => {
-                            const dk         = `sa/${name}`;
-                            const isPrimary  = name === selectedName && !isCreating && !activeInstScope;
-                            const isSelDest  = selectedDestKeys.has(dk);
-                            return (
-                              <button
-                                key={dk}
-                                data-selected={isPrimary ? 'true' : undefined}
-                                onClick={e => {
-                                  if (e.ctrlKey || e.metaKey) {
-                                    setSelectedDestKeys(prev => { const n = new Set(prev); n.has(dk) ? n.delete(dk) : n.add(dk); return n; });
-                                    setLastClickDestKey(dk);
-                                  } else if (e.shiftKey && lastClickDestKey) {
-                                    const allDks = filteredNames.map(n => `sa/${n}`);
-                                    const a = allDks.indexOf(lastClickDestKey), b = idx;
-                                    const [lo, hi] = a <= b ? [a, b] : [b, a];
-                                    setSelectedDestKeys(new Set(allDks.slice(lo, hi + 1)));
-                                  } else {
-                                    handleDestClick(name, idx, e);
-                                    setActiveInstScope(null);
-                                    setSelectedDestKeys(new Set([dk]));
-                                    setLastClickDestKey(dk);
-                                  }
-                                }}
-                                className={`w-full text-left px-3 py-1.5 text-xs font-mono truncate transition-colors select-none ${isPrimary ? 'bg-primary/20 text-primary font-semibold' : isSelDest ? 'bg-primary/10 text-primary' : 'text-foreground hover:bg-muted/40'}`}
-                              >
-                                {name}
-                              </button>
-                            );
-                          });
-                        }
-                        // Collect all instance dests for selected tree nodes
+                        const hasSaSelected   = treeSelectedKeys.has('sa:root') || treeSelectedKeys.size === 0;
+                        const hasInstSelected = [...treeSelectedKeys].some(k => k.startsWith('space:') || k.startsWith('inst:'));
+
+                        // Collect SA-level dests if SA root selected or nothing selected
+                        const saRows = hasSaSelected ? filteredNames : [];
+
+                        // Collect instance dests if space/inst nodes selected
                         type InstRow = { instanceGuid: string; instanceName: string; spaceName: string; name: string };
-                        const rows: InstRow[] = [];
-                        const seenInst = new Set<string>();
-                        for (const nodeKey of treeSelectedKeys) {
-                          if (nodeKey.startsWith('inst:')) {
-                            const instGuid = nodeKey.slice(5);
-                            if (seenInst.has(instGuid)) continue;
-                            seenInst.add(instGuid);
-                            let instName = ''; let sName = '';
-                            for (const [sid, insts] of spaceInstances) {
-                              const i = insts.find(x => x.instanceGuid === instGuid);
-                              if (i) { instName = i.instanceName; sName = (org.org?.spaces ?? []).find(s => s.spaceId === sid)?.spaceName ?? ''; break; }
-                            }
-                            for (const n of (instanceNames.get(instGuid) ?? [])) {
-                              if (!searchQuery || n.toLowerCase().includes(searchQuery.toLowerCase())) rows.push({ instanceGuid: instGuid, instanceName: instName, spaceName: sName, name: n });
-                            }
-                          } else if (nodeKey.startsWith('space:')) {
-                            const spaceId = nodeKey.slice(6);
-                            const space   = (org.org?.spaces ?? []).find(s => s.spaceId === spaceId);
-                            if (!space) continue;
-                            for (const inst of (spaceInstances.get(spaceId) ?? [])) {
-                              if (seenInst.has(inst.instanceGuid)) continue;
-                              seenInst.add(inst.instanceGuid);
-                              for (const n of (instanceNames.get(inst.instanceGuid) ?? [])) {
-                                if (!searchQuery || n.toLowerCase().includes(searchQuery.toLowerCase())) rows.push({ instanceGuid: inst.instanceGuid, instanceName: inst.instanceName, spaceName: space.spaceName, name: n });
+                        const instRows: InstRow[] = [];
+                        if (hasInstSelected) {
+                          const seenInst = new Set<string>();
+                          for (const nodeKey of treeSelectedKeys) {
+                            if (nodeKey.startsWith('inst:')) {
+                              const instGuid = nodeKey.slice(5);
+                              if (seenInst.has(instGuid)) continue;
+                              seenInst.add(instGuid);
+                              let instName = ''; let sName = '';
+                              for (const [sid, insts] of spaceInstances) {
+                                const i = insts.find(x => x.instanceGuid === instGuid);
+                                if (i) { instName = i.instanceName; sName = (org.org?.spaces ?? []).find(s => s.spaceId === sid)?.spaceName ?? ''; break; }
+                              }
+                              for (const n of (instanceNames.get(instGuid) ?? [])) {
+                                const ik = `${instGuid}/${n}`;
+                                if (!searchQuery || (matchedInstKeys !== null ? matchedInstKeys.has(ik) : n.toLowerCase().includes(searchQuery.toLowerCase()))) instRows.push({ instanceGuid: instGuid, instanceName: instName, spaceName: sName, name: n });
+                              }
+                            } else if (nodeKey.startsWith('space:')) {
+                              const spaceId = nodeKey.slice(6);
+                              const space   = (org.org?.spaces ?? []).find(s => s.spaceId === spaceId);
+                              if (!space) continue;
+                              for (const inst of (spaceInstances.get(spaceId) ?? [])) {
+                                if (seenInst.has(inst.instanceGuid)) continue;
+                                seenInst.add(inst.instanceGuid);
+                                for (const n of (instanceNames.get(inst.instanceGuid) ?? [])) {
+                                  const ik = `${inst.instanceGuid}/${n}`;
+                                  if (!searchQuery || (matchedInstKeys !== null ? matchedInstKeys.has(ik) : n.toLowerCase().includes(searchQuery.toLowerCase()))) instRows.push({ instanceGuid: inst.instanceGuid, instanceName: inst.instanceName, spaceName: space.spaceName, name: n });
+                                }
                               }
                             }
                           }
                         }
-                        if (rows.length === 0) {
+
+                        const totalRows = saRows.length + instRows.length;
+
+                        if (totalRows === 0 && treeSelectedKeys.size > 0) {
                           return <div className="px-3 py-2 text-[10px] text-muted-foreground">{allInstancesLoaded ? 'No destinations found' : 'Loading…'}</div>;
                         }
-                        return rows.map((row, rowIdx) => {
+
+                        // Render SA dest rows
+                        const saElements = saRows.map((name, idx) => {
+                          const dk        = `sa/${name}`;
+                          const isPrimary  = name === selectedName && !isCreating && !activeInstScope;
+                          const isSelDest  = selectedDestKeys.has(dk);
+                          return (
+                            <button
+                              key={dk}
+                              data-selected={isPrimary ? 'true' : undefined}
+                              onClick={e => {
+                                if (e.ctrlKey || e.metaKey) {
+                                  setSelectedDestKeys(prev => { const n = new Set(prev); n.has(dk) ? n.delete(dk) : n.add(dk); return n; });
+                                  setLastClickDestKey(dk);
+                                } else if (e.shiftKey && lastClickDestKey) {
+                                  const allDks = filteredNames.map(n => `sa/${n}`);
+                                  const a = allDks.indexOf(lastClickDestKey), b = idx;
+                                  const [lo, hi] = a <= b ? [a, b] : [b, a];
+                                  setSelectedDestKeys(new Set(allDks.slice(lo, hi + 1)));
+                                } else {
+                                  handleDestClick(name, idx, e);
+                                  setActiveInstScope(null);
+                                  setSelectedDestKeys(new Set([dk]));
+                                  setLastClickDestKey(dk);
+                                }
+                              }}
+                              className={`w-full text-left px-3 py-1.5 text-xs font-mono truncate transition-colors select-none ${isPrimary ? 'bg-primary/20 text-primary font-semibold' : isSelDest ? 'bg-primary/10 text-primary' : 'text-foreground hover:bg-muted/40'}`}
+                            >
+                              {name}
+                            </button>
+                          );
+                        });
+
+                        // Render instance dest rows
+                        const instElements = instRows.map((row, rowIdx) => {
                           const dk        = `${row.instanceGuid}/${row.name}`;
                           const isPrimary  = row.name === selectedName && activeInstScope?.instanceGuid === row.instanceGuid;
                           const isSelDest  = selectedDestKeys.has(dk);
@@ -1647,7 +1779,7 @@ export default function SubaccountDestModal({ org, allNames, initialName, initia
                                   setSelectedDestKeys(prev => { const n = new Set(prev); n.has(dk) ? n.delete(dk) : n.add(dk); return n; });
                                   setLastClickDestKey(dk);
                                 } else if (e.shiftKey && lastClickDestKey) {
-                                  const allDks = rows.map(r => `${r.instanceGuid}/${r.name}`);
+                                  const allDks = instRows.map(r => `${r.instanceGuid}/${r.name}`);
                                   const a = allDks.indexOf(lastClickDestKey), b = rowIdx;
                                   const [lo, hi] = a <= b ? [a, b] : [b, a];
                                   setSelectedDestKeys(new Set(allDks.slice(lo, hi + 1)));
@@ -1659,10 +1791,12 @@ export default function SubaccountDestModal({ org, allNames, initialName, initia
                               }}
                               className={`w-full text-left px-3 py-1.5 text-xs font-mono truncate transition-colors select-none ${isPrimary ? 'bg-primary/20 text-primary font-semibold' : isSelDest ? 'bg-primary/10 text-primary' : 'text-foreground hover:bg-muted/40'}`}
                             >
-                              <span className="text-muted-foreground text-[10px]">{row.instanceName} › </span>{row.name}
+                              <><span className="text-muted-foreground text-[10px]">{row.spaceName} › {row.instanceName} › </span>{row.name}</>
                             </button>
                           );
                         });
+
+                        return [...saElements, ...instElements];
                       })()}
                     </div>
                   </div>
@@ -1680,13 +1814,24 @@ export default function SubaccountDestModal({ org, allNames, initialName, initia
                   <input
                     type="text"
                     value={searchQuery}
-                    onChange={e => setSearchQuery(e.target.value)}
-                    placeholder="Search destinations…"
-                    className={`w-full h-7 pl-7 text-xs border border-border rounded bg-background focus:outline-none focus:ring-1 focus:ring-ring placeholder:text-muted-foreground/50 ${searchQuery ? 'pr-6' : 'pr-2'}`}
+                    onChange={e => {
+                      setSearchQuery(e.target.value);
+                      if (!e.target.value.trim()) { setFilteredNames(localAllNames); setMatchedInstKeys(null); }
+                    }}
+                    onKeyDown={e => { if (e.key === 'Enter') void runSearch(searchQuery); }}
+                    placeholder={`Search within ${localAllNames.length} destinations`}
+                    className={`w-full h-7 pl-7 text-xs border border-border rounded bg-background focus:outline-none focus:ring-1 focus:ring-ring placeholder:text-muted-foreground/50 ${searchQuery ? (filteredNames.length !== localAllNames.length ? 'pr-28' : 'pr-6') : 'pr-2'}`}
                   />
+                  {isSearching && <RefreshCw className="absolute right-6 top-1/2 -translate-y-1/2 h-3 w-3 animate-spin text-muted-foreground pointer-events-none" />}
+                  {!isSearching && searchQuery && filteredNames.length !== localAllNames.length && (
+                    <span className="absolute right-6 top-1/2 -translate-y-1/2 text-[10px] text-muted-foreground/60 pointer-events-none whitespace-nowrap">{filteredNames.length} of {localAllNames.length} matched</span>
+                  )}
+                  {!isSearching && searchQuery && filteredNames.length === localAllNames.length && (
+                    <span className="absolute right-6 top-1/2 -translate-y-1/2 text-[10px] text-muted-foreground/40 pointer-events-none">↵</span>
+                  )}
                   {searchQuery && (
                     <button
-                      onClick={() => setSearchQuery('')}
+                      onClick={() => { setSearchQuery(''); setFilteredNames(localAllNames); setMatchedInstKeys(null); }}
                       className="absolute right-1.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors p-0.5"
                       tabIndex={-1}
                     >
@@ -1760,11 +1905,16 @@ export default function SubaccountDestModal({ org, allNames, initialName, initia
               >
                 <PanelLeft className="h-3.5 w-3.5" />
               </button>
-              <span className="text-xs font-semibold font-mono truncate flex-1 min-w-0">
+              <span className="text-xs font-semibold font-mono truncate flex-1 min-w-0 flex flex-col gap-0 leading-tight">
                 {isCreating ? (
                   <span className="text-muted-foreground font-normal not-italic">New Destination</span>
                 ) : selectedName ? (
-                  selectedName
+                  <>
+                    <span className="truncate">{selectedName}</span>
+                    {activeInstScope && (
+                      <span className="text-[10px] font-normal text-muted-foreground truncate">{activeInstScope.spaceName} › {activeInstScope.instanceName}</span>
+                    )}
+                  </>
                 ) : (
                   <span className="text-muted-foreground font-normal">—</span>
                 )}
@@ -1798,7 +1948,7 @@ export default function SubaccountDestModal({ org, allNames, initialName, initia
                     >
                       <GitCompare className="h-3.5 w-3.5" />
                       {maximized && (
-                        <span className="hidden sm:inline">
+                        <span className="max-[680px]:hidden">
                           {selectedDests?.some(d => d.region === org.region && d.subdomain === org.subdomain && d.name === selectedName && (activeInstScope ? d.instanceGuid === activeInstScope.instanceGuid : !d.instanceGuid))
                             ? 'In Compare' : 'Select for Compare'}
                         </span>
@@ -1811,7 +1961,7 @@ export default function SubaccountDestModal({ org, allNames, initialName, initia
                     className={btnOutline}
                   >
                     <RotateCcw className="h-3.5 w-3.5" />
-                    {maximized && <span className="hidden sm:inline">Reset</span>}
+                    {maximized && <span className="max-[680px]:hidden">Reset</span>}
                   </button>
                   <button
                     onClick={handleSave}
@@ -1819,7 +1969,7 @@ export default function SubaccountDestModal({ org, allNames, initialName, initia
                     className={`${btnBase} bg-primary text-primary-foreground hover:bg-primary/90`}
                   >
                     <Save className="h-3.5 w-3.5" />
-                    {maximized && <span className="hidden sm:inline">{isSaving ? 'Saving…' : 'Save'}</span>}
+                    {maximized && <span className="max-[680px]:hidden">{isSaving ? 'Saving…' : 'Save'}</span>}
                   </button>
                 </div>
               )}

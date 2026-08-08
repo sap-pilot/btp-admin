@@ -2,6 +2,8 @@ import { existsSync } from 'node:fs';
 import { mkdir, readdir, readFile, rename, stat, writeFile } from 'node:fs/promises';
 import { join, sep } from 'node:path';
 import { homedir } from 'node:os';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import { config } from '../config.js';
 import { logger } from '../logger.js';
 import { getOrRefreshToken, fetchWithRateLimit } from './cfLoginService.js';
@@ -1564,11 +1566,11 @@ export interface DestSearchResult {
   matchValue:    string;
   spaceName?:    string;
   instanceName?: string;
+  instanceGuid?: string;
 }
 
 export async function searchDestinations(query: string, scopeRegion?: string, scopeSubdomain?: string): Promise<DestSearchResult[]> {
   if (!query) return [];
-  const lq = query.toLowerCase();
   const results: DestSearchResult[] = [];
   if (!existsSync(LOCAL_DEST_DIR)) return results;
 
@@ -1579,63 +1581,112 @@ export async function searchDestinations(query: string, scopeRegion?: string, sc
     if (sa.manageDestinations && sa.org?.orgId) orgIndex.set(`${sa.region}/${sa.subdomain}`, sa.org.orgId);
   }
 
-  async function searchFiles(dir: string, region: string, subdomain: string, org_id: string, spaceName?: string, instanceName?: string) {
-    const files = await readdir(dir).catch(() => [] as string[]);
-    for (const file of files) {
-      if (!file.endsWith('.json') || file.endsWith('.deleted.json')) continue;
-      const name = file.slice(0, -5);
+  // Parse a file path under LOCAL_DEST_DIR into its components.
+  // Paths have one of two shapes:
+  //   {region}/{subdomain}/{destName}.json            (SA-level)
+  //   {region}/{subdomain}/{spaceName}/{guid_instName}/{destName}.json  (instance-level)
+  function parsePath(absPath: string): { region: string; subdomain: string; spaceName?: string; instanceName?: string; instanceGuid?: string; name: string } | null {
+    const rel = absPath.startsWith(LOCAL_DEST_DIR + sep) ? absPath.slice(LOCAL_DEST_DIR.length + 1) : null;
+    if (!rel) return null;
+    const parts = rel.split(sep);
+    if (parts.length === 3) {
+      const [region, subdomain, file] = parts as [string, string, string];
+      if (!file.endsWith('.json') || file.endsWith('.deleted.json')) return null;
+      return { region, subdomain, name: file.slice(0, -5) };
+    }
+    if (parts.length === 5) {
+      const [region, subdomain, spaceName, instDir, file] = parts as [string, string, string, string, string];
+      if (!file.endsWith('.json') || file.endsWith('.deleted.json')) return null;
+      const us = instDir.indexOf('_');
+      if (us < 0) return null;
+      const instanceGuid = instDir.slice(0, us);
+      const instanceName = instDir.slice(us + 1);
+      return { region, subdomain, spaceName, instanceName, instanceGuid, name: file.slice(0, -5) };
+    }
+    return null;
+  }
+
+  async function grepDir(dir: string): Promise<string[]> {
+    const execFileAsync = promisify(execFile);
+    try {
+      const { stdout } = await execFileAsync(
+        'grep',
+        ['-rnwil', dir, '--include=*.json', '-e', query],
+        { maxBuffer: 10 * 1024 * 1024 },
+      );
+      return stdout.trim() ? stdout.trim().split('\n') : [];
+    } catch (err: unknown) {
+      // grep exits with code 1 when no matches — that's fine
+      if (err && typeof err === 'object' && 'code' in err && (err as { code: unknown }).code === 1) return [];
+      return [];
+    }
+  }
+
+  async function processDir(region: string, subdomain: string, dir: string) {
+    const org_id = orgIndex.get(`${region}/${subdomain}`) ?? '';
+    const matchedFiles = await grepDir(dir);
+    for (const absPath of matchedFiles) {
+      // Skip .deleted.json and .changelog.md files grep may find
+      if (!absPath.endsWith('.json') || absPath.endsWith('.deleted.json')) continue;
+      const parsed = parsePath(absPath);
+      if (!parsed) continue;
+      if (parsed.region !== region || parsed.subdomain !== subdomain) continue;
+      // Determine which field matched by reading the file
       try {
-        const obj = JSON.parse(await readFile(join(dir, file), 'utf-8')) as Record<string, unknown>;
-        if (name.toLowerCase().includes(lq)) {
-          results.push({ region, subdomain, org_id, name, matchField: 'Name', matchValue: name, spaceName, instanceName });
-          continue;
-        }
-        for (const [key, val] of Object.entries(obj)) {
-          if (isSensitiveField(key)) continue;
-          if (typeof val === 'string' && val.toLowerCase().includes(lq)) {
-            results.push({ region, subdomain, org_id, name, matchField: key, matchValue: val, spaceName, instanceName });
-            break;
+        const obj = JSON.parse(await readFile(absPath, 'utf-8')) as Record<string, unknown>;
+        const lq  = query.toLowerCase();
+        let matchField = 'Name';
+        let matchValue = parsed.name;
+        if (!parsed.name.toLowerCase().includes(lq)) {
+          for (const [key, val] of Object.entries(obj)) {
+            if (isSensitiveField(key)) continue;
+            if (typeof val === 'string' && val.toLowerCase().includes(lq)) {
+              matchField = key; matchValue = val; break;
+            }
           }
         }
+        results.push({ region, subdomain, org_id, name: parsed.name, matchField, matchValue, spaceName: parsed.spaceName, instanceName: parsed.instanceName, instanceGuid: parsed.instanceGuid });
       } catch { /* skip unreadable */ }
     }
   }
 
-  const regions = await readdir(LOCAL_DEST_DIR).catch(() => [] as string[]);
-  for (const region of regions) {
-    if (scopeRegion && region !== scopeRegion) continue;
-    const regionDir = join(LOCAL_DEST_DIR, region);
-    try { if (!(await stat(regionDir)).isDirectory()) continue; } catch { continue; }
-    const subdomains = await readdir(regionDir).catch(() => [] as string[]);
-    for (const subdomain of subdomains) {
-      if (scopeSubdomain && subdomain !== scopeSubdomain) continue;
-      if (restrictedKeys.has(`${region}/${subdomain}`)) continue;
-      const subDir = join(regionDir, subdomain);
-      try { if (!(await stat(subDir)).isDirectory()) continue; } catch { continue; }
-      const org_id = orgIndex.get(`${region}/${subdomain}`) ?? '';
-
-      // Search subaccount-level JSON files (flat)
-      await searchFiles(subDir, region, subdomain, org_id);
-
-      // Search space/instance-level directories: subDir/{spaceName}/{guid_instanceName}/
-      const subEntries = await readdir(subDir, { withFileTypes: true }).catch(() => [] as import('node:fs').Dirent[]);
-      for (const spaceEnt of subEntries) {
-        if (!spaceEnt.isDirectory()) continue;
-        const spaceName = spaceEnt.name;
-        const spaceDir  = join(subDir, spaceName);
-        const instEntries = await readdir(spaceDir, { withFileTypes: true }).catch(() => [] as import('node:fs').Dirent[]);
-        for (const instEnt of instEntries) {
-          if (!instEnt.isDirectory()) continue;
-          const dirName = instEnt.name;
-          const idx     = dirName.indexOf('_');
-          if (idx < 0) continue;
-          const instanceName = dirName.slice(idx + 1);
-          await searchFiles(join(spaceDir, dirName), region, subdomain, org_id, spaceName, instanceName);
-        }
+  if (scopeRegion && scopeSubdomain) {
+    // Fast path: grep the entire subaccount directory in one shot
+    if (!restrictedKeys.has(`${scopeRegion}/${scopeSubdomain}`)) {
+      const subDir = join(LOCAL_DEST_DIR, scopeRegion, scopeSubdomain);
+      if (existsSync(subDir)) await processDir(scopeRegion, scopeSubdomain, subDir);
+    }
+  } else {
+    // Global: iterate all regions+subdomains
+    const regions = await readdir(LOCAL_DEST_DIR).catch(() => [] as string[]);
+    for (const region of regions) {
+      if (scopeRegion && region !== scopeRegion) continue;
+      const regionDir = join(LOCAL_DEST_DIR, region);
+      try { if (!(await stat(regionDir)).isDirectory()) continue; } catch { continue; }
+      const subdomains = await readdir(regionDir).catch(() => [] as string[]);
+      for (const subdomain of subdomains) {
+        if (restrictedKeys.has(`${region}/${subdomain}`)) continue;
+        const subDir = join(regionDir, subdomain);
+        try { if (!(await stat(subDir)).isDirectory()) continue; } catch { continue; }
+        await processDir(region, subdomain, subDir);
       }
     }
   }
   return results;
+}
+
+export async function countDestinationFiles(): Promise<number> {
+  if (!existsSync(LOCAL_DEST_DIR)) return 0;
+  try {
+    const execFileAsync = promisify(execFile);
+    const { stdout } = await execFileAsync(
+      'find', [LOCAL_DEST_DIR, '-type', 'f', '-name', '*.json', '!', '-name', '*.deleted.json'],
+      { maxBuffer: 1024 * 1024 },
+    );
+    return stdout.trim() ? stdout.trim().split('\n').length : 0;
+  } catch {
+    return 0;
+  }
 }
 
 // ─── Destination API write (PUT with POST fallback) ──────────────────────────
