@@ -25,6 +25,8 @@ import {
   countDestinationFiles,
   batchImportDestinations,
   appendImportGlobalChangelog,
+  deleteDestinationEntry,
+  deleteInstanceDestinationEntry,
   type ImportTarget,
 } from '../services/destinationService.js';
 import { getAutoGlobalRefreshMs, getAutoSubaccountRefreshMs } from '../services/configService.js';
@@ -230,6 +232,17 @@ router.put('/:region/:subdomain/spaces/:spaceName/instances/:instanceGuid/:name'
   } catch (err) { next(err); }
 });
 
+router.delete('/:region/:subdomain/spaces/:spaceName/instances/:instanceGuid/:name', requireAdmin, async (req, res, next) => {
+  try {
+    const { region, subdomain, spaceName, instanceGuid, name } = req.params as Record<string, string>;
+    if (await isSubaccountRestricted(region, subdomain)) return void res.status(403).json(RESTRICTED);
+    const authReq     = req as AuthRequest;
+    const sessionUser = authReq.authSession?.email || authReq.authSession?.firstName || 'admin';
+    await deleteInstanceDestinationEntry(region, subdomain, spaceName, instanceGuid, name, sessionUser);
+    res.json({ ok: true });
+  } catch (err) { next(err); }
+});
+
 // ── Subaccount destination names (proactive load) ────────────────────────────
 
 
@@ -287,6 +300,17 @@ router.put('/:region/:subdomain/:name', requireAdmin, async (req, res, next) => 
     const sessionUser = authReq.authSession?.email || authReq.authSession?.firstName || username;
     if (!data || typeof data !== 'object') return void res.status(400).json({ ok: false, error: 'data required' });
     await saveDestinationEntry(region, subdomain, name, data, sessionUser, action);
+    res.json({ ok: true });
+  } catch (err) { next(err); }
+});
+
+router.delete('/:region/:subdomain/:name', requireAdmin, async (req, res, next) => {
+  try {
+    const { region, subdomain, name } = req.params as { region: string; subdomain: string; name: string };
+    if (await isSubaccountRestricted(region, subdomain)) return void res.status(403).json(RESTRICTED);
+    const authReq     = req as AuthRequest;
+    const sessionUser = authReq.authSession?.email || authReq.authSession?.firstName || 'admin';
+    await deleteDestinationEntry(region, subdomain, name, sessionUser);
     res.json({ ok: true });
   } catch (err) { next(err); }
 });
