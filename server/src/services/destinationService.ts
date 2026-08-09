@@ -682,13 +682,14 @@ async function persistDestination(
 // ─── Public: refresh ─────────────────────────────────────────────────────────
 
 export interface RefreshResult {
-  refreshed: number;
-  received:  number;
-  created:   number;
-  updated:   number;
-  deleted:   number;
-  errors:    string[];
-  skipped?:  boolean;
+  refreshed:          number;
+  received:           number;
+  created:            number;
+  updated:            number;
+  deleted:            number;
+  errors:             string[];
+  skipped?:           boolean;
+  obsoleteInstances?: number;
 }
 
 interface DestChange { region: string; subdomain: string; name: string; action: 'created' | 'updated' | 'deleted'; spaceName?: string; instanceName?: string; instanceGuid?: string }
@@ -978,6 +979,9 @@ export async function refreshDestinations(username = 'system', mode: 'auto' | 'm
   if (spaceResult.errors.length > 0) {
     logger.warn({ errors: spaceResult.errors }, 'Some space destination refreshes failed during global refresh');
   }
+  if (spaceResult.obsoleteInstances > 0) {
+    logger.info({ count: spaceResult.obsoleteInstances }, 'Space destination instances with no service key (obsolete) skipped during global refresh');
+  }
   spaceReceived = spaceResult.created + spaceResult.updated; // approximate: only tracked changes
 
   const allIssues = [...issues, ...spaceResult.errors];
@@ -987,6 +991,7 @@ export async function refreshDestinations(username = 'system', mode: 'auto' | 'm
     total, received: received + spaceReceived,
     created: created + spaceResult.created, updated: updated + spaceResult.updated, deleted: deleted + spaceResult.deleted,
     issues: allIssues,
+    obsoleteInstances: spaceResult.obsoleteInstances,
   });
 
   return { refreshed, received, created: created + spaceResult.created, updated: updated + spaceResult.updated, deleted: deleted + spaceResult.deleted, errors: allIssues };
@@ -1092,8 +1097,11 @@ export async function refreshSubaccountDestinations(region: string, subdomain: s
   if (spaceResult.errors.length > 0) {
     logger.warn({ errors: spaceResult.errors }, 'Some space destination refreshes failed during subaccount refresh');
   }
+  if (spaceResult.obsoleteInstances > 0) {
+    logger.info({ count: spaceResult.obsoleteInstances }, 'Space destination instances with no service key (obsolete) skipped during subaccount refresh');
+  }
 
-  return { refreshed, received, created: created + spaceResult.created, updated: updated + spaceResult.updated, deleted: deleted + spaceResult.deleted, errors: [...issues, ...spaceResult.errors] };
+  return { refreshed, received, created: created + spaceResult.created, updated: updated + spaceResult.updated, deleted: deleted + spaceResult.deleted, errors: [...issues, ...spaceResult.errors], obsoleteInstances: spaceResult.obsoleteInstances };
 }
 
 // ─── Public: proactive subaccount destination load ────────────────────────────
@@ -1305,7 +1313,7 @@ export async function refreshSpaceDestinations(
   username:    string,
   mode:        'auto' | 'manual',
   onProgress?: (current: number, total: number, label: string, received: number) => void,
-): Promise<{ created: number; updated: number; deleted: number; errors: string[] }> {
+): Promise<{ created: number; updated: number; deleted: number; errors: string[]; obsoleteInstances: number }> {
   // Collect all (region, subdomain, spaceId, spaceName) tuples with manageDest=true
   type SpaceTodo = { region: string; subdomain: string; spaceId: string; spaceName: string; orgId: string };
   const todos: SpaceTodo[] = [];
@@ -1315,10 +1323,10 @@ export async function refreshSpaceDestinations(
       if (sp.manageDest) todos.push({ region: sa.region, subdomain: sa.subdomain, spaceId: sp.spaceId, spaceName: sp.spaceName, orgId: sa.org.orgId });
     }
   }
-  if (todos.length === 0) return { created: 0, updated: 0, deleted: 0, errors: [] };
+  if (todos.length === 0) return { created: 0, updated: 0, deleted: 0, errors: [], obsoleteInstances: 0 };
 
   const issues: string[] = [];
-  let created = 0, updated = 0, deleted = 0, done = 0;
+  let created = 0, updated = 0, deleted = 0, done = 0, obsoleteInstances = 0;
 
   // ── Step A: discover destination service instances per region ──────────────
   const byRegion = new Map<string, SpaceTodo[]>();
@@ -1362,7 +1370,7 @@ export async function refreshSpaceDestinations(
 
   if (spaceInstances.length === 0) {
     logger.info({ todos: todos.length }, 'No destination service instances found in spaces with manageDest=true');
-    return { created, updated, deleted, errors: issues };
+    return { created, updated, deleted, errors: issues, obsoleteInstances };
   }
 
   const { orgs: keyStore, planGuids: instancePlanGuids } = await loadKeyStore();
@@ -1392,7 +1400,11 @@ export async function refreshSpaceDestinations(
     // Resolve credentials specifically for this instance GUID (not the org-level instance)
     const tokenResult = await resolveInstanceToken(inst.region, inst.guid, inst.name, keyStore, tokenStore, cfLoginFailed, label);
     if ('error' in tokenResult) {
-      issues.push(`${label}: ${tokenResult.error}`);
+      if (tokenResult.error.startsWith('No service key found for instance')) {
+        obsoleteInstances++;
+      } else {
+        issues.push(`${label}: ${tokenResult.error}`);
+      }
       continue;
     }
     const { accessToken, credential } = tokenResult;
@@ -1482,7 +1494,7 @@ export async function refreshSpaceDestinations(
     emit('dest', { ts: Date.now() });
   }
 
-  return { created, updated, deleted, errors: issues };
+  return { created, updated, deleted, errors: issues, obsoleteInstances };
 }
 
 export async function saveInstanceDestinationEntry(
