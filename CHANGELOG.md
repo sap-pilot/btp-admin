@@ -1,6 +1,6 @@
 # Changelog
 
-## [v1.5.0] - unreleased
+## [v1.5.0] - 2026-08-12
 
 ### Added
 - **Space-level destinations** — flag individual CF spaces as `manageDest` to enable discovery and sync of destination service instances within those spaces:
@@ -14,6 +14,7 @@
   - **SubaccountDestModal: destination list UX** — multi-select with Ctrl/Shift/click and Ctrl/Cmd+A (select all); Export button shows selection count badge; Compare(N) button is instant/ephemeral — opens a CompareModal without marking destinations "In Compare" in the main basket; instance-level dest counts populated eagerly on modal open (not lazily on first expand)
   - **CompareModal: Reset All / Save All** — bulk reset and save buttons in the header; animated progress bar under the header showing per-destination save progress; auto-dismisses after 3 s on full success; individual per-column Reset/Save also update the shared progress bar
   - **CompareModal: Add Property** — `+ Add Property` button in the table footer appends an editable row; key + per-column value inputs; committed into all columns on Enter or when focus leaves the row (Escape discards); committed properties persist as normal editable rows (derived from `colEdits`, not `colData`)
+  - **CompareModal: Export All** — new **Export All** button in the modal header (before Reset All); fetches every compared destination from its appropriate export endpoint (SA or instance-level) and downloads the result as `compare_destinations.json` (single object when only one destination; JSON array otherwise); button is disabled while destinations are loading or an export is already in progress
   - **Global search extension** — `GET /api/destinations/search` now also walks space/instance subdirectory levels; results include `spaceName` and `instanceName`; the search results table shows `{spaceName} › {instanceName} › {name}` for instance-level matches
   - **Compare dropdown** — space-level destinations show the full `{region} → {subdomain} → {spaceName} → {instanceName} → {name}` path
   - **New REST endpoints**:
@@ -31,6 +32,8 @@
 - **SubaccountDestModal: delete** — toolbar **Delete** button (enabled when ≥1 destinations are selected) opens a pre-flight dialog listing all destinations to be deleted with full path (`region > alias (subdomain) [> space > instance] > name`); amber warning that the operation is not reversible; sequential `DELETE` calls with a live `X of Y deleted: <name>` progress strip; each deleted destination appends a `[Manual] destination deleted by <user> at …` entry to its changelog and is renamed to `{name}.deleted.json`; a grouped entry is written to the global changelog after all deletes complete
 
 ### Fixed
+- **SubaccountDestModal: SA export broken in tree view** — the tree-view export handler iterated `selectedDestKeys` but silently skipped all `sa/`-prefixed keys (only processed instance-level keys), so clicking Export after selecting SA destinations in the combined dest list did nothing; the fallback `handleExport()` only fired when no tree node was selected at all; SA names are now collected alongside instance names, fetched from the SA export endpoint, and combined with instance results into a single download; the issue persisted after clearing the search because `selectedDestKeys` and `treeSelectedKeys` remained unchanged
+- **SubaccountDestModal: space/instance tree not updated after Refresh** — after a subaccount refresh, `spaceInstances` and per-instance destination counts in the tree remained stale; `loadAllSpaceInstances` and `loadInstanceDestNames` both have one-shot guards (`allInstancesLoaded` and `instanceNames.has()`) that prevented re-fetching; `handleRefresh` now calls `loadAllSpaceInstances(true)` on success, which bypasses both guards and reloads the full tree and all instance destination lists in place
 - **Global refresh progress bar** — progress counter was advancing once per instance instead of once per space, causing `current > total`; space refresh now runs before the final `done` event so the bar reaches 100% and the completion message is shown; the done message includes created/updated/deleted totals and a warning count when errors occurred
 - **CompareModal: `allKeys` derived from `colEdits`** — new properties added via `+ Add Property` are committed into `colEdits`; previously `allKeys` was built from `colData` (original server data) so committed new properties immediately disappeared from the table
 - **Destination overview table: per-SA packed rows** — generic and cep category rows now fill from the top row down per subaccount (same as s4), instead of aligning by shared destination name across all subaccounts; eliminates spurious empty cells caused by name mismatches
@@ -43,7 +46,7 @@
 - **SubaccountDestModal: ghost SA destinations after delete** — `filteredNames` state (search-filtered subset) was not updated when destinations were deleted, causing deleted destinations to remain visible until the next browser search or page refresh; `runDelete` now calls both `setLocalAllNames` and `setFilteredNames` to remove deleted names from both lists immediately
 - **Destination refresh: obsolete space instances** — instances with no CF service credential binding previously emitted a `WARN` log entry per instance and appeared as warnings in the refresh summary; they are now silently counted and reported as `X obsolete instance(s) (no service key)` in the global refresh done message (green, not amber); `logger.info` replaces `logger.warn` for this case
 
-## [v1.4.0] - unreleased
+## [v1.4.0] - 2026-08-06
 
 ### Added
 - **Users management** — new admin-only section at `/users` mirroring the Role Collections feature:

@@ -739,8 +739,8 @@ export default function SubaccountDestModal({ org, allNames, initialName, initia
   }
 
   // Load all space instances from local store in one shot (keyed by spaceId from org.spaces)
-  async function loadAllSpaceInstances() {
-    if (allInstancesLoaded) return;
+  async function loadAllSpaceInstances(force = false) {
+    if (allInstancesLoaded && !force) return;
     try {
       const res  = await fetch(`/api/destinations/${enc(org.region)}/${enc(org.subdomain)}/spaces`);
       const json = await res.json() as { ok: boolean; data: Array<{ spaceName: string; instanceGuid: string; instanceName: string }> };
@@ -759,13 +759,13 @@ export default function SubaccountDestModal({ org, allNames, initialName, initia
       setAllInstancesLoaded(true);
       // Eagerly load dest names for all instances so counts are populated immediately
       for (const item of (json.data ?? [])) {
-        void loadInstanceDestNames(item.instanceGuid, item.spaceName);
+        void loadInstanceDestNames(item.instanceGuid, item.spaceName, force);
       }
     } catch { /* ignore */ }
   }
 
-  async function loadInstanceDestNames(instanceGuid: string, spaceName: string) {
-    if (instanceNames.has(instanceGuid)) return;
+  async function loadInstanceDestNames(instanceGuid: string, spaceName: string, force = false) {
+    if (!force && instanceNames.has(instanceGuid)) return;
     try {
       const res  = await fetch(`/api/destinations/${enc(org.region)}/${enc(org.subdomain)}/spaces/${enc(spaceName)}/instances/${enc(instanceGuid)}`);
       const json = await res.json() as { ok: boolean; names: string[] };
@@ -1212,6 +1212,7 @@ export default function SubaccountDestModal({ org, allNames, initialName, initia
       }
       if (selectedName) await loadDest(selectedName);
       if (activeTab === 'changelog' && selectedName) await loadChangelog(selectedName);
+      if (hasSpaceDests) void loadAllSpaceInstances(true);
       setSubProgress({ type: 'done', created: json.created ?? 0, updated: json.updated ?? 0, deleted: json.deleted ?? 0, received: json.received });
       subProgressTimerRef.current = setTimeout(() => setSubProgress(null), 3000);
     } catch (err) {
@@ -1726,13 +1727,16 @@ export default function SubaccountDestModal({ org, allNames, initialName, initia
                       })()}
                       {renderFilterToolbar({
                         onExport: async () => {
+                          const saNames: string[] = [];
                           const toExport: { instanceGuid: string; spaceName: string; name: string }[] = [];
                           for (const dk of selectedDestKeys) {
                             const slashIdx = dk.indexOf('/');
                             if (slashIdx < 0) continue;
                             const prefix = dk.slice(0, slashIdx);
                             const name   = dk.slice(slashIdx + 1);
-                            if (prefix !== 'sa') {
+                            if (prefix === 'sa') {
+                              saNames.push(name);
+                            } else {
                               let sName = '';
                               for (const [sid, insts] of spaceInstances) {
                                 if (insts.find(x => x.instanceGuid === prefix)) {
@@ -1744,8 +1748,14 @@ export default function SubaccountDestModal({ org, allNames, initialName, initia
                             }
                           }
                           if (treeSelectedKeys.size === 0) { await handleExport(); return; }
-                          if (toExport.length === 0) return;
+                          if (saNames.length === 0 && toExport.length === 0) return;
                           const all: Record<string, unknown>[] = [];
+                          for (const name of [...saNames].sort()) {
+                            try {
+                              const res = await fetch(`/api/destinations/${enc(org.region)}/${enc(org.subdomain)}/${enc(name)}/export`);
+                              if (res.ok) all.push(await res.json() as Record<string, unknown>);
+                            } catch { /* skip */ }
+                          }
                           for (const { instanceGuid, spaceName, name } of toExport) {
                             try {
                               const res = await fetch(`/api/destinations/${enc(org.region)}/${enc(org.subdomain)}/spaces/${enc(spaceName)}/instances/${enc(instanceGuid)}/${enc(name)}/export`);
@@ -1755,7 +1765,7 @@ export default function SubaccountDestModal({ org, allNames, initialName, initia
                           if (all.length === 0) return;
                           const blob = new Blob([JSON.stringify(all.length === 1 ? all[0] : all, null, 2)], { type: 'application/json' });
                           const href = URL.createObjectURL(blob);
-                          const a = Object.assign(document.createElement('a'), { href, download: `${org.region}_${org.subdomain}_instance_destinations.json` });
+                          const a = Object.assign(document.createElement('a'), { href, download: `${org.region}_${org.subdomain}_destinations.json` });
                           document.body.appendChild(a); a.click(); document.body.removeChild(a); URL.revokeObjectURL(href);
                         },
                         exportDisabled: selectedDestKeys.size === 0,
