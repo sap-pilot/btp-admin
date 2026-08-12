@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Eye, EyeOff, GitCompare, Lock, Plus, RotateCcw, Save, X } from 'lucide-react';
+import { Download, Eye, EyeOff, GitCompare, Lock, Plus, RotateCcw, Save, X } from 'lucide-react';
 import { useAuth } from '@/hooks/useAuth';
 import type { SelectedDest } from './SubaccountDestModal';
 
@@ -44,6 +44,12 @@ function destSaveUrl(d: SelectedDest) {
     ? `/api/destinations/${enc(d.region)}/${enc(d.subdomain)}/spaces/${enc(d.spaceName)}/instances/${enc(d.instanceGuid)}/${enc(d.name)}`
     : `/api/destinations/${enc(d.region)}/${enc(d.subdomain)}/${enc(d.name)}`;
 }
+
+function destExportUrl(d: SelectedDest) {
+  return d.spaceName && d.instanceGuid
+    ? `/api/destinations/${enc(d.region)}/${enc(d.subdomain)}/spaces/${enc(d.spaceName)}/instances/${enc(d.instanceGuid)}/${enc(d.name)}/export`
+    : `/api/destinations/${enc(d.region)}/${enc(d.subdomain)}/${enc(d.name)}/export`;
+}
 function enc(s: string) { return encodeURIComponent(s); }
 
 function sortKeys(keys: string[]): string[] {
@@ -69,8 +75,9 @@ export default function CompareModal({ selected, onClose }: Props) {
   const [colOrig,     setColOrig]     = useState<Map<string, Record<string, string>>>(new Map());
   const [colSaving,   setColSaving]   = useState<Map<string, boolean>>(new Map());
   const [revealed,    setRevealed]    = useState<Map<string, Set<string>>>(new Map());
-  const [saveAllBusy, setSaveAllBusy] = useState(false);
-  const [progress,    setProgress]    = useState<ProgressState | null>(null);
+  const [saveAllBusy,  setSaveAllBusy]  = useState(false);
+  const [isExporting,  setIsExporting]  = useState(false);
+  const [progress,     setProgress]     = useState<ProgressState | null>(null);
   const [newProps,    setNewProps]    = useState<NewProp[]>([]);
 
   const progressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -209,6 +216,26 @@ export default function CompareModal({ selected, onClose }: Props) {
     setNewProps(prev => prev.filter(p => p.id !== id));
   }
 
+  // ── Export helpers ───────────────────────────────────────────────────────
+
+  async function exportAll() {
+    setIsExporting(true);
+    try {
+      const all: Record<string, unknown>[] = [];
+      for (const d of selected) {
+        try {
+          const res = await fetch(destExportUrl(d));
+          if (res.ok) all.push(await res.json() as Record<string, unknown>);
+        } catch { /* skip */ }
+      }
+      if (all.length === 0) return;
+      const blob = new Blob([JSON.stringify(all.length === 1 ? all[0] : all, null, 2)], { type: 'application/json' });
+      const href = URL.createObjectURL(blob);
+      const a = Object.assign(document.createElement('a'), { href, download: 'compare_destinations.json' });
+      document.body.appendChild(a); a.click(); document.body.removeChild(a); URL.revokeObjectURL(href);
+    } finally { setIsExporting(false); }
+  }
+
   // ── Save helpers ─────────────────────────────────────────────────────────
 
   async function saveCol(d: SelectedDest): Promise<boolean> {
@@ -281,6 +308,15 @@ export default function CompareModal({ selected, onClose }: Props) {
           <span className="text-sm font-semibold">Compare Destinations</span>
           <span className="text-xs text-muted-foreground">({selected.length})</span>
           <div className="ml-auto flex items-center gap-1.5 shrink-0">
+            <button
+              onClick={() => void exportAll()}
+              disabled={isLoading || isExporting}
+              className={btnOutline}
+              title="Export all compared destinations as JSON"
+            >
+              <Download className="h-3.5 w-3.5" />
+              {isExporting ? 'Exporting…' : 'Export All'}
+            </button>
             <button
               onClick={resetAll}
               disabled={!anyDirty || saveAllBusy}
