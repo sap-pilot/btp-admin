@@ -471,7 +471,7 @@ async function persistRC(
     usersChanged = JSON.stringify(existingUsers) !== JSON.stringify(users);
   }
 
-  const hasChange = wasCreated || !!rcDiff || !!usersDiff;
+  const hasChange = wasCreated || !!rcDiff;
   if (!hasChange && !rcChanged && !usersChanged) return 'unchanged';
 
   if (hasChange) {
@@ -479,8 +479,7 @@ async function persistRC(
     const label   = mode === 'auto' ? 'Auto' : 'Manual';
     const heading = `## [${label}] refresh by <${username}> at ${ts}`;
     const parts: string[] = [heading];
-    if (rcDiff)    parts.push(rcDiff);
-    if (usersDiff) parts.push('Users:\n' + usersDiff);
+    if (rcDiff) parts.push(rcDiff);
     const entry = parts.join('\n') + '\n\n';
     const prevChangelog = existsSync(changelogPath) ? await readFile(changelogPath, 'utf-8') : '';
     await writeFile(changelogPath, entry + prevChangelog, 'utf-8');
