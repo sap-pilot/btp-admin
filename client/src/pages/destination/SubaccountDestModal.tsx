@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import {
-  ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown, CheckSquare, Download, Eye, EyeOff, GitCompare, Lock, Maximize2, Minimize2, PanelLeft, Plus, RefreshCw, RotateCcw, Save, Search, Send, Square, Trash2, Upload, X,
+  ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown, CheckSquare, Copy, Download, Eye, EyeOff, GitCompare, Lock, Maximize2, Minimize2, PanelLeft, Plus, RefreshCw, RotateCcw, Save, Search, Send, Square, Trash2, Upload, X,
 } from 'lucide-react';
 import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator,
@@ -412,31 +412,94 @@ function ChangelogTab({ changelog, loading }: { changelog: string; loading: bool
 
 interface TestHeader { key: string; value: string }
 
-const MOCK_RESP_HEADERS: TestHeader[] = [
-  { key: 'Content-Type',     value: 'application/json; charset=utf-8' },
-  { key: 'Content-Length',   value: '842' },
-  { key: 'Cache-Control',    value: 'no-cache, no-store' },
-  { key: 'X-Correlation-Id', value: 'a3f8d21c-4b2e-4f9d-b3c1-9e7f2a1b0d4e' },
-  { key: 'Server',           value: 'destinations-service/1.0' },
+interface TestResult {
+  ok:          true;
+  status:      number;
+  statusText:  string;
+  durationMs:  number;
+  headers:     TestHeader[];
+  body:        string;
+}
+interface TestError {
+  ok:     false;
+  error:  string;
+  detail: string;
+  source: 'config' | 'auth' | 'connectivity' | 'network' | 'timeout';
+}
+type TestOutcome = TestResult | TestError;
+
+interface TestTabProps {
+  org:         SubaccountEntry;
+  name:        string;
+  instScope:   { spaceName: string; instanceGuid: string; instanceName: string } | null;
+  editedProps: DestProp[];
+}
+
+const URI_HISTORY_KEY = 'btp:dest-test-uri-history';
+const URI_SUGGESTIONS = [
+  '/sap/bc/ui2/start_up?sap-statistics=true',
+  '/sap/opu/odata/sap/ESH_SEARCH_SRV/Diagnosis?$format=json&sap-statistics=true',
+  '/sap/opu/odata/sap/UI2/USER_MENU/MenuItems?$format=json',
 ];
 
-const MOCK_RESP_BODY = JSON.stringify(
-  [{ Name: 'API_S4_HTTP_001', Type: 'HTTP', URL: 'https://s4.example.com', Authentication: 'BasicAuthentication' }],
-  null, 2,
-);
+function loadUriHistory(): string[] {
+  try { return JSON.parse(localStorage.getItem(URI_HISTORY_KEY) ?? '[]') as string[]; }
+  catch { return []; }
+}
 
-function TestTab() {
-  const [method,     setMethod]     = useState<HttpMethod>('GET');
-  const [url,        setUrl]        = useState('');
-  const [reqHeaders, setReqHeaders] = useState<TestHeader[]>([{ key: '', value: '' }]);
-  const [body,       setBody]       = useState('');
-  const [vertSplit,  setVertSplit]  = useState(50);
-  const [reqSplit,   setReqSplit]   = useState(45);
-  const [respSplit,  setRespSplit]  = useState(45);
+function saveUriHistory(history: string[]): void {
+  try { localStorage.setItem(URI_HISTORY_KEY, JSON.stringify(history)); } catch { /* ignore */ }
+}
+
+function TestTab({ org, name, instScope }: TestTabProps) {
+  const [method,      setMethod]      = useState<HttpMethod>('GET');
+  const [url,         setUrl]         = useState('');
+  const [reqHeaders,  setReqHeaders]  = useState<TestHeader[]>([{ key: '', value: '' }]);
+  const [body,        setBody]        = useState('');
+  const [isSending,   setIsSending]   = useState(false);
+  const [result,      setResult]      = useState<TestOutcome | null>(null);
+  const [formatJson,  setFormatJson]  = useState(false);
+  const [uriHistory,  setUriHistory]  = useState<string[]>(loadUriHistory);
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [vertSplit,   setVertSplit]   = useState(50);
+  const [reqSplit,    setReqSplit]    = useState(45);
+  const [respSplit,   setRespSplit]   = useState(45);
 
   const vertContainerRef = useRef<HTMLDivElement>(null);
   const reqContainerRef  = useRef<HTMLDivElement>(null);
   const respContainerRef = useRef<HTMLDivElement>(null);
+  const uriDropdownRef   = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!historyOpen) return;
+    function onDown(e: MouseEvent) {
+      if (uriDropdownRef.current && !uriDropdownRef.current.contains(e.target as Node)) {
+        setHistoryOpen(false);
+      }
+    }
+    document.addEventListener('mousedown', onDown);
+    return () => document.removeEventListener('mousedown', onDown);
+  }, [historyOpen]);
+
+  function pickUri(u: string) { setUrl(u); setHistoryOpen(false); }
+
+  function clearHistory() {
+    setUriHistory([]);
+    saveUriHistory([]);
+  }
+
+  const canFormatJson = !!(result?.ok && result.headers.some(
+    h => h.key.toLowerCase() === 'content-type' && h.value.toLowerCase().includes('application/json'),
+  ));
+
+  function displayBody(): string {
+    if (!result) return '';
+    if (!result.ok) return `${result.error}\n\n${result.detail}\n\nSource: ${result.source}`;
+    if (formatJson && canFormatJson) {
+      try { return JSON.stringify(JSON.parse(result.body), null, 2); } catch { /* fall through */ }
+    }
+    return result.body;
+  }
 
   const btnBase    = 'inline-flex items-center gap-1.5 px-3 py-1.5 rounded text-xs font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed';
   const btnPrimary = `${btnBase} bg-primary text-primary-foreground hover:bg-primary/90`;
@@ -449,6 +512,32 @@ function TestTab() {
     setReqHeaders(h => h.map((r, j) => j === i ? { ...r, ...patch } : r));
   }
   function removeHeader(i: number) { setReqHeaders(h => h.filter((_, j) => j !== i)); }
+
+  async function handleSend() {
+    setIsSending(true);
+    setResult(null);
+    // Save to history (deduplicated, most-recent first, max 20 user entries)
+    if (url.trim() && !URI_SUGGESTIONS.includes(url.trim())) {
+      const next = [url.trim(), ...uriHistory.filter(u => u !== url.trim())].slice(0, 20);
+      setUriHistory(next);
+      saveUriHistory(next);
+    }
+    try {
+      const apiUrl = instScope
+        ? `/api/destinations/${enc(org.region)}/${enc(org.subdomain)}/spaces/${enc(instScope.spaceName)}/instances/${enc(instScope.instanceGuid)}/${enc(name)}/test`
+        : `/api/destinations/${enc(org.region)}/${enc(org.subdomain)}/${enc(name)}/test`;
+      const res = await fetch(apiUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ method, path: url, headers: reqHeaders.filter(h => h.key), body }),
+      });
+      setResult(await res.json() as TestOutcome);
+    } catch (err) {
+      setResult({ ok: false, error: 'Request failed', detail: err instanceof Error ? err.message : String(err), source: 'network' });
+    } finally {
+      setIsSending(false);
+    }
+  }
 
   function startDrag(
     containerRef: React.RefObject<HTMLDivElement | null>,
@@ -489,16 +578,79 @@ function TestTab() {
             <option key={m} value={m}>{m}</option>
           ))}
         </select>
-        <input
-          type="text"
-          value={url}
-          onChange={e => setUrl(e.target.value)}
-          placeholder="https://example.com/api/..."
-          className="flex-1 h-8 px-3 text-xs border border-border rounded bg-background text-foreground outline-none focus:ring-1 focus:ring-ring font-mono placeholder:text-muted-foreground/50"
-        />
-        <button disabled title="Not implemented yet" className={btnPrimary}>
+
+        {/* URI input with history dropdown */}
+        <div ref={uriDropdownRef} className="relative flex-1">
+          <div className="flex items-center h-8 border border-border rounded bg-background focus-within:ring-1 focus-within:ring-ring overflow-hidden">
+            <input
+              type="text"
+              value={url}
+              onChange={e => setUrl(e.target.value)}
+              onKeyDown={e => { if (e.key === 'Enter' && !isSending) void handleSend(); }}
+              placeholder="/api/v1/..."
+              className="flex-1 h-full px-3 text-xs bg-transparent text-foreground outline-none font-mono placeholder:text-muted-foreground/50"
+            />
+            <button
+              type="button"
+              onClick={() => setHistoryOpen(o => !o)}
+              className="h-full px-2 text-muted-foreground/60 hover:text-foreground hover:bg-muted/30 transition-colors border-l border-border shrink-0"
+              title="URI history"
+            >
+              <ChevronDown className={`h-3 w-3 transition-transform ${historyOpen ? 'rotate-180' : ''}`} />
+            </button>
+          </div>
+
+          {historyOpen && (
+            <div className="absolute left-0 right-0 top-full mt-0.5 z-50 bg-popover border border-border rounded shadow-lg overflow-hidden max-h-64 overflow-y-auto">
+              {uriHistory.length > 0 && (
+                <>
+                  <div className="px-2.5 py-1 text-[10px] font-semibold text-muted-foreground uppercase tracking-wide bg-muted/20">History</div>
+                  {uriHistory.map((u, i) => (
+                    <button
+                      key={i}
+                      type="button"
+                      onClick={() => pickUri(u)}
+                      className="w-full text-left px-3 py-1.5 text-xs font-mono text-foreground hover:bg-muted/40 transition-colors truncate block"
+                      title={u}
+                    >
+                      {u}
+                    </button>
+                  ))}
+                  <div className="border-t border-border" />
+                </>
+              )}
+              <div className="px-2.5 py-1 text-[10px] font-semibold text-muted-foreground uppercase tracking-wide bg-muted/20">Suggestions</div>
+              {URI_SUGGESTIONS.map((u, i) => (
+                <button
+                  key={i}
+                  type="button"
+                  onClick={() => pickUri(u)}
+                  className="w-full text-left px-3 py-1.5 text-xs font-mono text-foreground hover:bg-muted/40 transition-colors truncate block"
+                  title={u}
+                >
+                  {u}
+                </button>
+              ))}
+              {uriHistory.length > 0 && (
+                <>
+                  <div className="border-t border-border" />
+                  <button
+                    type="button"
+                    onClick={clearHistory}
+                    className="w-full text-left px-3 py-1.5 text-xs text-muted-foreground hover:text-destructive hover:bg-muted/30 transition-colors flex items-center gap-1.5"
+                  >
+                    <Trash2 className="h-3 w-3 shrink-0" />
+                    Clear history
+                  </button>
+                </>
+              )}
+            </div>
+          )}
+        </div>
+
+        <button onClick={() => void handleSend()} disabled={isSending} className={btnPrimary}>
           <Send className="h-3.5 w-3.5" />
-          Send
+          {isSending ? 'Sending…' : 'Send'}
         </button>
       </div>
 
@@ -560,33 +712,58 @@ function TestTab() {
             <div style={{ width: `${respSplit}%` }} className="flex flex-col min-w-0">
               <div className={paneHdr}>
                 Response Headers
-                <div className="ml-auto flex items-center gap-2 normal-case tracking-normal font-normal">
-                  <span className="text-[10px] font-mono text-muted-foreground">2910 ms</span>
-                  <span className="text-[10px] font-mono font-semibold text-green-600 dark:text-green-400">[200] OK</span>
-                </div>
+                {result?.ok && (
+                  <div className="ml-auto flex items-center gap-2 normal-case tracking-normal font-normal">
+                    <span className="text-[10px] font-mono text-muted-foreground">{result.durationMs} ms</span>
+                    <span className={`text-[10px] font-mono font-semibold ${result.status < 300 ? 'text-green-600 dark:text-green-400' : result.status < 500 ? 'text-amber-600 dark:text-amber-400' : 'text-destructive'}`}>
+                      [{result.status}] {result.statusText}
+                    </span>
+                  </div>
+                )}
               </div>
               <div className="flex-1 overflow-auto">
-                <table className="w-full text-xs border-collapse">
-                  <tbody>
-                    {MOCK_RESP_HEADERS.map(h => (
-                      <tr key={h.key} className="hover:bg-muted/20">
-                        <td className="px-3 py-1.5 border-b border-border font-mono text-muted-foreground whitespace-nowrap">{h.key}</td>
-                        <td className="px-3 py-1.5 border-b border-border font-mono break-all">{h.value}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+                {result?.ok && (
+                  <table className="w-full text-xs border-collapse">
+                    <tbody>
+                      {result.headers.map((h, i) => (
+                        <tr key={i} className="hover:bg-muted/20">
+                          <td className="px-3 py-1.5 border-b border-border font-mono text-muted-foreground whitespace-nowrap">{h.key}</td>
+                          <td className="px-3 py-1.5 border-b border-border font-mono break-all">{h.value}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+                {!result && !isSending && (
+                  <div className="flex items-center justify-center h-full text-xs text-muted-foreground/50">No response yet</div>
+                )}
+                {isSending && (
+                  <div className="flex items-center justify-center h-full text-xs text-muted-foreground">Sending…</div>
+                )}
               </div>
             </div>
 
             <div onMouseDown={startDrag(respContainerRef, setRespSplit, 'x')} className={colDrag} />
 
             <div className="flex flex-col flex-1 min-w-0">
-              <div className={paneHdr}>Response Body</div>
+              <div className={`${paneHdr} ${result && !result.ok ? 'text-destructive' : ''}`}>
+                {result && !result.ok ? 'Error' : 'Response Body'}
+                <label className={`ml-auto flex items-center gap-1.5 normal-case tracking-normal font-normal select-none ${canFormatJson ? 'cursor-pointer' : 'opacity-35 cursor-not-allowed'}`}>
+                  <input
+                    type="checkbox"
+                    checked={formatJson}
+                    disabled={!canFormatJson}
+                    onChange={e => setFormatJson(e.target.checked)}
+                    className="h-3 w-3 accent-primary"
+                  />
+                  <span className="text-[10px]">Format JSON</span>
+                </label>
+              </div>
               <textarea
                 readOnly
-                value={MOCK_RESP_BODY}
-                className="flex-1 p-3 text-xs font-mono bg-muted/5 outline-none resize-none text-foreground leading-relaxed"
+                value={displayBody()}
+                placeholder="Response will appear here"
+                className="flex-1 p-3 text-xs font-mono bg-muted/5 outline-none resize-none text-foreground leading-relaxed placeholder:text-muted-foreground/30"
               />
             </div>
           </div>
@@ -807,6 +984,8 @@ export default function SubaccountDestModal({ org, allNames, initialName, initia
   const [newProps,      setNewProps]      = useState<DestProp[]>(() => structuredClone(DEFAULT_CREATE_PROPS));
   const [isCreatingSave, setIsCreatingSave] = useState(false);
   const [createError,   setCreateError]   = useState('');
+  // null = save to subaccount; set to an instance scope when Copy is triggered from an instance destination
+  const [createScope,   setCreateScope]   = useState<{ spaceName: string; instanceGuid: string; instanceName: string } | null>(null);
 
   // Changelog
   const [changelog,          setChangelog]          = useState('');
@@ -952,6 +1131,19 @@ export default function SubaccountDestModal({ org, allNames, initialName, initia
       if (subProgressTimerRef.current) clearTimeout(subProgressTimerRef.current);
     };
   }, [onClose]);
+
+  // Track body container width to drive left-panel responsive text hiding
+  const [bodyWidth, setBodyWidth] = useState(0);
+  useEffect(() => {
+    const el = bodyRef.current;
+    if (!el) return;
+    setBodyWidth(el.offsetWidth);
+    const obs = new ResizeObserver(entries => {
+      setBodyWidth(entries[0]?.contentRect.width ?? el.offsetWidth);
+    });
+    obs.observe(el);
+    return () => obs.disconnect();
+  }, []);
 
   async function loadDest(name: string) {
     setIsLoading(true);
@@ -1172,15 +1364,27 @@ export default function SubaccountDestModal({ org, allNames, initialName, initia
     if (!name) { setCreateError('Destination name is required'); return; }
     setIsCreatingSave(true); setCreateError('');
     try {
-      const res  = await fetch(`/api/destinations/${enc(org.region)}/${enc(org.subdomain)}/${enc(name)}`, {
+      const url = createScope
+        ? `/api/destinations/${enc(org.region)}/${enc(org.subdomain)}/spaces/${enc(createScope.spaceName)}/instances/${enc(createScope.instanceGuid)}/${enc(name)}`
+        : `/api/destinations/${enc(org.region)}/${enc(org.subdomain)}/${enc(name)}`;
+      const res  = await fetch(url, {
         method:  'PUT',
         headers: { 'Content-Type': 'application/json' },
         body:    JSON.stringify({ data: fromProps(name, newProps), username }),
       });
       const json = await res.json() as { ok: boolean; error?: string };
       if (!json.ok) throw new Error(json.error ?? 'Create failed');
-      setLocalAllNames(prev => [...new Set([...prev, name])].sort());
-      selectDest(name);
+      if (createScope) {
+        setInstanceNames(prev => {
+          const m = new Map(prev);
+          m.set(createScope.instanceGuid, [...new Set([...(m.get(createScope.instanceGuid) ?? []), name])].sort());
+          return m;
+        });
+        loadInstDest(createScope.spaceName, createScope.instanceGuid, createScope.instanceName, name);
+      } else {
+        setLocalAllNames(prev => [...new Set([...prev, name])].sort());
+        selectDest(name);
+      }
       setIsCreating(false);
     } catch (err) {
       setCreateError(err instanceof Error ? err.message : 'Create failed');
@@ -1189,8 +1393,19 @@ export default function SubaccountDestModal({ org, allNames, initialName, initia
 
   function handleCreateClick() {
     setIsCreating(true);
+    setCreateScope(null);
     setNewName('');
     setNewProps(structuredClone(DEFAULT_CREATE_PROPS));
+    setCreateError('');
+    setActiveTab('properties');
+  }
+
+  function handleCopyClick() {
+    setIsCreating(true);
+    setCreateScope(activeInstScope);
+    setNewName(selectedName ? `${selectedName}_COPY` : '_COPY');
+    // editedProps never contains 'Name' (toProps filters it); copy all other props as-is
+    setNewProps(structuredClone(editedProps));
     setCreateError('');
     setActiveTab('properties');
   }
@@ -1227,6 +1442,20 @@ export default function SubaccountDestModal({ org, allNames, initialName, initia
 
   const btnBase    = 'inline-flex items-center gap-1.5 px-2 sm:px-3 py-1.5 rounded text-xs font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed';
   const btnOutline = `${btnBase} border border-border hover:bg-accent hover:text-accent-foreground`;
+
+  // Left panel pixel width — used to decide whether button labels are shown.
+  // showBtnText = true when left panel is at least 700px wide.
+  const leftPanelWidth = showList ? bodyWidth * splitPct / 100 : 0;
+  const showBtnText = leftPanelWidth >= 700;
+
+  // Destination type badges shown in the right panel name bar
+  const destTypeBadge  = editedProps.find(p => p.key === 'Type')?.value ?? '';
+  const proxyTypeBadge = editedProps.find(p => p.key === 'ProxyType')?.value ?? '';
+  const authTypeBadge  = editedProps.find(p => p.key === 'Authentication')?.value ?? '';
+  const authTypeBadgeLabel = authTypeBadge === 'BasicAuthentication' ? 'Basic'
+    : authTypeBadge === 'PrincipalPropagation' ? 'PP'
+    : authTypeBadge;
+
   const exportCount = selectedNames.size;
   const exportTitle = exportCount > 1
     ? `Download ${exportCount} selected destinations as ${org.region}_${org.subdomain}_multi_destinations.json`
@@ -1262,7 +1491,7 @@ export default function SubaccountDestModal({ org, allNames, initialName, initia
           title="Import destination(s) from JSON"
         >
           <Upload className="h-3.5 w-3.5" />
-          {maximized && <span className="ml-1 max-[680px]:hidden">Import</span>}
+          {showBtnText && <span className="ml-1">Import</span>}
         </button>
         <button
           onClick={onExport}
@@ -1271,8 +1500,8 @@ export default function SubaccountDestModal({ org, allNames, initialName, initia
           title={opts.exportTitle}
         >
           <Download className="h-3.5 w-3.5" />
-          {maximized
-            ? <span className="ml-1 max-[680px]:hidden">Export{opts.exportCount > 0 ? ` (${opts.exportCount})` : ''}</span>
+          {showBtnText
+            ? <span className="ml-1">Export{opts.exportCount > 0 ? ` (${opts.exportCount})` : ''}</span>
             : opts.exportCount > 0 ? <span className="text-[10px]">{opts.exportCount}</span> : null
           }
         </button>
@@ -1283,8 +1512,8 @@ export default function SubaccountDestModal({ org, allNames, initialName, initia
           title={compareCount >= 2 ? `Compare ${compareCount} selected destinations` : 'Select 2+ destinations to compare'}
         >
           <GitCompare className="h-3.5 w-3.5" />
-          {maximized
-            ? <span className="ml-1 max-[680px]:hidden">Compare{compareCount > 0 ? ` (${compareCount})` : ''}</span>
+          {showBtnText
+            ? <span className="ml-1">Compare{compareCount > 0 ? ` (${compareCount})` : ''}</span>
             : compareCount > 0 ? <span className="text-[10px]">{compareCount}</span> : null
           }
         </button>
@@ -1295,8 +1524,8 @@ export default function SubaccountDestModal({ org, allNames, initialName, initia
           title={deleteCount > 0 ? `Delete ${deleteCount} selected destination${deleteCount !== 1 ? 's' : ''}` : 'Select destinations to delete'}
         >
           <Trash2 className="h-3.5 w-3.5" />
-          {maximized
-            ? <span className="ml-1 max-[680px]:hidden">Delete{deleteCount > 0 ? ` (${deleteCount})` : ''}</span>
+          {showBtnText
+            ? <span className="ml-1">Delete{deleteCount > 0 ? ` (${deleteCount})` : ''}</span>
             : deleteCount > 0 ? <span className="text-[10px]">{deleteCount}</span> : null
           }
         </button>
@@ -1364,7 +1593,7 @@ export default function SubaccountDestModal({ org, allNames, initialName, initia
               title="Refresh subaccount destinations"
             >
               <RefreshCw className="h-4 w-4" />
-              {maximized && <span className="max-[680px]:hidden">Refresh</span>}
+              {maximized && <span className="max-[1024px]:hidden">Refresh</span>}
             </button>
             <button
               onClick={() => setMaximized(v => !v)}
@@ -1451,7 +1680,7 @@ export default function SubaccountDestModal({ org, allNames, initialName, initia
                           title="Expand all spaces"
                         >
                           <ChevronsUpDown className="h-3.5 w-3.5" />
-                          {maximized && <span className="ml-1 max-[680px]:hidden">Expand</span>}
+                          {showBtnText && <span className="ml-1">Expand</span>}
                         </button>
                         <button
                           onClick={() => setTreeExpanded(new Set(['__sa__']))}
@@ -1459,7 +1688,7 @@ export default function SubaccountDestModal({ org, allNames, initialName, initia
                           title="Collapse to space level"
                         >
                           <ChevronsDownUp className="h-3.5 w-3.5" />
-                          {maximized && <span className="ml-1 max-[680px]:hidden">Collapse</span>}
+                          {showBtnText && <span className="ml-1">Collapse</span>}
                         </button>
                         <div className="w-px h-3 bg-border mx-0.5" />
                         <button
@@ -1476,7 +1705,7 @@ export default function SubaccountDestModal({ org, allNames, initialName, initia
                           title="Select all"
                         >
                           <CheckSquare className="h-3.5 w-3.5" />
-                          {maximized && <span className="ml-1 max-[680px]:hidden">All</span>}
+                          {showBtnText && <span className="ml-1">All</span>}
                         </button>
                         <button
                           onClick={() => { setTreeSelectedKeys(new Set()); setLastTreeClickKey(''); }}
@@ -1484,7 +1713,7 @@ export default function SubaccountDestModal({ org, allNames, initialName, initia
                           title="Unselect all"
                         >
                           <Square className="h-3.5 w-3.5" />
-                          {maximized && <span className="ml-1 max-[680px]:hidden">None</span>}
+                          {showBtnText && <span className="ml-1">None</span>}
                         </button>
                       </div>
                     </div>
@@ -2079,12 +2308,17 @@ export default function SubaccountDestModal({ org, allNames, initialName, initia
               >
                 <PanelLeft className="h-3.5 w-3.5" />
               </button>
-              <span className="text-xs font-semibold font-mono truncate flex-1 min-w-0 flex flex-col gap-0 leading-tight">
+              <span className="text-xs font-semibold font-mono flex-1 min-w-0 flex flex-col gap-0 leading-tight">
                 {isCreating ? (
                   <span className="text-muted-foreground font-normal not-italic">New Destination</span>
                 ) : selectedName ? (
                   <>
-                    <span className="truncate">{selectedName}</span>
+                    <span className="flex items-center gap-1.5 min-w-0">
+                      <span className="truncate shrink min-w-0">{selectedName}</span>
+                      {destTypeBadge  && <span className="shrink-0 px-1.5 py-px rounded text-[10px] font-medium bg-muted/50 text-muted-foreground border border-border" title={`Type: ${destTypeBadge}`}>{destTypeBadge}</span>}
+                      {proxyTypeBadge && <span className="shrink-0 px-1.5 py-px rounded text-[10px] font-medium bg-muted/50 text-muted-foreground border border-border" title={`ProxyType: ${proxyTypeBadge}`}>{proxyTypeBadge}</span>}
+                      {authTypeBadge  && <span className="shrink-0 px-1.5 py-px rounded text-[10px] font-medium bg-muted/50 text-muted-foreground border border-border" title={`Authentication: ${authTypeBadge}`}>{authTypeBadgeLabel}</span>}
+                    </span>
                     {activeInstScope && (
                       <span className="text-[10px] font-normal text-muted-foreground truncate">{activeInstScope.spaceName} › {activeInstScope.instanceName}</span>
                     )}
@@ -2122,7 +2356,7 @@ export default function SubaccountDestModal({ org, allNames, initialName, initia
                     >
                       <GitCompare className="h-3.5 w-3.5" />
                       {maximized && (
-                        <span className="max-[680px]:hidden">
+                        <span className="max-[1024px]:hidden">
                           {selectedDests?.some(d => d.region === org.region && d.subdomain === org.subdomain && d.name === selectedName && (activeInstScope ? d.instanceGuid === activeInstScope.instanceGuid : !d.instanceGuid))
                             ? 'In Compare' : 'Select for Compare'}
                         </span>
@@ -2130,12 +2364,21 @@ export default function SubaccountDestModal({ org, allNames, initialName, initia
                     </button>
                   )}
                   <button
+                    onClick={handleCopyClick}
+                    disabled={!selectedName || isImportRunning}
+                    title="Copy destination"
+                    className={btnOutline}
+                  >
+                    <Copy className="h-3.5 w-3.5" />
+                    {maximized && <span className="max-[1024px]:hidden">Copy</span>}
+                  </button>
+                  <button
                     onClick={() => { setEditedProps(structuredClone(serverProps)); setSaveBanner(null); }}
                     disabled={!isDirty || isSaving || isImportRunning}
                     className={btnOutline}
                   >
                     <RotateCcw className="h-3.5 w-3.5" />
-                    {maximized && <span className="max-[680px]:hidden">Reset</span>}
+                    {maximized && <span className="max-[1024px]:hidden">Reset</span>}
                   </button>
                   <button
                     onClick={handleSave}
@@ -2143,7 +2386,7 @@ export default function SubaccountDestModal({ org, allNames, initialName, initia
                     className={`${btnBase} bg-primary text-primary-foreground hover:bg-primary/90`}
                   >
                     <Save className="h-3.5 w-3.5" />
-                    {maximized && <span className="max-[680px]:hidden">{isSaving ? 'Saving…' : 'Save'}</span>}
+                    {maximized && <span className="max-[1024px]:hidden">{isSaving ? 'Saving…' : 'Save'}</span>}
                   </button>
                 </div>
               )}
@@ -2187,7 +2430,14 @@ export default function SubaccountDestModal({ org, allNames, initialName, initia
             {activeTab === 'changelog' && (
               <ChangelogTab changelog={changelog} loading={isLoadingChangelog} />
             )}
-            {activeTab === 'test' && <TestTab />}
+            {/* Always mounted so form + response state survives tab switches.
+                key resets the component only when the selected destination changes. */}
+            <div className={`flex flex-col h-full min-h-0 overflow-hidden ${activeTab !== 'test' ? 'hidden' : ''}`}>
+              <TestTab
+                key={`${selectedName}::${activeInstScope?.instanceGuid ?? 'sa'}`}
+                org={org} name={selectedName} instScope={activeInstScope} editedProps={editedProps}
+              />
+            </div>
           </div>
         </div>
 

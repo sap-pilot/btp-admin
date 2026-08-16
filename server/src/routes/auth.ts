@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import type { Request, Response } from 'express';
-import { getXsuaaConfig, buildAuthUrl, exchangeCode, signSession, readSessionFromRequest, userAuditLog } from '../services/authService.js';
+import { getXsuaaConfig, buildAuthUrl, exchangeCode, signSession, readSessionFromRequest, userAuditLog, cacheUserToken } from '../services/authService.js';
 import { getClientIp } from '../middleware/requireAuth.js';
 import { logger } from '../logger.js';
 
@@ -70,7 +70,8 @@ router.get('/login/callback', async (req: Request, res: Response) => {
   const code = typeof req.query['code'] === 'string' ? req.query['code'] : '';
   if (!code) { res.status(400).send('Missing authorization code'); return; }
   try {
-    const session = await exchangeCode(code, callbackBase(req));
+    const { session, accessToken } = await exchangeCode(code, callbackBase(req));
+    cacheUserToken(session.sub, accessToken, session.exp);
     const cookieValue = signSession(session, x.clientsecret);
     const ttl = Math.max(60, session.exp - Math.floor(Date.now() / 1000));
     setCookie(res, cookieValue, ttl);

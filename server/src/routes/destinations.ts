@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { requireAuth, requireAdmin, type AuthRequest } from '../middleware/requireAuth.js';
 import { logger } from '../logger.js';
+import { testSaDestination, testInstanceDestination, type TestRequest, type UserInfo } from '../services/destTestService.js';
 import {
   isSubaccountRestricted,
   listDestinations,
@@ -312,6 +313,28 @@ router.delete('/:region/:subdomain/:name', requireAdmin, async (req, res, next) 
     const sessionUser = authReq.authSession?.email || authReq.authSession?.firstName || 'admin';
     await deleteDestinationEntry(region, subdomain, name, sessionUser);
     res.json({ ok: true });
+  } catch (err) { next(err); }
+});
+
+router.post('/:region/:subdomain/:name/test', requireAuth, async (req, res, next) => {
+  try {
+    const { region, subdomain, name } = req.params as { region: string; subdomain: string; name: string };
+    const authReq = req as AuthRequest;
+    const user: UserInfo = { sub: authReq.authSession?.sub ?? '', email: authReq.authSession?.email || authReq.authSession?.userName || '' };
+    const result = await testSaDestination(region, subdomain, name, req.body as TestRequest, user);
+    res.json(result);
+  } catch (err) { next(err); }
+});
+
+router.post('/:region/:subdomain/spaces/:spaceName/instances/:instanceGuid/:name/test', requireAuth, async (req, res, next) => {
+  try {
+    const { region, subdomain, spaceName, instanceGuid, name } = req.params as {
+      region: string; subdomain: string; spaceName: string; instanceGuid: string; name: string;
+    };
+    const authReq = req as AuthRequest;
+    const user: UserInfo = { sub: authReq.authSession?.sub ?? '', email: authReq.authSession?.email || authReq.authSession?.userName || '' };
+    const result = await testInstanceDestination(region, subdomain, spaceName, instanceGuid, name, req.body as TestRequest, user);
+    res.json(result);
   } catch (err) { next(err); }
 });
 

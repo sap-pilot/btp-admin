@@ -1,6 +1,6 @@
 _schema-version: "3.3"
 ID: btp-admin
-version: 1.5.0
+version: 1.6.0
 
 modules:
   - name: btp-admin
@@ -29,6 +29,7 @@ modules:
         - pw-browsers/
     requires:
       - name: btp-admin-xsuaa
+      - name: btp-admin-conn
 
 resources:
   - name: btp-admin-xsuaa
@@ -39,3 +40,8 @@ resources:
       path: ./xs-security.json
       service: xsuaa
       service-plan: application
+  - name: btp-admin-conn
+    type: org.cloudfoundry.managed-service
+    parameters:
+      service: connectivity
+      service-plan: lite

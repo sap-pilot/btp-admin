@@ -1,5 +1,24 @@
 # Changelog
 
+## [v1.6.0] - 2026-08-16
+
+### Added
+- **Test Destination** — live HTTP request builder in the **Test** tab of the Subaccount Destinations modal:
+  - **Internet destinations** — supports `NoAuthentication` and `BasicAuthentication`; unsupported auth types (OAuth2, SAML, etc.) return a clear error message
+  - **OnPremise destinations** — routes requests through the SAP Connectivity Service HTTP forward proxy (Cloud Connector); supports all auth types including **PrincipalPropagation** (PP) via a `jwt-bearer` token exchange that embeds user identity in the `Proxy-Authorization` token; `SAP-Connectivity-Authentication` header is intentionally omitted to prevent the ABAP ICM JWT handler from intercepting the request before the SCC-generated PP X.509 certificate can authenticate
+  - **`sap-client` forwarding** — when the destination has a `sap-client` property, the header `sap-client: <value>` is included in the outgoing test request so the ABAP backend routes to the correct client
+  - **Request editor** — method selector, URL/path input (appended to destination base URL), editable request headers (key/value rows with add/remove), request body textarea
+  - **Response panel** — status badge (green ≤299, amber 3xx/4xx, red 5xx), duration in ms, response headers table, response body textarea
+  - **Format JSON checkbox** — in the Response Body pane header; enabled only when the response `content-type` is `application/json`; formats body with 2-space indentation on click
+  - **Test tab state persistence** — all entered data (URL, headers, body, response) persists when switching away from the Test tab and back; state resets only when the selected destination changes
+  - **New REST endpoints**: `POST /api/destinations/:region/:subdomain/:name/test` and `POST /api/destinations/:region/:subdomain/spaces/:spaceName/instances/:instanceGuid/:name/test`
+- **Copy Destination button** — new **Copy** button (before Reset) in the destination name bar; copies all current destination properties, sets the name to `<source>_COPY`, and enters create mode; preserves the source scope (subaccount-level or destination service instance) so a copy of an instance-level destination is saved to the same instance
+- **Destination auth badge shortening** — `BasicAuthentication` → `Basic`, `PrincipalPropagation` → `PP` in the destination title bar badge; full value shown in tooltip
+
+### Fixed
+- **Role Collections, Destinations, and Users overview — "Updated at" badge date format** — the tiny muted badge below each page title now shows both the date and time in local format (e.g. `8/16/2026, 10:30 AM`) instead of time only
+- **Principal Propagation via SCC** — switched from the two-header approach (`client_credentials` token + `SAP-Connectivity-Authentication`) to a `jwt-bearer` token exchange; the `SAP-Connectivity-Authentication` header is no longer forwarded to the backend, preventing the ABAP ICM JWT authentication handler from rejecting the request before the SCC-generated PP X.509 certificate can authenticate
+
 ## [v1.5.0] - 2026-08-12
 
 ### Added

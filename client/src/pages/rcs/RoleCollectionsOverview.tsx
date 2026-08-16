@@ -407,7 +407,7 @@ export default function RoleCollectionsOverview() {
           <span className="text-sm font-semibold leading-tight">Role Collections</span>
           {globalRefreshTs !== null && (
             <span className="text-[10px] text-muted-foreground/50 leading-tight">
-              Updated at {new Date(globalRefreshTs).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+              Updated at {new Date(globalRefreshTs).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' })}
             </span>
           )}
         </div>
