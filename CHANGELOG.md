@@ -18,6 +18,9 @@
 ### Fixed
 - **Role Collections, Destinations, and Users overview — "Updated at" badge date format** — the tiny muted badge below each page title now shows both the date and time in local format (e.g. `8/16/2026, 10:30 AM`) instead of time only
 - **Principal Propagation via SCC** — switched from the two-header approach (`client_credentials` token + `SAP-Connectivity-Authentication`) to a `jwt-bearer` token exchange; the `SAP-Connectivity-Authentication` header is no longer forwarded to the backend, preventing the ABAP ICM JWT authentication handler from rejecting the request before the SCC-generated PP X.509 certificate can authenticate
+- **Destinations / Role Collections / Users overview — Refresh button reflects remote refresh** — when another user triggers a global refresh, the local page's Refresh button now switches to "Refreshing…" (spinning icon, disabled) as soon as the first SSE progress event arrives, and restores to normal on the `done` event; previously the button stayed idle while only the progress bar updated
+- **Role Collections changelog — spurious `→ Users` suffix removed** — global changelog entries for updated role collections no longer append `→ Users`; user membership changes are intentionally excluded from the per-RC changelog and the suffix was misleading (it appeared on every `updated` entry regardless of whether users actually changed)
+- **Role Collections changelog — `roleReferences` diff is now set-based** — adding or removing a role reference now produces individual `+ RoleName (AppId)` / `- RoleName (AppId)` diff lines instead of dumping the entire old and new arrays as JSON strings; reordering role references produces no diff; same per-item approach applied to `groupReferences`
 
 ## [v1.5.0] - 2026-08-12
 
