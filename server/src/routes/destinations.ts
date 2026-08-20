@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { requireAuth, requireAdmin, type AuthRequest } from '../middleware/requireAuth.js';
 import { logger } from '../logger.js';
 import { testSaDestination, testInstanceDestination, type TestRequest, type UserInfo } from '../services/destTestService.js';
+import { testSaRfcDestination, testInstanceRfcDestination, type RfcTestRequest } from '../services/rfcTestService.js';
 import {
   isSubaccountRestricted,
   listDestinations,
@@ -334,6 +335,28 @@ router.post('/:region/:subdomain/spaces/:spaceName/instances/:instanceGuid/:name
     const authReq = req as AuthRequest;
     const user: UserInfo = { sub: authReq.authSession?.sub ?? '', email: authReq.authSession?.email || authReq.authSession?.userName || '' };
     const result = await testInstanceDestination(region, subdomain, spaceName, instanceGuid, name, req.body as TestRequest, user);
+    res.json(result);
+  } catch (err) { next(err); }
+});
+
+router.post('/:region/:subdomain/:name/test-rfc', requireAuth, async (req, res, next) => {
+  try {
+    const { region, subdomain, name } = req.params as { region: string; subdomain: string; name: string };
+    const authReq = req as AuthRequest;
+    const user: UserInfo = { sub: authReq.authSession?.sub ?? '', email: authReq.authSession?.email || authReq.authSession?.userName || '' };
+    const result = await testSaRfcDestination(region, subdomain, name, req.body as RfcTestRequest, user);
+    res.json(result);
+  } catch (err) { next(err); }
+});
+
+router.post('/:region/:subdomain/spaces/:spaceName/instances/:instanceGuid/:name/test-rfc', requireAuth, async (req, res, next) => {
+  try {
+    const { region, subdomain, spaceName, instanceGuid, name } = req.params as {
+      region: string; subdomain: string; spaceName: string; instanceGuid: string; name: string;
+    };
+    const authReq = req as AuthRequest;
+    const user: UserInfo = { sub: authReq.authSession?.sub ?? '', email: authReq.authSession?.email || authReq.authSession?.userName || '' };
+    const result = await testInstanceRfcDestination(region, subdomain, spaceName, instanceGuid, name, req.body as RfcTestRequest, user);
     res.json(result);
   } catch (err) { next(err); }
 });

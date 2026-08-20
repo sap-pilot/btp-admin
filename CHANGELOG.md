@@ -3,6 +3,16 @@
 ## [v1.6.0] - 2026-08-16
 
 ### Added
+- **Test RFC Destination** — live RFC function call in the **Test** tab when the destination has `Type=RFC`:
+  - **RFC Name bar** — function module name input (auto-uppercased) with a history/suggestion dropdown (pre-seeded with `SUSR_USER_SELF_READ`)
+  - **Input Parameters panel** — key/value rows (same UX as Request Headers); only IMPORT-direction parameters need to be set; EXPORT/CHANGING/TABLE results appear automatically in the response
+  - **Response panel** — serialized RFC output as auto-formatted JSON; error details (message, source category) displayed on failure
+  - **Transport** — native C++ addon (`server/src/rfc/rfcaddon.cc`) wraps the SAP NW RFC SDK via NAPI AsyncWorker; RFC calls run off the Node.js event loop; a local TCP shim (`localProxyShim.ts`) tunnels the SDK connection through the BTP Connectivity Service SOCKS5 proxy (port 20004) with a Bearer token in the SOCKS5 username field; the SDK connects to `127.0.0.1:33{sysnr}` and the shim forwards the CPIC stream to the Cloud Connector backend
+  - **Auth types** — `BasicAuthentication` only (`jco.client.user`/`passwd`); `PrincipalPropagation` is **not** supported for RFC destinations
+  - **Cloud Connector backend must be Protocol=TCP** — the BTP SOCKS5 proxy (port 20004) only routes TCP-type CC backends; backends configured as Protocol=RFC are rejected by the proxy; ask the CC admin to set the backend (e.g. `{ashost}:{port}`) to **Protocol: TCP**
+  - **Only `OnPremise` proxy type** supported (direct RFC without Cloud Connector is not supported)
+  - **New REST endpoints**: `POST /api/destinations/:region/:subdomain/:name/test-rfc` and `POST /api/destinations/:region/:subdomain/spaces/:spaceName/instances/:instanceGuid/:name/test-rfc`
+  - Requires SAP NW RFC SDK in `server/nwrfcsdk/` and the compiled native addon — see README Build & Deploy for setup steps
 - **Test Destination** — live HTTP request builder in the **Test** tab of the Subaccount Destinations modal:
   - **Internet destinations** — supports `NoAuthentication` and `BasicAuthentication`; unsupported auth types (OAuth2, SAML, etc.) return a clear error message
   - **OnPremise destinations** — routes requests through the SAP Connectivity Service HTTP forward proxy (Cloud Connector); supports all auth types including **PrincipalPropagation** (PP) via a `jwt-bearer` token exchange that embeds user identity in the `Proxy-Authorization` token; `SAP-Connectivity-Authentication` header is intentionally omitted to prevent the ABAP ICM JWT handler from intercepting the request before the SCC-generated PP X.509 certificate can authenticate

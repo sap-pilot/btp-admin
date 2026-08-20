@@ -29,10 +29,15 @@ export type TestResult =
 
 interface ConnCreds {
   onpremise_proxy_host: string;
-  // SDK uses onpremise_proxy_http_port first; onpremise_proxy_port is the fallback.
-  // In newer BTP bindings only onpremise_proxy_http_port is populated.
+  // HTTP CONNECT proxy (HTTP/HTTPS destinations)
   onpremise_proxy_http_port?: string;
   onpremise_proxy_port?: string;
+  // SOCKS5 proxy with SAP JWT auth — generic TCP
+  onpremise_socks5_proxy_port?: string;
+  // HTTP CONNECT proxy specifically for RFC destinations (typically 20001)
+  onpremise_proxy_rfc_port?: string;
+  // Optional Cloud Connector location ID for multi-CC setups
+  location_id?: string;
   // token_service_url may be the bare XSUAA base URL or may already include /oauth/token.
   // url is the canonical bare XSUAA base URL (preferred by the SAP Cloud SDK).
   token_service_url?: string;
@@ -43,7 +48,7 @@ interface ConnCreds {
 
 let _connCreds: ConnCreds | null | undefined;
 
-function getConnectivityCreds(): ConnCreds | null {
+export function getConnectivityCreds(): ConnCreds | null {
   if (_connCreds !== undefined) return _connCreds;
   try {
     const vcap = process.env.VCAP_SERVICES;
@@ -79,7 +84,7 @@ const _ppConnTokenCache = new Map<string, { token: string; expiresAt: number }>(
  *   backend, where the ICM's JWT auth handler sees it and rejects the request
  *   before the PP X.509 certificate has a chance to authenticate the user.
  */
-async function getConnectivityToken(userJwt?: string): Promise<string> {
+export async function getConnectivityToken(userJwt?: string): Promise<string> {
   const now = Date.now();
   const conn = getConnectivityCreds();
   if (!conn) throw new Error('Connectivity service not bound');

@@ -26,3 +26,7 @@ server/pw-browsers/
 .env
 *.local
 .claude/
+
+# RFC libraries
+server/nwrfcsdk
+server/build/

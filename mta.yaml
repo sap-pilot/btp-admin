@@ -6,9 +6,12 @@ modules:
   - name: btp-admin
     type: nodejs
     path: server
+    properties:
+      npm_config_cache: /tmp/.npmcache
+      npm_config_prefer_offline: true
     parameters:
       memory: 2G         # Chrome is memory-hungry — 512M is not enough
-      disk-quota: 4G     # Chrome + libs are large
+      disk-quota: 8G     # Chrome + libs are large
       # docker:
       #   image: sapux/btp-admin:latest
       buildpacks:
