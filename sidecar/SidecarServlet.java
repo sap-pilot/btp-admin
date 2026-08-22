@@ -15,7 +15,8 @@ import java.util.Base64;
  *
  * POST /api/test-rfc — execute an RFC function by destination name
  * GET  /ping         — health check
- * GET  /info         — environment diagnostics
+ * GET  /info         — environment diagnostics (disabled by default; uncomment in doGet to enable)
+ * GET  /test-rfc     — diagnostic RFC test, unauthenticated (disabled by default; uncomment in doGet to enable)
  *
  * btp-admin (Node.js) copies the RFC destination into the bound btp-admin-dest
  * service instance as an instance-level destination (raw jco.* properties, no
@@ -76,7 +77,8 @@ public class SidecarServlet extends HttpServlet {
         if (path == null) path = "/";
         switch (path) {
             case "/ping": resp.getWriter().write("pong\n"); break;
-            case "/info": handleInfo(req, resp.getWriter()); break;
+            // case "/info":     handleInfo(req, resp.getWriter()); break;   // uncomment for diagnostics
+            // case "/test-rfc": handleTestRfcDiag(req, resp.getWriter()); break;  // unauthenticated — local debug only
             default:
                 resp.setStatus(404);
                 resp.getWriter().write("Not found\n");
@@ -197,47 +199,49 @@ public class SidecarServlet extends HttpServlet {
         }
     }
 
-    // ─── GET /test-rfc (disabled — unauthenticated access) ───────────────────────
+    // ─── GET /test-rfc (disabled — unauthenticated; uncomment case in doGet() to enable) ──────────
     //
-    // Uncomment the case "/test-rfc" line in doGet() and this method to re-enable
-    // for local debugging only. Never expose this in production.
+    // Local debug only. Uncomment the "case /test-rfc" line in doGet() to expose this endpoint.
+    // Never leave both uncommented in a production deployment.
     //
-    // private void handleTestRfcDiag(HttpServletRequest req, PrintWriter w) {
-    //     String destName = req.getParameter("dest");
-    //     if (destName == null || destName.isEmpty()) destName = env("RFC_DEST_NAME", "API_S4_RFC_BASIC_CPIUSER");
-    //     String rfcUser = env("RFC_USER", "");
-    //     w.println("=== RFC Test (diagnostic) ===");
-    //     w.println("dest     = " + destName);
-    //     w.println("RFC_USER = " + rfcUser);
-    //     w.println();
-    //     try {
-    //         long t0 = System.currentTimeMillis();
-    //         JCoDestination dest = JCoDestinationManager.getDestination(destName);
-    //         w.println("getDestination() OK");
-    //         JCoFunction fn = dest.getRepository().getFunction("BAPI_USER_GET_DETAIL");
-    //         if (fn == null) { w.println("ERROR: BAPI_USER_GET_DETAIL not found"); return; }
-    //         if (!rfcUser.isEmpty()) fn.getImportParameterList().setValue("USERNAME", rfcUser);
-    //         fn.execute(dest);
-    //         w.println("SUCCESS in " + (System.currentTimeMillis() - t0) + "ms");
-    //         JCoParameterList el = fn.getExportParameterList();
-    //         if (el != null) {
-    //             w.println();
-    //             JCoFieldIterator it = el.getFieldIterator();
-    //             while (it.hasNextField()) {
-    //                 JCoField f = it.nextField();
-    //                 if (!f.isStructure() && !f.isTable()) {
-    //                     String v = f.getString();
-    //                     if (v != null && !v.isEmpty()) w.println("  " + f.getName() + " = " + v);
-    //                 }
-    //             }
-    //         }
-    //     } catch (JCoException e) {
-    //         w.println("FAILED: " + e.getMessage());
-    //         w.println("Group:  " + e.getGroup());
-    //     } catch (Exception e) {
-    //         w.println("ERROR: " + e);
-    //     }
-    // }
+    private void handleTestRfcDiag(HttpServletRequest req, PrintWriter w) {
+        String destName = req.getParameter("dest");
+        if (destName == null || destName.isEmpty()) destName = env("RFC_DEST_NAME", "API_S4_RFC_BASIC_CPIUSER");
+        String rfcUser = env("RFC_USER", "");
+
+        w.println("=== RFC Test (diagnostic) ===");
+        w.println("dest     = " + destName);
+        w.println("RFC_USER = " + rfcUser);
+        w.println();
+
+        try {
+            long t0 = System.currentTimeMillis();
+            JCoDestination dest = JCoDestinationManager.getDestination(destName);
+            w.println("getDestination() OK");
+            JCoFunction fn = dest.getRepository().getFunction("BAPI_USER_GET_DETAIL");
+            if (fn == null) { w.println("ERROR: BAPI_USER_GET_DETAIL not found"); return; }
+            if (!rfcUser.isEmpty()) fn.getImportParameterList().setValue("USERNAME", rfcUser);
+            fn.execute(dest);
+            w.println("SUCCESS in " + (System.currentTimeMillis() - t0) + "ms");
+            JCoParameterList el = fn.getExportParameterList();
+            if (el != null) {
+                w.println();
+                JCoFieldIterator it = el.getFieldIterator();
+                while (it.hasNextField()) {
+                    JCoField f = it.nextField();
+                    if (!f.isStructure() && !f.isTable()) {
+                        String v = f.getString();
+                        if (v != null && !v.isEmpty()) w.println("  " + f.getName() + " = " + v);
+                    }
+                }
+            }
+        } catch (JCoException e) {
+            w.println("FAILED: " + e.getMessage());
+            w.println("Group:  " + e.getGroup());
+        } catch (Exception e) {
+            w.println("ERROR: " + e);
+        }
+    }
 
     // ─── GET /info ────────────────────────────────────────────────────────────────
 

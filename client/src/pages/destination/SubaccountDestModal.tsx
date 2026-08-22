@@ -458,7 +458,7 @@ const URI_SUGGESTIONS = [
 
 const RFC_HISTORY_KEY = 'btp:dest-test-rfc-history';
 const RFC_PARAMS_KEY  = 'btp:dest-test-rfc-params';
-const RFC_SUGGESTIONS = ['BAPI_USER_GET_DETAIL', 'SUSR_USER_SELF_READ'];
+const RFC_SUGGESTIONS = ['BAPI_USER_GET_DETAIL', 'RFC_SYSTEM_INFO', 'RFC_PING'];
 const RFC_SUGGESTION_DEFAULTS: Record<string, Array<{ key: string; value: string }>> = {
   'BAPI_USER_GET_DETAIL': [{ key: 'USERNAME', value: '' }],
 };
