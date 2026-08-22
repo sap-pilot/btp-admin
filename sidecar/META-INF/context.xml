@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Per-webapp Tomcat context override.
+  The SAP Java Buildpack enables denyUncoveredHttpMethods at the server level
+  when XSUAA is bound, causing POST (and other non-GET methods) to return 405
+  if not explicitly covered by a <security-constraint>. Setting it to false here
+  overrides the server-level setting for this webapp specifically.
+-->
+<Context denyUncoveredHttpMethods="false">
+</Context>

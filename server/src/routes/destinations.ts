@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { requireAuth, requireAdmin, type AuthRequest } from '../middleware/requireAuth.js';
 import { logger } from '../logger.js';
 import { testSaDestination, testInstanceDestination, type TestRequest, type UserInfo } from '../services/destTestService.js';
-import { testSaRfcDestination, testInstanceRfcDestination, type RfcTestRequest } from '../services/rfcTestService.js';
+import { testSaRfcDestination, testInstanceRfcDestination, type RfcTestRequest } from '../services/jcoRfcTestService.js';
 import {
   isSubaccountRestricted,
   listDestinations,

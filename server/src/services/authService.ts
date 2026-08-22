@@ -50,6 +50,31 @@ export function getCachedUserToken(sub: string): string | null {
   return entry.token;
 }
 
+// Service-to-service token cache (client_credentials grant, used when no user JWT is available)
+let _svcToken: { token: string; exp: number } | null = null;
+
+export async function getServiceToken(): Promise<string | null> {
+  const now = Date.now() / 1000;
+  if (_svcToken && _svcToken.exp > now + 60) return _svcToken.token;
+  const x = getXsuaaConfig();
+  if (!x) return null;
+  try {
+    const basicAuth = Buffer.from(`${x.clientid}:${x.clientsecret}`).toString('base64');
+    const body = new URLSearchParams({ grant_type: 'client_credentials' }).toString();
+    const data = await fetchJson(`${x.url}/oauth/token`, 'POST', {
+      'Content-Type': 'application/x-www-form-urlencoded',
+      'Authorization': `Basic ${basicAuth}`,
+    }, body);
+    const token = data.access_token as string;
+    const expiresIn = (data.expires_in as number | undefined) ?? 3600;
+    _svcToken = { token, exp: now + expiresIn };
+    return token;
+  } catch (e) {
+    logger.warn({ err: e }, 'Failed to fetch service token for sidecar call');
+    return null;
+  }
+}
+
 // Cache after first parse so we don't re-parse VCAP on every request
 let _xsuaa: XsuaaConfig | null | undefined = undefined;
 let _appUrl: string | undefined = undefined;

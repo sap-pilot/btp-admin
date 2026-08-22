@@ -457,7 +457,19 @@ const URI_SUGGESTIONS = [
 ];
 
 const RFC_HISTORY_KEY = 'btp:dest-test-rfc-history';
-const RFC_SUGGESTIONS = ['SUSR_USER_SELF_READ'];
+const RFC_PARAMS_KEY  = 'btp:dest-test-rfc-params';
+const RFC_SUGGESTIONS = ['BAPI_USER_GET_DETAIL', 'SUSR_USER_SELF_READ'];
+const RFC_SUGGESTION_DEFAULTS: Record<string, Array<{ key: string; value: string }>> = {
+  'BAPI_USER_GET_DETAIL': [{ key: 'USERNAME', value: '' }],
+};
+
+function loadRfcParamHistory(): Record<string, Array<{ key: string; value: string }>> {
+  try { return JSON.parse(localStorage.getItem(RFC_PARAMS_KEY) ?? '{}') as Record<string, Array<{ key: string; value: string }>>; }
+  catch { return {}; }
+}
+function saveRfcParamHistory(h: Record<string, Array<{ key: string; value: string }>>): void {
+  try { localStorage.setItem(RFC_PARAMS_KEY, JSON.stringify(h)); } catch { /* ignore */ }
+}
 
 function loadUriHistory(): string[] {
   try { return JSON.parse(localStorage.getItem(URI_HISTORY_KEY) ?? '[]') as string[]; }
@@ -491,6 +503,7 @@ function TestTab({ org, name, instScope, editedProps }: TestTabProps) {
   const [rfcHistory,     setRfcHistory]     = useState<string[]>(() => {
     try { return JSON.parse(localStorage.getItem(RFC_HISTORY_KEY) ?? '[]') as string[]; } catch { return []; }
   });
+  const [rfcParamHistory, setRfcParamHistory] = useState<Record<string, Array<{ key: string; value: string }>>>(loadRfcParamHistory);
   const [rfcHistoryOpen, setRfcHistoryOpen] = useState(false);
 
   const vertContainerRef  = useRef<HTMLDivElement>(null);
@@ -522,7 +535,19 @@ function TestTab({ org, name, instScope, editedProps }: TestTabProps) {
   }, [rfcHistoryOpen]);
 
   function pickUri(u: string) { setUrl(u); setHistoryOpen(false); }
-  function pickRfc(u: string) { setRfcName(u); setRfcHistoryOpen(false); }
+  function pickRfc(name: string) {
+    setRfcName(name);
+    setRfcHistoryOpen(false);
+    // Restore saved params for this RFC name, or fall back to suggestion defaults
+    const saved = rfcParamHistory[name];
+    if (saved && saved.length > 0) {
+      setRfcParams([...saved, { key: '', value: '' }]);
+    } else if (RFC_SUGGESTION_DEFAULTS[name]) {
+      setRfcParams([...RFC_SUGGESTION_DEFAULTS[name]!, { key: '', value: '' }]);
+    } else {
+      setRfcParams([{ key: '', value: '' }]);
+    }
+  }
 
   function clearHistory() {
     setUriHistory([]);
@@ -531,7 +556,11 @@ function TestTab({ org, name, instScope, editedProps }: TestTabProps) {
 
   function clearRfcHistory() {
     setRfcHistory([]);
-    try { localStorage.setItem(RFC_HISTORY_KEY, '[]'); } catch { /* ignore */ }
+    setRfcParamHistory({});
+    try {
+      localStorage.setItem(RFC_HISTORY_KEY, '[]');
+      localStorage.removeItem(RFC_PARAMS_KEY);
+    } catch { /* ignore */ }
   }
 
   function addRfcParam()  { setRfcParams(p => [...p, { key: '', value: '' }]); }
@@ -600,10 +629,21 @@ function TestTab({ org, name, instScope, editedProps }: TestTabProps) {
   async function handleRfcSend() {
     setIsSending(true);
     setRfcResult(null);
-    if (rfcName.trim() && !RFC_SUGGESTIONS.includes(rfcName.trim())) {
-      const next = [rfcName.trim(), ...rfcHistory.filter(u => u !== rfcName.trim())].slice(0, 20);
-      setRfcHistory(next);
-      try { localStorage.setItem(RFC_HISTORY_KEY, JSON.stringify(next)); } catch { /* ignore */ }
+    const trimmedName = rfcName.trim();
+    if (trimmedName) {
+      // Save RFC name to history (deduplicated, suggestions not stored in history)
+      if (!RFC_SUGGESTIONS.includes(trimmedName)) {
+        const next = [trimmedName, ...rfcHistory.filter(u => u !== trimmedName)].slice(0, 20);
+        setRfcHistory(next);
+        try { localStorage.setItem(RFC_HISTORY_KEY, JSON.stringify(next)); } catch { /* ignore */ }
+      }
+      // Save params for this RFC name
+      const filledParams = rfcParams.filter(p => p.key);
+      if (filledParams.length > 0) {
+        const nextParamHist = { ...rfcParamHistory, [trimmedName]: filledParams };
+        setRfcParamHistory(nextParamHist);
+        saveRfcParamHistory(nextParamHist);
+      }
     }
     try {
       const apiUrl = instScope

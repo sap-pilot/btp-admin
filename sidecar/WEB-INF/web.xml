@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<web-app xmlns="https://jakarta.ee/xml/ns/jakartaee"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="https://jakarta.ee/xml/ns/jakartaee
+             https://jakarta.ee/xml/ns/jakartaee/web-app_5_0.xsd"
+         version="5.0">
+  <!--
+    Activates the SAP Container Security Provider's XSUAA authenticator.
+    Without <auth-method>XSUAA</auth-method>, TomEE falls back to BASIC auth which does
+    not understand JWT Bearer tokens, causing 403 even with a valid token.
+    Source: https://github.com/SAP/cloud-security-services-integration-library/tree/main/samples/sap-java-buildpack-api-usage
+  -->
+  <login-config>
+    <auth-method>XSUAA</auth-method>
+  </login-config>
+
+  <!-- Public — CF health check sends no auth header -->
+  <security-constraint>
+    <web-resource-collection>
+      <web-resource-name>Health</web-resource-name>
+      <url-pattern>/ping</url-pattern>
+    </web-resource-collection>
+    <!-- No <auth-constraint> = permit all -->
+  </security-constraint>
+
+  <!-- RFC API — require the btp-admin.admin scope.
+       The SAP Container Security Provider (container_security_provider JAR) strips the
+       full <xsappname>!t<tenantId>. prefix from JWT scopes before mapping to TomEE roles.
+       JWT scope "btp-admin!t<id>.admin" (xs-security.json: $XSAPPNAME.admin) therefore
+       becomes TomEE role "admin". The role-name here must match that stripped form. -->
+  <security-constraint>
+    <web-resource-collection>
+      <web-resource-name>RFC API</web-resource-name>
+      <url-pattern>/api/*</url-pattern>
+    </web-resource-collection>
+    <auth-constraint>
+      <role-name>admin</role-name>
+    </auth-constraint>
+  </security-constraint>
+
+  <security-role>
+    <role-name>admin</role-name>
+  </security-role>
+</web-app>

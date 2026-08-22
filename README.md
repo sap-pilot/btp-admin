@@ -889,63 +889,43 @@ Two options for providing the service config on BTP:
 ```yaml
 # config-dev.mtaext
 _schema-version: "3.3"
-extends: btp-status
+extends: btp-admin
 modules:
-  - name: btp-status
+  - name: btp-admin
     properties:
       CONFIG_JSON: '{"services":[...]}'
 ```
 
 Then deploy with: `cf deploy mta_archives/btp-admin.mtar -e config-dev.mtaext`
 
-### RFC Addon (OnPremise RFC Destinations)
+### RFC Sidecar (OnPremise RFC Destinations)
 
-The **Test** tab in the Subaccount Destinations modal supports live RFC calls for destinations with `Type=RFC`. This requires the SAP NW RFC SDK shared libraries and a compiled native Node.js addon.
+The **Test** tab in the Subaccount Destinations modal supports live RFC calls for destinations with `Type=RFC`. RFC testing is handled by the `btp-admin-sidecar` MTA module — a separate TomEE WAR deployed on `sap_java_buildpack_jakarta` that uses SAP JCo to execute RFC function calls.
 
-**Constraints:**
-- **Auth type**: `BasicAuthentication` only (`jco.client.user` / `passwd`). `PrincipalPropagation` is not supported for RFC testing.
-- **Cloud Connector backend protocol**: The CC backend for the RFC destination host/port **must be configured as Protocol: TCP** (not Protocol: RFC). The BTP Connectivity Service SOCKS5 proxy (port 20004) only routes TCP-type backends. Ask your CC admin to set the backend entry (e.g. `dr5-abap:3300`) to **Protocol: TCP**.
+**How it works:** When a user tests an RFC destination, `btp-admin` copies the destination into the bound `btp-admin-dest` service instance as an instance-level destination, then calls the sidecar's `POST /api/test-rfc` endpoint. The sidecar resolves the destination via `JCoDestinationManager` (backed by the Kotyo provider and BTP Destination Service) and executes the RFC call through the Cloud Connector.
 
-#### 1. Download the SAP NW RFC SDK
+**Supported auth types:** `BasicAuthentication` and `PrincipalPropagation`.
 
-1. Go to [SAP Software Downloads — NW RFC SDK](https://me.sap.com/swdcnav/products/_APP=00200682500000001943&_EVENT=DISPHIER&HEADER=Y&FUNCTIONBAR=N&EVENT=TREE&NE=NAVIGATE&ENR=01200314690100002214&V=MAINT) (SAP S-User required)
-2. Select the **Linux on x86_64** package (filename typically `NWRFC_<version>_Linux_x86_64.SAR`)
-3. Extract with `SAPCAR`: `SAPCAR -xvf NWRFC_*.SAR`
-4. Place the extracted `nwrfcsdk/` folder under `server/` so the layout is:
+**Cloud Connector backend protocol:** Must be **Protocol: RFC** (the JCo Kotyo provider uses the RFC port 20001, not the SOCKS5 port 20004). Ask your CC admin to set the backend entry to **Protocol: RFC**.
+
+#### Rebuilding the sidecar WAR (optional)
+
+The pre-built `sidecar/btp-admin-sidecar.war` is committed to the repository and included in the MTA package automatically. You only need to rebuild it if you modify `sidecar/SidecarServlet.java`.
+
+1. Download **SAP JCo 3** (`sapjco3.jar`) from the [SAP JCo download page](https://support.sap.com/en/product/connectors/jco.html) (SAP S-User required). Select the **Linux/x86_64** package.
+2. Place `sapjco3.jar` into the `sidecar/` folder:
    ```
-   server/nwrfcsdk/
-   ├── include/   # sapnwrfc.h, sapucum.h, …
-   └── lib/       # libsapnwrfc.so, libsapucum.so, libicudata57.so, …
+   sidecar/
+   ├── sapjco3.jar          ← place here
+   └── SidecarServlet.java
    ```
+3. Run the build script from the repo root:
+   ```bash
+   cd sidecar && ./build.sh
+   ```
+   This compiles `SidecarServlet.java` and packages `btp-admin-sidecar.war`.
 
-> `server/nwrfcsdk/` is in `.gitignore` (SAP-licensed; do not commit). Verify the `.so` files are Linux ELF binaries: `file server/nwrfcsdk/lib/libsapnwrfc.so` should say `ELF 64-bit LSB shared object, x86-64`.
-
-#### 2. Build the native addon
-
-```bash
-cd server && npm run build:addon
-```
-
-This compiles `server/src/rfc/rfcaddon.cc` with `node-gyp` and links against `libsapnwrfc`/`libsapucum`. The output is `server/build/Release/rfcaddon.node`. The addon's RUNPATH is set to `$ORIGIN/../../nwrfcsdk/lib` so the loader finds the `.so` files relative to the `.node` file — no `LD_LIBRARY_PATH` required at runtime.
-
-#### 3. Local development
-
-```bash
-# LD_LIBRARY_PATH is only needed if you call the addon outside of npm scripts
-# (npm run dev already picks up the RUNPATH-embedded path)
-npm run dev
-```
-
-#### 4. CF deployment
-
-`server/nwrfcsdk/` is gitignored but **must be present on disk** before running `mbt build` — it is included in the MTA package as-is. Before building the MTA archive:
-
-```bash
-# Ensure nwrfcsdk/ is placed under server/ (see step 1 above)
-npm run build    # or: npm run bd / npm run bd-bg
-```
-
-During CF staging, the nodejs buildpack detects `binding.gyp` and runs `npm install`, which recompiles the addon for the CF container's exact Node version via node-gyp. `node-addon-api` is therefore in `dependencies` (not `devDependencies`) so it is available during the production `npm install`. The nwrfcsdk headers and `.so` files bundled from `server/nwrfcsdk/` are used at both compile time and runtime.
+> `sidecar/sapjco3.jar` is in `.gitignore` — SAP JCo license prohibits redistribution; do not commit it. The `libsapjco3.so` native library is supplied by the `sap_java_buildpack_jakarta` buildpack at runtime.
 
 ### Operations
 
