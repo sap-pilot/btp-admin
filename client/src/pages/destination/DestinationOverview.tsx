@@ -22,14 +22,13 @@ interface RefreshProgress {
   current?:   number;
   total:      number;
   name?:      string;
-  received:           number;
-  refreshed?:         number;
-  created?:           number;
-  updated?:           number;
-  deleted?:           number;
-  issues?:            string[];
-  errors?:            string[];
-
+  received:   number;
+  refreshed?: number;
+  created?:   number;
+  updated?:   number;
+  deleted?:   number;
+  issues?:    string[];
+  errors?:    string[];
 }
 
 interface Buckets { generic: string[]; s4: string[]; cep: string[]; others: string[] }
@@ -580,11 +579,13 @@ export default function DestinationOverview() {
 
         let msg: string;
         if (progress.type === 'progress') {
-          msg = `Refreshing ${progress.current ?? 0} of ${progress.total} subaccounts/spaces: ${progress.name ?? ''}${progress.received > 0 ? `, received ${progress.received} destinations` : ''}`;
+          const recvNote = progress.received > 0 ? `, received ${progress.received} destinations` : '';
+          const nameNote = progress.name ? `: ${progress.name}` : '';
+          msg = `Refreshing ${progress.current ?? 0} of ${progress.total} subaccounts${nameNote}${recvNote}`;
         } else {
-          const hasErrs   = (progress.issues?.length ?? 0) > 0;
-          const errNote   = hasErrs ? ` — ${progress.issues!.length} warning${progress.issues!.length !== 1 ? 's' : ''}` : '';
-          msg = `Refreshed ${progress.total} subaccounts/spaces, received ${progress.received} destinations, created ${progress.created ?? 0}, updated ${progress.updated ?? 0}, deleted ${progress.deleted ?? 0}${errNote}`;
+          const hasErrs = (progress.issues?.length ?? 0) > 0;
+          const errNote = hasErrs ? ` — ${progress.issues!.length} warning${progress.issues!.length !== 1 ? 's' : ''}` : '';
+          msg = `Refreshed ${progress.total} subaccounts, received ${progress.received} destinations, created ${progress.created ?? 0}, updated ${progress.updated ?? 0}, deleted ${progress.deleted ?? 0}${errNote}`;
         }
 
         return (

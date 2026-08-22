@@ -375,13 +375,16 @@ async function ensureDestServiceKey(region: string, instanceGuid: string): Promi
 interface DestInstanceInfo { instanceId: string; instanceName: string }
 interface DestKeyRaw       { keyId: string; keyName: string }
 
-async function fetchDestServicePlanGuid(region: string): Promise<string> {
-  const data = await cfGet(region, '/v3/service_plans?service_offering_names=destination&names=lite&per_page=1') as {
+async function fetchDestServicePlanGuids(region: string): Promise<string> {
+  // Fetch ALL plans for the destination service offering (may include lite, trial, standard, etc.).
+  // Returns comma-separated GUIDs for use in service_plan_guids= filters.
+  // Note: service_offering_names IS supported on /v3/service_plans but NOT on /v3/service_instances.
+  const data = await cfGet(region, '/v3/service_plans?service_offering_names=destination&per_page=100') as {
     resources?: Array<{ guid: string }>;
   };
-  const guid = data.resources?.[0]?.guid;
-  if (!guid) throw new Error('Destination service plan (destination/lite) not found in region');
-  return guid;
+  const guids = (data.resources ?? []).map(r => r.guid).filter(Boolean);
+  if (guids.length === 0) throw new Error('No destination service plans found in region');
+  return guids.join(',');
 }
 
 async function fetchDestInstances(region: string, orgGuid: string, planGuid: string): Promise<DestInstanceInfo[]> {
@@ -590,7 +593,7 @@ async function rediscoverAndAcquire(
   let planGuid = planGuids[region];
   if (!planGuid) {
     try {
-      planGuid = await fetchDestServicePlanGuid(region);
+      planGuid = await fetchDestServicePlanGuids(region);
       planGuids[region] = planGuid;
       logger.debug({ region, planGuid }, 'Cached destination service plan guid');
     } catch (err) {
@@ -915,9 +918,7 @@ export async function refreshDestinations(username = 'system', mode: 'auto' | 'm
     .filter(sa => sa.manageDestinations)
     .sort((a, b) => a.region.localeCompare(b.region) || a.subdomain.localeCompare(b.subdomain));
 
-  // Total = subaccounts with manageDestinations + spaces with manageDest (for combined progress)
-  const spaceCount = targetSas.reduce((n, sa) => n + (sa.org?.spaces ?? []).filter(s => s.manageDest).length, 0);
-  const total = targetSas.length + spaceCount;
+  const total = targetSas.length;
   if (total === 0) {
     logger.info('No subaccounts with manageDestinations=true — nothing to refresh');
     emitImmediate('refresh-destinations', { type: 'done', scope: 'global', refreshed: 0, total: 0, received: 0, created: 0, updated: 0, deleted: 0, issues: [] });
@@ -946,9 +947,8 @@ export async function refreshDestinations(username = 'system', mode: 'auto' | 'm
   for (let idx = 0; idx < targetSas.length; idx++) {
     const sa       = targetSas[idx]!;
     const location = `${sa.region}/${sa.subdomain}`;
-    const saLabel  = sa.alias || sa.subaccountName || sa.subdomain;
 
-    emit('refresh-destinations', { type: 'progress', scope: 'global', current: idx + 1, total, name: saLabel, received });
+    emit('refresh-destinations', { type: 'progress', scope: 'global', current: idx + 1, total, name: location, received });
 
     if (!sa.org?.orgId) {
       const msg = `${location}: no org — cannot access destination service`;
@@ -1015,6 +1015,23 @@ export async function refreshDestinations(username = 'system', mode: 'auto' | 'm
       logger.error({ location, err }, `Destination refresh failed for ${location}: ${msg}`);
       issues.push(`${location}${issueRef()}: ${msg}`);
     }
+
+    // Immediately after SA-level refresh, refresh instance destinations for any manageDest spaces
+    // within this same subaccount — counter stays at idx+1, name updates to show space/instance.
+    if ((sa.org?.spaces ?? []).some(s => s.manageDest)) {
+      const spaceResult = await refreshSpaceDestinations([sa], username, mode,
+        (_spaceDone, _spacesTotal, instLabel, spaceReceivedSoFar) => {
+          emit('refresh-destinations', { type: 'progress', scope: 'global', current: idx + 1, total, name: instLabel, received: received + spaceReceivedSoFar });
+        },
+      );
+      if (spaceResult.errors.length > 0) {
+        logger.warn({ location, errors: spaceResult.errors }, 'Some space destination refreshes failed');
+        issues.push(...spaceResult.errors);
+      }
+      created += spaceResult.created;
+      updated += spaceResult.updated;
+      deleted += spaceResult.deleted;
+    }
   }
 
   await saveKeyStore(keyStore, planGuids);
@@ -1029,27 +1046,14 @@ export async function refreshDestinations(username = 'system', mode: 'auto' | 'm
   notifyCallbacks();
   emit('dest', { ts: Date.now() });
 
-  // Refresh space-level instance destinations for all subaccounts that have manageDest spaces.
-  const sasDone = targetSas.length;
-  let spaceReceived = 0;
-  const spaceResult = await refreshSpaceDestinations(targetSas, username, mode, (spaceDone, spacesTotal, label, spaceReceivedSoFar) => {
-    emit('refresh-destinations', { type: 'progress', scope: 'global', current: sasDone + spaceDone, total, name: label, received: received + spaceReceivedSoFar });
-  });
-  if (spaceResult.errors.length > 0) {
-    logger.warn({ errors: spaceResult.errors }, 'Some space destination refreshes failed during global refresh');
-  }
-  spaceReceived = spaceResult.created + spaceResult.updated;
-
-  const allIssues = [...issues, ...spaceResult.errors];
   emitImmediate('refresh-destinations', {
     type: 'done', scope: 'global',
-    refreshed: refreshed + (spaceResult.created + spaceResult.updated + spaceResult.deleted > 0 ? 1 : 0),
-    total, received: received + spaceReceived,
-    created: created + spaceResult.created, updated: updated + spaceResult.updated, deleted: deleted + spaceResult.deleted,
-    issues: allIssues,
+    refreshed, total, received,
+    created, updated, deleted,
+    issues,
   });
 
-  return { refreshed, received, created: created + spaceResult.created, updated: updated + spaceResult.updated, deleted: deleted + spaceResult.deleted, errors: allIssues };
+  return { refreshed, received, created, updated, deleted, errors: issues };
   } finally {
     globalRefreshRunning = false;
   }
@@ -1390,6 +1394,10 @@ export async function refreshSpaceDestinations(
   const issues: string[] = [];
   let created = 0, updated = 0, deleted = 0, done = 0;
 
+  const { orgs: keyStore, planGuids: instancePlanGuids } = await loadKeyStore();
+  const tokenStore    = await loadTokenStore();
+  const cfLoginFailed = new Set<string>();
+
   // ── Step A: discover destination service instances per region ──────────────
   const byRegion = new Map<string, SpaceTodo[]>();
   for (const t of todos) {
@@ -1400,12 +1408,29 @@ export async function refreshSpaceDestinations(
 
   const spaceInstances: SpaceServiceInstance[] = [];
   for (const [region, regionTodos] of byRegion) {
+    // Resolve destination service plan GUIDs for this region.
+    // /v3/service_instances does not support service_offering_names — must use service_plan_guids.
+    // Reuse cached value from instancePlanGuids (shared with the SA-level resolveToken path).
+    let planGuidsCsv = instancePlanGuids[region];
+    if (!planGuidsCsv) {
+      try {
+        planGuidsCsv = await fetchDestServicePlanGuids(region);
+        instancePlanGuids[region] = planGuidsCsv;
+        logger.debug({ region, planGuidsCsv }, 'Cached destination service plan guids for space instance discovery');
+      } catch (err) {
+        const msg = `CF destination service plan lookup failed for region ${region}: ${String(err)}`;
+        logger.error({ region, err }, msg);
+        issues.push(msg);
+        continue;
+      }
+    }
+
     const spaceGuids = regionTodos.map(t => t.spaceId).join(',');
     try {
       const resources = await fetchCfPaginatedResources<{
         guid: string; name: string;
         relationships?: { space?: { data?: { guid?: string } } };
-      }>(region, `/v3/service_instances?service_offering_names=destination&space_guids=${encodeURIComponent(spaceGuids)}&per_page=5000`);
+      }>(region, `/v3/service_instances?service_plan_guids=${encodeURIComponent(planGuidsCsv)}&space_guids=${encodeURIComponent(spaceGuids)}&per_page=5000`);
 
       for (const r of resources) {
         const spaceGuid = r.relationships?.space?.data?.guid ?? '';
@@ -1476,9 +1501,6 @@ export async function refreshSpaceDestinations(
     return { created, updated, deleted, errors: issues };
   }
 
-  const { orgs: keyStore, planGuids: instancePlanGuids } = await loadKeyStore();
-  const tokenStore    = await loadTokenStore();
-  const cfLoginFailed = new Set<string>();
   let spaceReceived = 0;
   const totalInstances = spaceInstances.length;
 
@@ -1487,9 +1509,10 @@ export async function refreshSpaceDestinations(
 
   // ── Step B+C: resolve credential and fetch instance destinations ───────────
   for (const inst of spaceInstances) {
-    const label = `${inst.region}/${inst.subdomain}/${inst.spaceName}/${inst.name}`;
+    const label     = `${inst.region}/${inst.subdomain}/${inst.spaceName}/${inst.name}`; // full path for logging
+    const instLabel = label;                                                               // region/subdomain/space/instance for progress display
 
-    onProgress?.(done + 1, todos.length, label, spaceReceived);
+    onProgress?.(done + 1, todos.length, instLabel, spaceReceived);
     onInstProgress?.(done, totalInstances, inst.name);
 
     // Resolve credentials specifically for this instance GUID (not the org-level instance)
