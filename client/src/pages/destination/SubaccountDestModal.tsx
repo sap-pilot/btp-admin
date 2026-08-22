@@ -538,9 +538,9 @@ function TestTab({ org, name, instScope, editedProps }: TestTabProps) {
   function pickRfc(name: string) {
     setRfcName(name);
     setRfcHistoryOpen(false);
-    // Restore saved params for this RFC name, or fall back to suggestion defaults
+    // Restore saved params for this RFC name; suggestion defaults only for RFCs never sent before
     const saved = rfcParamHistory[name];
-    if (saved && saved.length > 0) {
+    if (saved !== undefined) {
       setRfcParams([...saved, { key: '', value: '' }]);
     } else if (RFC_SUGGESTION_DEFAULTS[name]) {
       setRfcParams([...RFC_SUGGESTION_DEFAULTS[name]!, { key: '', value: '' }]);
@@ -637,13 +637,11 @@ function TestTab({ org, name, instScope, editedProps }: TestTabProps) {
         setRfcHistory(next);
         try { localStorage.setItem(RFC_HISTORY_KEY, JSON.stringify(next)); } catch { /* ignore */ }
       }
-      // Save params for this RFC name
+      // Always save params so navigate-back respects the last Send state (even if user cleared all params)
       const filledParams = rfcParams.filter(p => p.key);
-      if (filledParams.length > 0) {
-        const nextParamHist = { ...rfcParamHistory, [trimmedName]: filledParams };
-        setRfcParamHistory(nextParamHist);
-        saveRfcParamHistory(nextParamHist);
-      }
+      const nextParamHist = { ...rfcParamHistory, [trimmedName]: filledParams };
+      setRfcParamHistory(nextParamHist);
+      saveRfcParamHistory(nextParamHist);
     }
     try {
       const apiUrl = instScope
