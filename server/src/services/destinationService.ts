@@ -267,10 +267,11 @@ async function resolveInstanceToken(
   }
 
   try {
-    const keys = await fetchDestKeysForInstances(region, [instanceGuid]);
+    let keys = await fetchDestKeysForInstances(region, [instanceGuid]);
     if (keys.length === 0) {
-      logger.info({ region, instanceGuid, location }, 'No service credential bindings found for space instance');
-      return { error: `No service key found for instance ${instanceGuid}` };
+      // No service key yet — create btp-admin-sk and use it
+      const newKey = await ensureDestServiceKey(region, instanceGuid);
+      keys = [newKey];
     }
     const key        = keys[0]!;
     const credential = await fetchDestCredentials(region, key.keyId);
@@ -309,6 +310,66 @@ async function cfGet(region: string, path: string): Promise<unknown> {
   logger.debug({ method: 'GET', url, status: res.status, cl: res.headers.get('content-length'), ms }, 'CF v3 API call');
   if (!res.ok) throw new Error(`CF GET ${path} → HTTP ${res.status}`);
   return resText !== undefined ? JSON.parse(resText) : res.json();
+}
+
+async function cfPost(region: string, path: string, body: Record<string, unknown>): Promise<{ status: number; data: unknown; location: string }> {
+  const token = await getOrRefreshToken(region);
+  const url   = `${token.api_url}${path}`;
+  const res   = await fetchWithRateLimit(() => fetch(url, {
+    method:  'POST',
+    headers: { Authorization: `${token.token_type} ${token.access_token}`, 'Content-Type': 'application/json' },
+    body:    JSON.stringify(body),
+  }), url);
+  if (!res.ok && res.status !== 202) {
+    const text = await res.text().catch(() => '');
+    throw new Error(`CF POST ${path} → HTTP ${res.status}: ${text.slice(0, 200)}`);
+  }
+  const data = await res.json().catch(() => null);
+  return { status: res.status, data, location: res.headers.get('Location') ?? '' };
+}
+
+async function pollCfJob(region: string, jobPath: string): Promise<void> {
+  const path = jobPath.startsWith('/') ? jobPath : new URL(jobPath).pathname;
+  for (let i = 0; i < 30; i++) {
+    await new Promise<void>(r => setTimeout(r, 2_000));
+    const data = await cfGet(region, path) as { state: string; errors?: Array<{ detail?: string }> };
+    if (data.state === 'COMPLETE') return;
+    if (data.state === 'FAILED') {
+      throw new Error(`CF job ${path} failed: ${data.errors?.[0]?.detail ?? 'unknown error'}`);
+    }
+  }
+  throw new Error(`CF job ${path} timed out after 60 s`);
+}
+
+// Ensures a service key named 'btp-admin-sk' exists for the given service instance.
+// Creates one via the CF API if not present, waiting for async job completion.
+async function ensureDestServiceKey(region: string, instanceGuid: string): Promise<DestKeyWithInstance> {
+  const KEY_NAME = 'btp-admin-sk';
+  const checkPath = `/v3/service_credential_bindings?service_instance_guids=${instanceGuid}&names=${encodeURIComponent(KEY_NAME)}&type=key&per_page=1`;
+
+  const existing = await cfGet(region, checkPath) as { resources?: Array<{ guid: string; name: string }> };
+  if ((existing.resources?.length ?? 0) > 0) {
+    const r = existing.resources![0]!;
+    logger.debug({ region, instanceGuid, keyId: r.guid }, `Reusing existing "${KEY_NAME}" service key`);
+    return { keyId: r.guid, keyName: r.name, instanceId: instanceGuid };
+  }
+
+  logger.info({ region, instanceGuid }, `No service key found — creating "${KEY_NAME}" for destination instance`);
+  const result = await cfPost(region, '/v3/service_credential_bindings', {
+    type: 'key',
+    name: KEY_NAME,
+    relationships: { service_instance: { data: { guid: instanceGuid } } },
+  });
+
+  if (result.status === 202 && result.location) {
+    await pollCfJob(region, result.location);
+  }
+
+  const created = await cfGet(region, checkPath) as { resources?: Array<{ guid: string; name: string }> };
+  const key = created.resources?.[0];
+  if (!key) throw new Error(`Service key "${KEY_NAME}" not found after creation for instance ${instanceGuid}`);
+  logger.info({ region, instanceGuid, keyId: key.guid }, `Created "${KEY_NAME}" service key`);
+  return { keyId: key.guid, keyName: key.name, instanceId: instanceGuid };
 }
 
 interface DestInstanceInfo { instanceId: string; instanceName: string }
@@ -689,7 +750,6 @@ export interface RefreshResult {
   deleted:            number;
   errors:             string[];
   skipped?:           boolean;
-  obsoleteInstances?: number;
 }
 
 interface DestChange { region: string; subdomain: string; name: string; action: 'created' | 'updated' | 'deleted'; spaceName?: string; instanceName?: string; instanceGuid?: string }
@@ -970,7 +1030,6 @@ export async function refreshDestinations(username = 'system', mode: 'auto' | 'm
   emit('dest', { ts: Date.now() });
 
   // Refresh space-level instance destinations for all subaccounts that have manageDest spaces.
-  // Progress advances once per space (todo), not once per instance inside a space.
   const sasDone = targetSas.length;
   let spaceReceived = 0;
   const spaceResult = await refreshSpaceDestinations(targetSas, username, mode, (spaceDone, spacesTotal, label, spaceReceivedSoFar) => {
@@ -979,10 +1038,7 @@ export async function refreshDestinations(username = 'system', mode: 'auto' | 'm
   if (spaceResult.errors.length > 0) {
     logger.warn({ errors: spaceResult.errors }, 'Some space destination refreshes failed during global refresh');
   }
-  if (spaceResult.obsoleteInstances > 0) {
-    logger.info({ count: spaceResult.obsoleteInstances }, 'Space destination instances with no service key (obsolete) skipped during global refresh');
-  }
-  spaceReceived = spaceResult.created + spaceResult.updated; // approximate: only tracked changes
+  spaceReceived = spaceResult.created + spaceResult.updated;
 
   const allIssues = [...issues, ...spaceResult.errors];
   emitImmediate('refresh-destinations', {
@@ -991,7 +1047,6 @@ export async function refreshDestinations(username = 'system', mode: 'auto' | 'm
     total, received: received + spaceReceived,
     created: created + spaceResult.created, updated: updated + spaceResult.updated, deleted: deleted + spaceResult.deleted,
     issues: allIssues,
-    obsoleteInstances: spaceResult.obsoleteInstances,
   });
 
   return { refreshed, received, created: created + spaceResult.created, updated: updated + spaceResult.updated, deleted: deleted + spaceResult.deleted, errors: allIssues };
@@ -1092,16 +1147,25 @@ export async function refreshSubaccountDestinations(region: string, subdomain: s
     emit('dest', { ts: Date.now() });
   }
 
-  // Refresh space-level instance destinations for this subaccount
-  const spaceResult = await refreshSpaceDestinations([sa], username, mode);
+  // Refresh space-level instance destinations for this subaccount.
+  // Progress: 1 (SA) + N instances. Emit inst-progress so the modal can show a real counter.
+  emitImmediate('refresh-destinations', {
+    type: 'inst-progress', scope: 'subaccount',
+    region: sa.region, subdomain: sa.subdomain,
+    current: 1, total: 1, name: 'SA destinations',
+  });
+  const spaceResult = await refreshSpaceDestinations([sa], username, mode, undefined, (instsDone, instsTotal, instLabel) => {
+    emit('refresh-destinations', {
+      type: 'inst-progress', scope: 'subaccount',
+      region: sa.region, subdomain: sa.subdomain,
+      current: 1 + instsDone, total: 1 + instsTotal, name: instLabel,
+    });
+  });
   if (spaceResult.errors.length > 0) {
     logger.warn({ errors: spaceResult.errors }, 'Some space destination refreshes failed during subaccount refresh');
   }
-  if (spaceResult.obsoleteInstances > 0) {
-    logger.info({ count: spaceResult.obsoleteInstances }, 'Space destination instances with no service key (obsolete) skipped during subaccount refresh');
-  }
 
-  return { refreshed, received, created: created + spaceResult.created, updated: updated + spaceResult.updated, deleted: deleted + spaceResult.deleted, errors: [...issues, ...spaceResult.errors], obsoleteInstances: spaceResult.obsoleteInstances };
+  return { refreshed, received, created: created + spaceResult.created, updated: updated + spaceResult.updated, deleted: deleted + spaceResult.deleted, errors: [...issues, ...spaceResult.errors] };
 }
 
 // ─── Public: proactive subaccount destination load ────────────────────────────
@@ -1232,9 +1296,7 @@ export async function getInstanceDestination(
   const { jsonPath } = await guardSpaceDestPath(region, subdomain, spaceName, instanceGuid, name);
   try {
     const data = JSON.parse(await readFile(jsonPath, 'utf-8')) as Record<string, unknown>;
-    const sensitiveFields = Object.keys(data).filter(isSensitiveField);
-    for (const k of sensitiveFields) data[k] = REDACTED_SENTINEL;
-    return { data, sensitiveFields };
+    return { data, sensitiveFields: Object.keys(data).filter(isSensitiveField) };
   } catch { return null; }
 }
 
@@ -1299,21 +1361,21 @@ async function fetchCfPaginatedResources<T>(region: string, initialPath: string)
 }
 
 interface SpaceServiceInstance {
-  guid:          string;
-  name:          string;
-  dashboard_url: string | null;
-  spaceId:       string;
-  spaceName:     string;
-  subdomain:     string;
-  region:        string;
+  guid:      string;
+  name:      string;
+  spaceId:   string;
+  spaceName: string;
+  subdomain: string;
+  region:    string;
 }
 
 export async function refreshSpaceDestinations(
-  subaccounts: import('./subaccountsService.js').SubaccountEntry[],
-  username:    string,
-  mode:        'auto' | 'manual',
-  onProgress?: (current: number, total: number, label: string, received: number) => void,
-): Promise<{ created: number; updated: number; deleted: number; errors: string[]; obsoleteInstances: number }> {
+  subaccounts:    import('./subaccountsService.js').SubaccountEntry[],
+  username:       string,
+  mode:           'auto' | 'manual',
+  onProgress?:    (current: number, total: number, label: string, received: number) => void,
+  onInstProgress?:(current: number, total: number, label: string) => void,
+): Promise<{ created: number; updated: number; deleted: number; errors: string[] }> {
   // Collect all (region, subdomain, spaceId, spaceName) tuples with manageDest=true
   type SpaceTodo = { region: string; subdomain: string; spaceId: string; spaceName: string; orgId: string };
   const todos: SpaceTodo[] = [];
@@ -1323,10 +1385,10 @@ export async function refreshSpaceDestinations(
       if (sp.manageDest) todos.push({ region: sa.region, subdomain: sa.subdomain, spaceId: sp.spaceId, spaceName: sp.spaceName, orgId: sa.org.orgId });
     }
   }
-  if (todos.length === 0) return { created: 0, updated: 0, deleted: 0, errors: [], obsoleteInstances: 0 };
+  if (todos.length === 0) return { created: 0, updated: 0, deleted: 0, errors: [] };
 
   const issues: string[] = [];
-  let created = 0, updated = 0, deleted = 0, done = 0, obsoleteInstances = 0;
+  let created = 0, updated = 0, deleted = 0, done = 0;
 
   // ── Step A: discover destination service instances per region ──────────────
   const byRegion = new Map<string, SpaceTodo[]>();
@@ -1341,23 +1403,20 @@ export async function refreshSpaceDestinations(
     const spaceGuids = regionTodos.map(t => t.spaceId).join(',');
     try {
       const resources = await fetchCfPaginatedResources<{
-        guid: string; name: string; dashboard_url?: string | null;
+        guid: string; name: string;
         relationships?: { space?: { data?: { guid?: string } } };
-      }>(region, `/v3/service_instances?service_plan_names=lite&space_guids=${encodeURIComponent(spaceGuids)}&per_page=5000`);
+      }>(region, `/v3/service_instances?service_offering_names=destination&space_guids=${encodeURIComponent(spaceGuids)}&per_page=5000`);
 
       for (const r of resources) {
-        const dashUrl = r.dashboard_url ?? '';
-        if (!dashUrl.includes('/destinations')) continue;
         const spaceGuid = r.relationships?.space?.data?.guid ?? '';
         const todo      = regionTodos.find(t => t.spaceId === spaceGuid);
         if (!todo) continue;
         spaceInstances.push({
-          guid:         r.guid,
-          name:         r.name,
-          dashboard_url: dashUrl,
-          spaceId:      todo.spaceId,
-          spaceName:    todo.spaceName,
-          subdomain:    todo.subdomain,
+          guid:      r.guid,
+          name:      r.name,
+          spaceId:   todo.spaceId,
+          spaceName: todo.spaceName,
+          subdomain: todo.subdomain,
           region,
         });
       }
@@ -1368,45 +1427,80 @@ export async function refreshSpaceDestinations(
     }
   }
 
+  // ── Step A2: mark obsolete instances (exist on disk but no longer in CF) ──────
+  // Build index of CF-known GUIDs per (region/subdomain/spaceName) key.
+  const cfGuids = new Map<string, Set<string>>();
+  for (const inst of spaceInstances) {
+    const k = `${inst.region}/${inst.subdomain}/${inst.spaceName}`;
+    const s = cfGuids.get(k) ?? new Set<string>();
+    s.add(inst.guid);
+    cfGuids.set(k, s);
+  }
+
+  for (const todo of todos) {
+    const spaceKey   = `${todo.region}/${todo.subdomain}/${todo.spaceName}`;
+    const knownGuids = cfGuids.get(spaceKey) ?? new Set<string>();
+    const spaceDir   = join(LOCAL_DEST_DIR, todo.region, todo.subdomain, todo.spaceName);
+    const instEntries = await readdir(spaceDir, { withFileTypes: true }).catch(() => [] as import('node:fs').Dirent[]);
+    for (const instEnt of instEntries) {
+      if (!instEnt.isDirectory()) continue;
+      const sepIdx = instEnt.name.indexOf('_');
+      if (sepIdx < 0) continue;
+      const guid = instEnt.name.slice(0, sepIdx);
+      if (knownGuids.has(guid)) continue; // still present in CF — skip
+      // Instance was removed from CF: mark all active destinations as deleted.
+      const instanceDir = join(spaceDir, instEnt.name);
+      const files = await readdir(instanceDir).catch(() => [] as string[]);
+      const dateStr = new Date().toISOString().replace('T', ' ').slice(0, 19) + ' UTC';
+      let instanceDeletedAny = false;
+      for (const fname of files) {
+        if (!fname.endsWith('.json') || fname.endsWith('.deleted.json')) continue;
+        const destName      = fname.slice(0, -5);
+        const changelogPath = join(instanceDir, `${destName}.changelog.md`);
+        const prev = existsSync(changelogPath) ? await readFile(changelogPath, 'utf-8') : '';
+        await writeFile(changelogPath,
+          `## Deleted by refresh at ${dateStr} (destination service instance no longer exists in CF)\n\n` + prev,
+          'utf-8');
+        await rename(join(instanceDir, fname), join(instanceDir, `${destName}.deleted.json`));
+        deleted++;
+        instanceDeletedAny = true;
+      }
+      if (instanceDeletedAny) {
+        logger.info({ spaceKey, instanceDir: instEnt.name }, 'Destination service instance removed from CF — destinations marked deleted');
+      }
+    }
+  }
+
   if (spaceInstances.length === 0) {
     logger.info({ todos: todos.length }, 'No destination service instances found in spaces with manageDest=true');
-    return { created, updated, deleted, errors: issues, obsoleteInstances };
+    return { created, updated, deleted, errors: issues };
   }
 
   const { orgs: keyStore, planGuids: instancePlanGuids } = await loadKeyStore();
   const tokenStore    = await loadTokenStore();
   const cfLoginFailed = new Set<string>();
   let spaceReceived = 0;
+  const totalInstances = spaceInstances.length;
 
-  // Group instances by space (region/subdomain/spaceId) so progress advances once per space
-  const instancesBySpace = new Map<string, typeof spaceInstances>();
-  for (const inst of spaceInstances) {
-    const key = `${inst.region}/${inst.subdomain}/${inst.spaceName}`;
-    const arr = instancesBySpace.get(key) ?? [];
-    arr.push(inst);
-    instancesBySpace.set(key, arr);
-  }
-  // Order by todos so progress follows the space order
-  const spaceKeys = todos.map(t => `${t.region}/${t.subdomain}/${t.spaceName}`).filter(k => instancesBySpace.has(k));
+  // Emit initial instance-progress signal so the caller knows the total
+  onInstProgress?.(0, totalInstances, 'starting');
 
   // ── Step B+C: resolve credential and fetch instance destinations ───────────
-  for (const spaceKey of spaceKeys) {
-    const instsForSpace = instancesBySpace.get(spaceKey) ?? [];
-    done++;
-    for (const inst of instsForSpace) {
+  for (const inst of spaceInstances) {
     const label = `${inst.region}/${inst.subdomain}/${inst.spaceName}/${inst.name}`;
-    onProgress?.(done, todos.length, label, spaceReceived);
+
+    onProgress?.(done + 1, todos.length, label, spaceReceived);
+    onInstProgress?.(done, totalInstances, inst.name);
 
     // Resolve credentials specifically for this instance GUID (not the org-level instance)
     const tokenResult = await resolveInstanceToken(inst.region, inst.guid, inst.name, keyStore, tokenStore, cfLoginFailed, label);
     if ('error' in tokenResult) {
-      if (tokenResult.error.startsWith('No service key found for instance')) {
-        obsoleteInstances++;
-      } else {
-        issues.push(`${label}: ${tokenResult.error}`);
-      }
+      issues.push(`${label}: ${tokenResult.error}`);
+      done++;
+      onInstProgress?.(done, totalInstances, inst.name);
       continue;
     }
+
     const { accessToken, credential } = tokenResult;
 
     const instanceDir = join(LOCAL_DEST_DIR, inst.region, inst.subdomain, inst.spaceName, `${inst.guid}_${inst.name}`);
@@ -1469,8 +1563,9 @@ export async function refreshSpaceDestinations(
         issues.push(`${label}: ${String(err2)}`);
       }
     }
-    } // end for inst of instsForSpace
-  } // end for spaceKey of spaceKeys
+    done++;
+    onInstProgress?.(done, totalInstances, inst.name);
+  } // end for inst of spaceInstances
 
   await saveKeyStore(keyStore, instancePlanGuids);
   await saveTokenStore(tokenStore);
@@ -1494,7 +1589,7 @@ export async function refreshSpaceDestinations(
     emit('dest', { ts: Date.now() });
   }
 
-  return { created, updated, deleted, errors: issues, obsoleteInstances };
+  return { created, updated, deleted, errors: issues };
 }
 
 export async function saveInstanceDestinationEntry(
@@ -1724,7 +1819,54 @@ export async function countDestinationFiles(): Promise<number> {
   }
 }
 
-// ─── Destination API write (PUT with POST fallback) ──────────────────────────
+// ─── Destination API write (PUT with POST fallback) and delete ───────────────
+
+async function deleteFromDestinationApi(
+  region:    string,
+  subdomain: string,
+  name:      string,
+): Promise<void> {
+  const allSas = await readSubaccounts();
+  const sa     = allSas.find(s => s.region === region && s.subdomain === subdomain);
+  if (!sa?.org?.orgId) {
+    throw new Error(`No CF org found for ${region}/${subdomain} — cannot delete from Destination API`);
+  }
+
+  const orgId    = sa.org.orgId;
+  const orgName  = sa.org.orgName ?? '';
+  const location = `${region}/${subdomain}/${name}`;
+
+  const { orgs: keyStore, planGuids } = await loadKeyStore();
+  const tokenStore   = await loadTokenStore();
+  const cfLoginFailed = new Set<string>();
+
+  const tokenResult = await resolveToken(region, orgId, orgName, keyStore, tokenStore, cfLoginFailed, planGuids, location);
+  await saveKeyStore(keyStore, planGuids);
+  await saveTokenStore(tokenStore);
+
+  if ('error' in tokenResult) {
+    throw new Error(`Cannot authenticate to Destination API for ${region}/${subdomain}: ${tokenResult.error}`);
+  }
+
+  await withDestApiRetry(region, orgId, orgName, keyStore, tokenStore, cfLoginFailed, planGuids, location, tokenResult,
+    async (auth) => {
+      const url = `${auth.credential.uri}/destination-configuration/v1/subaccountDestinations/${encodeURIComponent(name)}`;
+      const res = await fetchWithRateLimit(() => fetch(url, {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${auth.accessToken}` },
+      }), url);
+      // 404 = not in BTP (already absent); treat as success
+      if (res.ok || res.status === 404) {
+        logger.debug({ location, status: res.status }, 'Destination deleted from Destination API');
+        return;
+      }
+      const errText = await res.text().catch(() => '');
+      throw new Error(`Destination API DELETE failed: HTTP ${res.status}: ${errText.slice(0, 300)}`);
+    });
+
+  await saveKeyStore(keyStore, planGuids);
+  await saveTokenStore(tokenStore);
+}
 
 async function pushToDestinationApi(
   region:    string,
@@ -1872,6 +2014,10 @@ export async function deleteDestinationEntry(
 ): Promise<void> {
   const { jsonPath, changelogPath } = guardDestPath(region, subdomain, name);
   if (!existsSync(jsonPath)) throw Object.assign(new Error('Destination not found'), { status: 404 });
+
+  // Delete from BTP Destination Service first; propagate error if it fails
+  await deleteFromDestinationApi(region, subdomain, name);
+
   const dateStr = new Date().toISOString().replace('T', ' ').slice(0, 19) + ' UTC';
   const entry   = `## [Manual] destination deleted by <${username}> at ${dateStr}\n\n`;
   const prev    = existsSync(changelogPath) ? await readFile(changelogPath, 'utf-8') : '';
@@ -1888,9 +2034,40 @@ export async function deleteInstanceDestinationEntry(
   const { jsonPath, changelogPath, instanceDir } = await guardSpaceDestPath(region, subdomain, spaceName, instanceGuid, name);
   if (!existsSync(jsonPath)) throw Object.assign(new Error('Destination not found'), { status: 404 });
   // resolve instanceName from directory name ({guid}_{instanceName})
-  const dirBasename  = instanceDir.split(sep).pop() ?? '';
+  const dirBasename   = instanceDir.split(sep).pop() ?? '';
   const underscoreIdx = dirBasename.indexOf('_');
-  const instanceName = underscoreIdx >= 0 ? dirBasename.slice(underscoreIdx + 1) : dirBasename;
+  const instanceName  = underscoreIdx >= 0 ? dirBasename.slice(underscoreIdx + 1) : dirBasename;
+  const location      = `${region}/${subdomain}/${spaceName}/${instanceName}/${name}`;
+
+  // Delete from BTP instance Destination Service first; propagate error if it fails
+  const { orgs: keyStore, planGuids } = await loadKeyStore();
+  const tokenStore    = await loadTokenStore();
+  const cfLoginFailed = new Set<string>();
+
+  const tokenResult = await resolveInstanceToken(region, instanceGuid, instanceName, keyStore, tokenStore, cfLoginFailed, location);
+  await saveKeyStore(keyStore, planGuids);
+  await saveTokenStore(tokenStore);
+  if ('error' in tokenResult) throw new Error(`Cannot authenticate: ${tokenResult.error}`);
+
+  await withDestApiRetry(region, instanceGuid, instanceName, keyStore, tokenStore, cfLoginFailed, planGuids, location, tokenResult,
+    async (auth) => {
+      const url = `${auth.credential.uri}/destination-configuration/v1/instanceDestinations/${encodeURIComponent(name)}`;
+      const res = await fetchWithRateLimit(() => fetch(url, {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${auth.accessToken}` },
+      }), url);
+      // 404 = not in BTP (already absent); treat as success
+      if (res.ok || res.status === 404) {
+        logger.debug({ location, status: res.status }, 'Instance destination deleted from Destination API');
+        return;
+      }
+      const errText = await res.text().catch(() => '');
+      throw new Error(`Instance Destination API DELETE failed: HTTP ${res.status}: ${errText.slice(0, 300)}`);
+    });
+
+  await saveKeyStore(keyStore, planGuids);
+  await saveTokenStore(tokenStore);
+
   const dateStr = new Date().toISOString().replace('T', ' ').slice(0, 19) + ' UTC';
   const entry   = `## [Manual] destination deleted by <${username}> at ${dateStr}\n\n`;
   const prev    = existsSync(changelogPath) ? await readFile(changelogPath, 'utf-8') : '';

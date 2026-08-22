@@ -1198,7 +1198,7 @@ export default function SubaccountDestModal({ org, allNames, initialName, initia
   const [isLoadingChangelog, setIsLoadingChangelog] = useState(false);
 
   // Per-subaccount refresh progress
-  type SubProgress = { type: 'refreshing' | 'done' | 'error'; created?: number; updated?: number; deleted?: number; received?: number; errors?: string[] };
+  type SubProgress = { type: 'refreshing' | 'done' | 'error'; created?: number; updated?: number; deleted?: number; received?: number; errors?: string[]; current?: number; total?: number; progressName?: string };
   const [subProgress, setSubProgress] = useState<SubProgress | null>(null);
   const subProgressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -1619,6 +1619,18 @@ export default function SubaccountDestModal({ org, allNames, initialName, initia
   async function handleRefresh() {
     if (subProgressTimerRef.current) clearTimeout(subProgressTimerRef.current);
     setSubProgress({ type: 'refreshing' });
+
+    // Subscribe to inst-progress SSE events for this subaccount so the banner shows per-instance progress
+    const sse = new EventSource('/api/events?dest=1');
+    sse.addEventListener('update', (e: MessageEvent) => {
+      try {
+        const data = JSON.parse(e.data as string) as { type?: string; scope?: string; region?: string; subdomain?: string; current?: number; total?: number; name?: string };
+        if (data.type === 'inst-progress' && data.scope === 'subaccount' && data.region === org.region && data.subdomain === org.subdomain) {
+          setSubProgress(prev => ({ ...(prev ?? { type: 'refreshing' }), type: 'refreshing', current: data.current, total: data.total, progressName: data.name }));
+        }
+      } catch { /* ignore */ }
+    });
+
     try {
       const res  = await fetch(`/api/destinations/${enc(org.region)}/${enc(org.subdomain)}?force=1`);
       const json = await res.json() as { ok: boolean; names: string[]; refreshed: boolean; errors: string[]; created?: number; updated?: number; deleted?: number; received?: number };
@@ -1638,6 +1650,8 @@ export default function SubaccountDestModal({ org, allNames, initialName, initia
       subProgressTimerRef.current = setTimeout(() => setSubProgress(null), 3000);
     } catch (err) {
       setSubProgress({ type: 'error', errors: [String(err)] });
+    } finally {
+      sse.close();
     }
   }
 
@@ -1821,11 +1835,20 @@ export default function SubaccountDestModal({ org, allNames, initialName, initia
             : subProgress.type === 'done' ? 'bg-green-500/5 border-green-500/20 text-green-700 dark:text-green-400'
             : 'bg-muted/30 border-border text-muted-foreground'
           }`}>
-            {subProgress.type === 'refreshing' && (
+            {subProgress.type === 'refreshing' && subProgress.total != null ? (
+              <div className="absolute bottom-0 left-0 h-0.5 bg-primary/40 w-full">
+                <div
+                  className="h-full bg-primary transition-all duration-300"
+                  style={{ width: `${Math.round(((subProgress.current ?? 0) / subProgress.total) * 100)}%` }}
+                />
+              </div>
+            ) : subProgress.type === 'refreshing' ? (
               <div className="absolute bottom-0 left-0 h-0.5 bg-primary/40 animate-pulse w-full" />
-            )}
+            ) : null}
             <span className="text-center">
-              {subProgress.type === 'refreshing' && 'Refreshing subaccount destinations…'}
+              {subProgress.type === 'refreshing' && subProgress.total != null
+                ? `Refreshing ${subProgress.current ?? 0}/${subProgress.total} — ${subProgress.progressName ?? '…'}`
+                : subProgress.type === 'refreshing' && 'Refreshing subaccount destinations…'}
               {subProgress.type === 'done' && (
                 (subProgress.created ?? 0) === 0 && (subProgress.updated ?? 0) === 0 && (subProgress.deleted ?? 0) === 0
                   ? 'Refreshed — no change'

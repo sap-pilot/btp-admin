@@ -29,7 +29,7 @@ interface RefreshProgress {
   deleted?:           number;
   issues?:            string[];
   errors?:            string[];
-  obsoleteInstances?: number;
+
 }
 
 interface Buckets { generic: string[]; s4: string[]; cep: string[]; others: string[] }
@@ -584,9 +584,7 @@ export default function DestinationOverview() {
         } else {
           const hasErrs   = (progress.issues?.length ?? 0) > 0;
           const errNote   = hasErrs ? ` — ${progress.issues!.length} warning${progress.issues!.length !== 1 ? 's' : ''}` : '';
-          const obsolete  = progress.obsoleteInstances ?? 0;
-          const obsNote   = obsolete > 0 ? `, ${obsolete} obsolete instance${obsolete !== 1 ? 's' : ''} (no service key)` : '';
-          msg = `Refreshed ${progress.total} subaccounts/spaces, received ${progress.received} destinations, created ${progress.created ?? 0}, updated ${progress.updated ?? 0}, deleted ${progress.deleted ?? 0}${obsNote}${errNote}`;
+          msg = `Refreshed ${progress.total} subaccounts/spaces, received ${progress.received} destinations, created ${progress.created ?? 0}, updated ${progress.updated ?? 0}, deleted ${progress.deleted ?? 0}${errNote}`;
         }
 
         return (
