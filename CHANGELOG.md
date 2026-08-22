@@ -5,11 +5,11 @@
 ### Added
 - **Test RFC Destination** — live RFC function call in the **Test** tab for `Type=RFC` destinations:
   - RFC function name input (auto-uppercased) with suggestion dropdown; IMPORT parameter key/value rows; EXPORT/TABLE results as formatted JSON
-  - Transport: Node.js converts the stored JCo properties to BTP destination format and sends them to `btp-admin-sidecar`; the sidecar (TomEE + SAP JCo) creates a subaccount-level destination in its bound `btp-admin-dest` instance then calls `JCoDestinationManager.getDestination()` via the Kotyo provider, which handles Cloud Connector tunneling natively on port 20001
+  - Transport: Node.js copies the stored JCo properties verbatim (no field-name conversion) into an instance-level destination in the bound `btp-admin-dest` service instance via `POST /destination-configuration/v1/instanceDestinations`, then sends only the generated destination name to `btp-admin-sidecar`; the sidecar calls `JCoDestinationManager.getDestination(name)` via the Kotyo provider, which resolves the instance destination from the same `btp-admin-dest` binding and handles Cloud Connector tunneling natively on port 20001
   - `BasicAuthentication` and `PrincipalPropagation`; only `OnPremise` proxy type supported
   - New endpoints: `POST /api/destinations/:region/:subdomain/:name/test-rfc` and `…/spaces/:spaceName/instances/:instanceGuid/:name/test-rfc`
   - Requires `btp-admin-sidecar` MTA module — see README for sidecar rebuild steps
-- **Test Destination** — live HTTP request builder in the **Test** tab of the Subaccount Destinations modal:
+- **Test HTTP Destination** — live HTTP request builder in the **Test** tab of the Subaccount Destinations modal:
   - **Internet destinations** — supports `NoAuthentication` and `BasicAuthentication`; unsupported auth types (OAuth2, SAML, etc.) return a clear error message
   - **OnPremise destinations** — routes requests through the SAP Connectivity Service HTTP forward proxy (Cloud Connector); supports all auth types including **PrincipalPropagation** (PP) via a `jwt-bearer` token exchange that embeds user identity in the `Proxy-Authorization` token; `SAP-Connectivity-Authentication` header is intentionally omitted to prevent the ABAP ICM JWT handler from intercepting the request before the SCC-generated PP X.509 certificate can authenticate
   - **`sap-client` forwarding** — when the destination has a `sap-client` property, the header `sap-client: <value>` is included in the outgoing test request so the ABAP backend routes to the correct client
