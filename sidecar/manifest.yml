@@ -1,0 +1,17 @@
+applications:
+  - name: btp-admin-sidecar
+    buildpack: sap_java_buildpack_jakarta
+    memory: 1G
+    disk_quota: 2G
+    path: btp-admin-sidecar.war
+    ssh-enabled: true
+    command: ~
+    health-check-type: http
+    health-check-http-endpoint: /ping
+    env:
+      TARGET_RUNTIME: tomee
+      USE_JCO: true
+    services:
+      - btp-admin-xsuaa
+      - btp-admin-conn
+      - btp-admin-dest

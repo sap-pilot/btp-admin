@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import {
-  ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown, CheckSquare, Download, Eye, EyeOff, GitCompare, Lock, Maximize2, Minimize2, PanelLeft, Plus, RefreshCw, RotateCcw, Save, Search, Send, Square, Trash2, Upload, X,
+  ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown, CheckSquare, Copy, Download, Eye, EyeOff, GitCompare, Lock, Maximize2, Minimize2, PanelLeft, Plus, RefreshCw, RotateCcw, Save, Search, Send, Square, Trash2, Upload, X,
 } from 'lucide-react';
 import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator,
@@ -412,31 +412,181 @@ function ChangelogTab({ changelog, loading }: { changelog: string; loading: bool
 
 interface TestHeader { key: string; value: string }
 
-const MOCK_RESP_HEADERS: TestHeader[] = [
-  { key: 'Content-Type',     value: 'application/json; charset=utf-8' },
-  { key: 'Content-Length',   value: '842' },
-  { key: 'Cache-Control',    value: 'no-cache, no-store' },
-  { key: 'X-Correlation-Id', value: 'a3f8d21c-4b2e-4f9d-b3c1-9e7f2a1b0d4e' },
-  { key: 'Server',           value: 'destinations-service/1.0' },
+interface TestResult {
+  ok:          true;
+  status:      number;
+  statusText:  string;
+  durationMs:  number;
+  headers:     TestHeader[];
+  body:        string;
+}
+interface TestError {
+  ok:     false;
+  error:  string;
+  detail: string;
+  source: 'config' | 'auth' | 'connectivity' | 'network' | 'timeout';
+}
+type TestOutcome = TestResult | TestError;
+
+interface TestTabProps {
+  org:         SubaccountEntry;
+  name:        string;
+  instScope:   { spaceName: string; instanceGuid: string; instanceName: string } | null;
+  editedProps: DestProp[];
+}
+
+// ─── RFC test types ───────────────────────────────────────────────────────────
+interface RfcOutcome {
+  ok: true;
+  durationMs: number;
+  output: Record<string, unknown>;
+}
+interface RfcError {
+  ok: false;
+  error: string;
+  detail: string;
+  source: string;
+}
+type RfcTestOutcome = RfcOutcome | RfcError;
+
+const URI_HISTORY_KEY = 'btp:dest-test-uri-history';
+const URI_SUGGESTIONS = [
+  '/sap/bc/ui2/start_up?sap-statistics=true',
+  '/sap/opu/odata/sap/ESH_SEARCH_SRV/Diagnosis?$format=json&sap-statistics=true',
+  '/sap/opu/odata/sap/UI2/USER_MENU/MenuItems?$format=json',
 ];
 
-const MOCK_RESP_BODY = JSON.stringify(
-  [{ Name: 'API_S4_HTTP_001', Type: 'HTTP', URL: 'https://s4.example.com', Authentication: 'BasicAuthentication' }],
-  null, 2,
-);
+const RFC_HISTORY_KEY = 'btp:dest-test-rfc-history';
+const RFC_PARAMS_KEY  = 'btp:dest-test-rfc-params';
+const RFC_SUGGESTIONS = ['BAPI_USER_GET_DETAIL', 'RFC_SYSTEM_INFO', 'RFC_PING'];
+const RFC_SUGGESTION_DEFAULTS: Record<string, Array<{ key: string; value: string }>> = {
+  'BAPI_USER_GET_DETAIL': [{ key: 'USERNAME', value: '' }],
+};
 
-function TestTab() {
-  const [method,     setMethod]     = useState<HttpMethod>('GET');
-  const [url,        setUrl]        = useState('');
-  const [reqHeaders, setReqHeaders] = useState<TestHeader[]>([{ key: '', value: '' }]);
-  const [body,       setBody]       = useState('');
-  const [vertSplit,  setVertSplit]  = useState(50);
-  const [reqSplit,   setReqSplit]   = useState(45);
-  const [respSplit,  setRespSplit]  = useState(45);
+function loadRfcParamHistory(): Record<string, Array<{ key: string; value: string }>> {
+  try { return JSON.parse(localStorage.getItem(RFC_PARAMS_KEY) ?? '{}') as Record<string, Array<{ key: string; value: string }>>; }
+  catch { return {}; }
+}
+function saveRfcParamHistory(h: Record<string, Array<{ key: string; value: string }>>): void {
+  try { localStorage.setItem(RFC_PARAMS_KEY, JSON.stringify(h)); } catch { /* ignore */ }
+}
 
-  const vertContainerRef = useRef<HTMLDivElement>(null);
-  const reqContainerRef  = useRef<HTMLDivElement>(null);
-  const respContainerRef = useRef<HTMLDivElement>(null);
+function loadUriHistory(): string[] {
+  try { return JSON.parse(localStorage.getItem(URI_HISTORY_KEY) ?? '[]') as string[]; }
+  catch { return []; }
+}
+
+function saveUriHistory(history: string[]): void {
+  try { localStorage.setItem(URI_HISTORY_KEY, JSON.stringify(history)); } catch { /* ignore */ }
+}
+
+function TestTab({ org, name, instScope, editedProps }: TestTabProps) {
+  const isRfc = editedProps.some(p => p.key === 'Type' && p.value === 'RFC');
+
+  const [method,      setMethod]      = useState<HttpMethod>('GET');
+  const [url,         setUrl]         = useState('');
+  const [reqHeaders,  setReqHeaders]  = useState<TestHeader[]>([{ key: '', value: '' }]);
+  const [body,        setBody]        = useState('');
+  const [isSending,   setIsSending]   = useState(false);
+  const [result,      setResult]      = useState<TestOutcome | null>(null);
+  const [formatJson,  setFormatJson]  = useState(false);
+  const [uriHistory,  setUriHistory]  = useState<string[]>(loadUriHistory);
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [vertSplit,   setVertSplit]   = useState(50);
+  const [reqSplit,    setReqSplit]    = useState(45);
+  const [respSplit,   setRespSplit]   = useState(45);
+
+  // RFC-specific state
+  const [rfcName,        setRfcName]        = useState('');
+  const [rfcParams,      setRfcParams]      = useState<TestHeader[]>([{ key: '', value: '' }]);
+  const [rfcResult,      setRfcResult]      = useState<RfcTestOutcome | null>(null);
+  const [rfcHistory,     setRfcHistory]     = useState<string[]>(() => {
+    try { return JSON.parse(localStorage.getItem(RFC_HISTORY_KEY) ?? '[]') as string[]; } catch { return []; }
+  });
+  const [rfcParamHistory, setRfcParamHistory] = useState<Record<string, Array<{ key: string; value: string }>>>(loadRfcParamHistory);
+  const [rfcHistoryOpen, setRfcHistoryOpen] = useState(false);
+
+  const vertContainerRef  = useRef<HTMLDivElement>(null);
+  const reqContainerRef   = useRef<HTMLDivElement>(null);
+  const respContainerRef  = useRef<HTMLDivElement>(null);
+  const uriDropdownRef    = useRef<HTMLDivElement>(null);
+  const rfcDropdownRef    = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!historyOpen) return;
+    function onDown(e: MouseEvent) {
+      if (uriDropdownRef.current && !uriDropdownRef.current.contains(e.target as Node)) {
+        setHistoryOpen(false);
+      }
+    }
+    document.addEventListener('mousedown', onDown);
+    return () => document.removeEventListener('mousedown', onDown);
+  }, [historyOpen]);
+
+  useEffect(() => {
+    if (!rfcHistoryOpen) return;
+    function onDown(e: MouseEvent) {
+      if (rfcDropdownRef.current && !rfcDropdownRef.current.contains(e.target as Node)) {
+        setRfcHistoryOpen(false);
+      }
+    }
+    document.addEventListener('mousedown', onDown);
+    return () => document.removeEventListener('mousedown', onDown);
+  }, [rfcHistoryOpen]);
+
+  function pickUri(u: string) { setUrl(u); setHistoryOpen(false); }
+  function pickRfc(name: string) {
+    setRfcName(name);
+    setRfcHistoryOpen(false);
+    // Restore saved params for this RFC name; suggestion defaults only for RFCs never sent before
+    const saved = rfcParamHistory[name];
+    if (saved !== undefined) {
+      setRfcParams([...saved, { key: '', value: '' }]);
+    } else if (RFC_SUGGESTION_DEFAULTS[name]) {
+      setRfcParams([...RFC_SUGGESTION_DEFAULTS[name]!, { key: '', value: '' }]);
+    } else {
+      setRfcParams([{ key: '', value: '' }]);
+    }
+  }
+
+  function clearHistory() {
+    setUriHistory([]);
+    saveUriHistory([]);
+  }
+
+  function clearRfcHistory() {
+    setRfcHistory([]);
+    setRfcParamHistory({});
+    try {
+      localStorage.setItem(RFC_HISTORY_KEY, '[]');
+      localStorage.removeItem(RFC_PARAMS_KEY);
+    } catch { /* ignore */ }
+  }
+
+  function addRfcParam()  { setRfcParams(p => [...p, { key: '', value: '' }]); }
+  function updateRfcParam(i: number, patch: Partial<TestHeader>) {
+    setRfcParams(p => p.map((r, j) => j === i ? { ...r, ...patch } : r));
+  }
+  function removeRfcParam(i: number) { setRfcParams(p => p.filter((_, j) => j !== i)); }
+
+  const canFormatJson = !!(result?.ok && result.headers.some(
+    h => h.key.toLowerCase() === 'content-type' && h.value.toLowerCase().includes('application/json'),
+  ));
+
+  function displayBody(): string {
+    if (!result) return '';
+    if (!result.ok) return `${result.error}\n\n${result.detail}\n\nSource: ${result.source}`;
+    if (formatJson && canFormatJson) {
+      try { return JSON.stringify(JSON.parse(result.body), null, 2); } catch { /* fall through */ }
+    }
+    return result.body;
+  }
+
+  function rfcDisplayBody(): string {
+    if (!rfcResult) return '';
+    if (!rfcResult.ok) return `${rfcResult.error}\n\n${rfcResult.detail}\n\nSource: ${rfcResult.source}`;
+    try { return JSON.stringify(rfcResult.output, null, 2); } catch { return String(rfcResult.output); }
+  }
 
   const btnBase    = 'inline-flex items-center gap-1.5 px-3 py-1.5 rounded text-xs font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed';
   const btnPrimary = `${btnBase} bg-primary text-primary-foreground hover:bg-primary/90`;
@@ -449,6 +599,66 @@ function TestTab() {
     setReqHeaders(h => h.map((r, j) => j === i ? { ...r, ...patch } : r));
   }
   function removeHeader(i: number) { setReqHeaders(h => h.filter((_, j) => j !== i)); }
+
+  async function handleSend() {
+    setIsSending(true);
+    setResult(null);
+    // Save to history (deduplicated, most-recent first, max 20 user entries)
+    if (url.trim() && !URI_SUGGESTIONS.includes(url.trim())) {
+      const next = [url.trim(), ...uriHistory.filter(u => u !== url.trim())].slice(0, 20);
+      setUriHistory(next);
+      saveUriHistory(next);
+    }
+    try {
+      const apiUrl = instScope
+        ? `/api/destinations/${enc(org.region)}/${enc(org.subdomain)}/spaces/${enc(instScope.spaceName)}/instances/${enc(instScope.instanceGuid)}/${enc(name)}/test`
+        : `/api/destinations/${enc(org.region)}/${enc(org.subdomain)}/${enc(name)}/test`;
+      const res = await fetch(apiUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ method, path: url, headers: reqHeaders.filter(h => h.key), body }),
+      });
+      setResult(await res.json() as TestOutcome);
+    } catch (err) {
+      setResult({ ok: false, error: 'Request failed', detail: err instanceof Error ? err.message : String(err), source: 'network' });
+    } finally {
+      setIsSending(false);
+    }
+  }
+
+  async function handleRfcSend() {
+    setIsSending(true);
+    setRfcResult(null);
+    const trimmedName = rfcName.trim();
+    if (trimmedName) {
+      // Save RFC name to history (deduplicated, suggestions not stored in history)
+      if (!RFC_SUGGESTIONS.includes(trimmedName)) {
+        const next = [trimmedName, ...rfcHistory.filter(u => u !== trimmedName)].slice(0, 20);
+        setRfcHistory(next);
+        try { localStorage.setItem(RFC_HISTORY_KEY, JSON.stringify(next)); } catch { /* ignore */ }
+      }
+      // Always save params so navigate-back respects the last Send state (even if user cleared all params)
+      const filledParams = rfcParams.filter(p => p.key);
+      const nextParamHist = { ...rfcParamHistory, [trimmedName]: filledParams };
+      setRfcParamHistory(nextParamHist);
+      saveRfcParamHistory(nextParamHist);
+    }
+    try {
+      const apiUrl = instScope
+        ? `/api/destinations/${enc(org.region)}/${enc(org.subdomain)}/spaces/${enc(instScope.spaceName)}/instances/${enc(instScope.instanceGuid)}/${enc(name)}/test-rfc`
+        : `/api/destinations/${enc(org.region)}/${enc(org.subdomain)}/${enc(name)}/test-rfc`;
+      const res = await fetch(apiUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ rfcName: rfcName.trim(), importParams: rfcParams.filter(p => p.key) }),
+      });
+      setRfcResult(await res.json() as RfcTestOutcome);
+    } catch (err) {
+      setRfcResult({ ok: false, error: 'Request failed', detail: err instanceof Error ? err.message : String(err), source: 'network' });
+    } finally {
+      setIsSending(false);
+    }
+  }
 
   function startDrag(
     containerRef: React.RefObject<HTMLDivElement | null>,
@@ -477,122 +687,293 @@ function TestTab() {
 
   return (
     <div className="flex flex-col h-full">
-
-      {/* URL bar (always visible) */}
-      <div className="flex items-center gap-2 px-4 py-3 border-b border-border shrink-0">
-        <select
-          value={method}
-          onChange={e => setMethod(e.target.value as HttpMethod)}
-          className="h-8 px-2 text-xs border border-border rounded bg-background text-foreground outline-none focus:ring-1 focus:ring-ring font-mono"
-        >
-          {(['GET', 'POST', 'PUT', 'DELETE', 'PATCH'] as HttpMethod[]).map(m => (
-            <option key={m} value={m}>{m}</option>
-          ))}
-        </select>
-        <input
-          type="text"
-          value={url}
-          onChange={e => setUrl(e.target.value)}
-          placeholder="https://example.com/api/..."
-          className="flex-1 h-8 px-3 text-xs border border-border rounded bg-background text-foreground outline-none focus:ring-1 focus:ring-ring font-mono placeholder:text-muted-foreground/50"
-        />
-        <button disabled title="Not implemented yet" className={btnPrimary}>
-          <Send className="h-3.5 w-3.5" />
-          Send
-        </button>
-      </div>
-
-      {/* Vertically adjustable Request / Response split */}
-      <div ref={vertContainerRef} className="flex flex-col flex-1 min-h-0">
-
-        {/* ── Request (top, vertSplit %) ── */}
-        <div style={{ height: `${vertSplit}%` }} className="flex flex-col min-h-0 overflow-hidden">
-          <div ref={reqContainerRef} className="flex flex-1 min-h-0">
-            <div style={{ width: `${reqSplit}%` }} className="flex flex-col min-w-0">
-              <div className={paneHdr}>Request Headers</div>
-              <div className="flex-1 overflow-auto p-3 space-y-1.5">
-                {reqHeaders.map((h, i) => (
-                  <div key={i} className="flex items-center gap-2">
-                    <input
-                      value={h.key}
-                      onChange={e => updateHeader(i, { key: e.target.value })}
-                      placeholder="Name"
-                      className="w-36 h-7 px-2 text-xs border border-border rounded bg-background font-mono outline-none focus:ring-1 focus:ring-ring placeholder:text-muted-foreground/40"
-                    />
-                    <input
-                      value={h.value}
-                      onChange={e => updateHeader(i, { value: e.target.value })}
-                      placeholder="Value"
-                      className="flex-1 h-7 px-2 text-xs border border-border rounded bg-background font-mono outline-none focus:ring-1 focus:ring-ring placeholder:text-muted-foreground/40"
-                    />
-                    <button onClick={() => removeHeader(i)} className="text-muted-foreground/40 hover:text-destructive transition-colors shrink-0">
-                      <X className="h-3.5 w-3.5" />
-                    </button>
-                  </div>
-                ))}
-                <button onClick={addHeader} className="inline-flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors mt-1">
-                  <Plus className="h-3.5 w-3.5" />
-                  Add header
-                </button>
-              </div>
-            </div>
-
-            <div onMouseDown={startDrag(reqContainerRef, setReqSplit, 'x')} className={colDrag} />
-
-            <div className="flex flex-col flex-1 min-w-0">
-              <div className={paneHdr}>Request Body</div>
-              <textarea
-                value={body}
-                onChange={e => setBody(e.target.value)}
-                placeholder='{"key": "value"}'
-                className="flex-1 p-3 text-xs font-mono bg-transparent outline-none resize-none placeholder:text-muted-foreground/40 text-foreground"
+    {isRfc ? (
+      <>
+        {/* RFC function name bar */}
+        <div className="flex items-center gap-2 px-4 py-3 border-b border-border shrink-0">
+          <div ref={rfcDropdownRef} className="relative flex-1">
+            <div className="flex items-center h-8 border border-border rounded bg-background focus-within:ring-1 focus-within:ring-ring overflow-hidden">
+              <input
+                type="text"
+                value={rfcName}
+                onChange={e => setRfcName(e.target.value.toUpperCase())}
+                onKeyDown={e => { if (e.key === 'Enter' && !isSending) void handleRfcSend(); }}
+                placeholder="FUNCTION_MODULE_NAME"
+                className="flex-1 h-full px-3 text-xs bg-transparent text-foreground outline-none font-mono placeholder:text-muted-foreground/50"
               />
+              <button
+                type="button"
+                onClick={() => setRfcHistoryOpen(o => !o)}
+                className="h-full px-2 text-muted-foreground/60 hover:text-foreground hover:bg-muted/30 transition-colors border-l border-border shrink-0"
+                title="RFC name history"
+              >
+                <ChevronDown className={`h-3 w-3 transition-transform ${rfcHistoryOpen ? 'rotate-180' : ''}`} />
+              </button>
+            </div>
+            {rfcHistoryOpen && (
+              <div className="absolute left-0 right-0 top-full mt-0.5 z-50 bg-popover border border-border rounded shadow-lg overflow-hidden max-h-64 overflow-y-auto">
+                {rfcHistory.length > 0 && (
+                  <>
+                    <div className="px-2.5 py-1 text-[10px] font-semibold text-muted-foreground uppercase tracking-wide bg-muted/20">History</div>
+                    {rfcHistory.map((u, i) => (
+                      <button key={i} type="button" onClick={() => pickRfc(u)}
+                        className="w-full text-left px-3 py-1.5 text-xs font-mono text-foreground hover:bg-muted/40 transition-colors truncate block" title={u}>
+                        {u}
+                      </button>
+                    ))}
+                    <div className="border-t border-border" />
+                  </>
+                )}
+                <div className="px-2.5 py-1 text-[10px] font-semibold text-muted-foreground uppercase tracking-wide bg-muted/20">Suggestions</div>
+                {RFC_SUGGESTIONS.map((u, i) => (
+                  <button key={i} type="button" onClick={() => pickRfc(u)}
+                    className="w-full text-left px-3 py-1.5 text-xs font-mono text-foreground hover:bg-muted/40 transition-colors truncate block" title={u}>
+                    {u}
+                  </button>
+                ))}
+                {rfcHistory.length > 0 && (
+                  <>
+                    <div className="border-t border-border" />
+                    <button type="button" onClick={clearRfcHistory}
+                      className="w-full text-left px-3 py-1.5 text-xs text-muted-foreground hover:text-destructive hover:bg-muted/30 transition-colors flex items-center gap-1.5">
+                      <Trash2 className="h-3 w-3 shrink-0" />
+                      Clear history
+                    </button>
+                  </>
+                )}
+              </div>
+            )}
+          </div>
+          <button onClick={() => void handleRfcSend()} disabled={isSending} className={btnPrimary}>
+            <Send className="h-3.5 w-3.5" />
+            {isSending ? 'Sending…' : 'Send'}
+          </button>
+        </div>
+
+        {/* RFC params + response */}
+        <div ref={vertContainerRef} className="flex flex-col flex-1 min-h-0">
+          <div style={{ height: `${vertSplit}%` }} className="flex flex-col min-h-0 overflow-hidden">
+            <div className={paneHdr}>Input Parameters</div>
+            <div className="flex-1 overflow-auto p-3 space-y-1.5">
+              {rfcParams.map((p, i) => (
+                <div key={i} className="flex items-center gap-2">
+                  <input value={p.key} onChange={e => updateRfcParam(i, { key: e.target.value.toUpperCase() })}
+                    placeholder="PARAM_NAME"
+                    className="w-40 h-7 px-2 text-xs border border-border rounded bg-background font-mono outline-none focus:ring-1 focus:ring-ring placeholder:text-muted-foreground/40" />
+                  <input value={p.value} onChange={e => updateRfcParam(i, { value: e.target.value })}
+                    placeholder="Value"
+                    className="flex-1 h-7 px-2 text-xs border border-border rounded bg-background font-mono outline-none focus:ring-1 focus:ring-ring placeholder:text-muted-foreground/40" />
+                  <button onClick={() => removeRfcParam(i)} className="text-muted-foreground/40 hover:text-destructive transition-colors shrink-0">
+                    <X className="h-3.5 w-3.5" />
+                  </button>
+                </div>
+              ))}
+              <button onClick={addRfcParam} className="inline-flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors mt-1">
+                <Plus className="h-3.5 w-3.5" />
+                Add parameter
+              </button>
+            </div>
+          </div>
+
+          <div onMouseDown={startDrag(vertContainerRef, setVertSplit, 'y')} className={rowDrag} />
+
+          <div className="flex flex-col flex-1 min-h-0 overflow-hidden">
+            <div className={`${paneHdr} ${rfcResult && !rfcResult.ok ? 'text-destructive' : ''}`}>
+              {rfcResult && !rfcResult.ok ? 'Error' : 'Response'}
+              {rfcResult?.ok && (
+                <span className="ml-auto text-[10px] font-mono text-muted-foreground normal-case tracking-normal font-normal">
+                  {rfcResult.durationMs} ms
+                </span>
+              )}
+            </div>
+            <div className="flex-1 relative">
+              {!rfcResult && !isSending && (
+                <div className="flex items-center justify-center h-full text-xs text-muted-foreground/50">No response yet</div>
+              )}
+              {isSending && (
+                <div className="flex items-center justify-center h-full text-xs text-muted-foreground">Sending…</div>
+              )}
+              {rfcResult && (
+                <textarea readOnly value={rfcDisplayBody()}
+                  className="absolute inset-0 w-full h-full p-3 text-xs font-mono bg-muted/5 outline-none resize-none text-foreground leading-relaxed" />
+              )}
             </div>
           </div>
         </div>
+      </>
+    ) : (
+      <>
+        {/* URL bar */}
+        <div className="flex items-center gap-2 px-4 py-3 border-b border-border shrink-0">
+          <select
+            value={method}
+            onChange={e => setMethod(e.target.value as HttpMethod)}
+            className="h-8 px-2 text-xs border border-border rounded bg-background text-foreground outline-none focus:ring-1 focus:ring-ring font-mono"
+          >
+            {(['GET', 'POST', 'PUT', 'DELETE', 'PATCH'] as HttpMethod[]).map(m => (
+              <option key={m} value={m}>{m}</option>
+            ))}
+          </select>
 
-        {/* Vertical (row) drag handle between Request and Response */}
-        <div onMouseDown={startDrag(vertContainerRef, setVertSplit, 'y')} className={rowDrag} />
+          {/* URI input with history dropdown */}
+          <div ref={uriDropdownRef} className="relative flex-1">
+            <div className="flex items-center h-8 border border-border rounded bg-background focus-within:ring-1 focus-within:ring-ring overflow-hidden">
+              <input
+                type="text"
+                value={url}
+                onChange={e => setUrl(e.target.value)}
+                onKeyDown={e => { if (e.key === 'Enter' && !isSending) void handleSend(); }}
+                placeholder="/api/v1/..."
+                className="flex-1 h-full px-3 text-xs bg-transparent text-foreground outline-none font-mono placeholder:text-muted-foreground/50"
+              />
+              <button
+                type="button"
+                onClick={() => setHistoryOpen(o => !o)}
+                className="h-full px-2 text-muted-foreground/60 hover:text-foreground hover:bg-muted/30 transition-colors border-l border-border shrink-0"
+                title="URI history"
+              >
+                <ChevronDown className={`h-3 w-3 transition-transform ${historyOpen ? 'rotate-180' : ''}`} />
+              </button>
+            </div>
 
-        {/* ── Response (bottom, remaining space) ── */}
-        <div className="flex flex-col flex-1 min-h-0 overflow-hidden">
-          <div ref={respContainerRef} className="flex flex-1 min-h-0">
-            <div style={{ width: `${respSplit}%` }} className="flex flex-col min-w-0">
-              <div className={paneHdr}>
-                Response Headers
-                <div className="ml-auto flex items-center gap-2 normal-case tracking-normal font-normal">
-                  <span className="text-[10px] font-mono text-muted-foreground">2910 ms</span>
-                  <span className="text-[10px] font-mono font-semibold text-green-600 dark:text-green-400">[200] OK</span>
+            {historyOpen && (
+              <div className="absolute left-0 right-0 top-full mt-0.5 z-50 bg-popover border border-border rounded shadow-lg overflow-hidden max-h-64 overflow-y-auto">
+                {uriHistory.length > 0 && (
+                  <>
+                    <div className="px-2.5 py-1 text-[10px] font-semibold text-muted-foreground uppercase tracking-wide bg-muted/20">History</div>
+                    {uriHistory.map((u, i) => (
+                      <button key={i} type="button" onClick={() => pickUri(u)}
+                        className="w-full text-left px-3 py-1.5 text-xs font-mono text-foreground hover:bg-muted/40 transition-colors truncate block" title={u}>
+                        {u}
+                      </button>
+                    ))}
+                    <div className="border-t border-border" />
+                  </>
+                )}
+                <div className="px-2.5 py-1 text-[10px] font-semibold text-muted-foreground uppercase tracking-wide bg-muted/20">Suggestions</div>
+                {URI_SUGGESTIONS.map((u, i) => (
+                  <button key={i} type="button" onClick={() => pickUri(u)}
+                    className="w-full text-left px-3 py-1.5 text-xs font-mono text-foreground hover:bg-muted/40 transition-colors truncate block" title={u}>
+                    {u}
+                  </button>
+                ))}
+                {uriHistory.length > 0 && (
+                  <>
+                    <div className="border-t border-border" />
+                    <button type="button" onClick={clearHistory}
+                      className="w-full text-left px-3 py-1.5 text-xs text-muted-foreground hover:text-destructive hover:bg-muted/30 transition-colors flex items-center gap-1.5">
+                      <Trash2 className="h-3 w-3 shrink-0" />
+                      Clear history
+                    </button>
+                  </>
+                )}
+              </div>
+            )}
+          </div>
+
+          <button onClick={() => void handleSend()} disabled={isSending} className={btnPrimary}>
+            <Send className="h-3.5 w-3.5" />
+            {isSending ? 'Sending…' : 'Send'}
+          </button>
+        </div>
+
+        {/* Vertically adjustable Request / Response split */}
+        <div ref={vertContainerRef} className="flex flex-col flex-1 min-h-0">
+
+          {/* ── Request (top, vertSplit %) ── */}
+          <div style={{ height: `${vertSplit}%` }} className="flex flex-col min-h-0 overflow-hidden">
+            <div ref={reqContainerRef} className="flex flex-1 min-h-0">
+              <div style={{ width: `${reqSplit}%` }} className="flex flex-col min-w-0">
+                <div className={paneHdr}>Request Headers</div>
+                <div className="flex-1 overflow-auto p-3 space-y-1.5">
+                  {reqHeaders.map((h, i) => (
+                    <div key={i} className="flex items-center gap-2">
+                      <input value={h.key} onChange={e => updateHeader(i, { key: e.target.value })} placeholder="Name"
+                        className="w-36 h-7 px-2 text-xs border border-border rounded bg-background font-mono outline-none focus:ring-1 focus:ring-ring placeholder:text-muted-foreground/40" />
+                      <input value={h.value} onChange={e => updateHeader(i, { value: e.target.value })} placeholder="Value"
+                        className="flex-1 h-7 px-2 text-xs border border-border rounded bg-background font-mono outline-none focus:ring-1 focus:ring-ring placeholder:text-muted-foreground/40" />
+                      <button onClick={() => removeHeader(i)} className="text-muted-foreground/40 hover:text-destructive transition-colors shrink-0">
+                        <X className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
+                  ))}
+                  <button onClick={addHeader} className="inline-flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors mt-1">
+                    <Plus className="h-3.5 w-3.5" />
+                    Add header
+                  </button>
                 </div>
               </div>
-              <div className="flex-1 overflow-auto">
-                <table className="w-full text-xs border-collapse">
-                  <tbody>
-                    {MOCK_RESP_HEADERS.map(h => (
-                      <tr key={h.key} className="hover:bg-muted/20">
-                        <td className="px-3 py-1.5 border-b border-border font-mono text-muted-foreground whitespace-nowrap">{h.key}</td>
-                        <td className="px-3 py-1.5 border-b border-border font-mono break-all">{h.value}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+
+              <div onMouseDown={startDrag(reqContainerRef, setReqSplit, 'x')} className={colDrag} />
+
+              <div className="flex flex-col flex-1 min-w-0">
+                <div className={paneHdr}>Request Body</div>
+                <textarea value={body} onChange={e => setBody(e.target.value)} placeholder='{"key": "value"}'
+                  className="flex-1 p-3 text-xs font-mono bg-transparent outline-none resize-none placeholder:text-muted-foreground/40 text-foreground" />
               </div>
             </div>
+          </div>
 
-            <div onMouseDown={startDrag(respContainerRef, setRespSplit, 'x')} className={colDrag} />
+          {/* Vertical (row) drag handle between Request and Response */}
+          <div onMouseDown={startDrag(vertContainerRef, setVertSplit, 'y')} className={rowDrag} />
 
-            <div className="flex flex-col flex-1 min-w-0">
-              <div className={paneHdr}>Response Body</div>
-              <textarea
-                readOnly
-                value={MOCK_RESP_BODY}
-                className="flex-1 p-3 text-xs font-mono bg-muted/5 outline-none resize-none text-foreground leading-relaxed"
-              />
+          {/* ── Response (bottom, remaining space) ── */}
+          <div className="flex flex-col flex-1 min-h-0 overflow-hidden">
+            <div ref={respContainerRef} className="flex flex-1 min-h-0">
+              <div style={{ width: `${respSplit}%` }} className="flex flex-col min-w-0">
+                <div className={paneHdr}>
+                  Response Headers
+                  {result?.ok && (
+                    <div className="ml-auto flex items-center gap-2 normal-case tracking-normal font-normal">
+                      <span className="text-[10px] font-mono text-muted-foreground">{result.durationMs} ms</span>
+                      <span className={`text-[10px] font-mono font-semibold ${result.status < 300 ? 'text-green-600 dark:text-green-400' : result.status < 500 ? 'text-amber-600 dark:text-amber-400' : 'text-destructive'}`}>
+                        [{result.status}] {result.statusText}
+                      </span>
+                    </div>
+                  )}
+                </div>
+                <div className="flex-1 overflow-auto">
+                  {result?.ok && (
+                    <table className="w-full text-xs border-collapse">
+                      <tbody>
+                        {result.headers.map((h, i) => (
+                          <tr key={i} className="hover:bg-muted/20">
+                            <td className="px-3 py-1.5 border-b border-border font-mono text-muted-foreground whitespace-nowrap">{h.key}</td>
+                            <td className="px-3 py-1.5 border-b border-border font-mono break-all">{h.value}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  )}
+                  {!result && !isSending && (
+                    <div className="flex items-center justify-center h-full text-xs text-muted-foreground/50">No response yet</div>
+                  )}
+                  {isSending && (
+                    <div className="flex items-center justify-center h-full text-xs text-muted-foreground">Sending…</div>
+                  )}
+                </div>
+              </div>
+
+              <div onMouseDown={startDrag(respContainerRef, setRespSplit, 'x')} className={colDrag} />
+
+              <div className="flex flex-col flex-1 min-w-0">
+                <div className={`${paneHdr} ${result && !result.ok ? 'text-destructive' : ''}`}>
+                  {result && !result.ok ? 'Error' : 'Response Body'}
+                  <label className={`ml-auto flex items-center gap-1.5 normal-case tracking-normal font-normal select-none ${canFormatJson ? 'cursor-pointer' : 'opacity-35 cursor-not-allowed'}`}>
+                    <input type="checkbox" checked={formatJson} disabled={!canFormatJson}
+                      onChange={e => setFormatJson(e.target.checked)} className="h-3 w-3 accent-primary" />
+                    <span className="text-[10px]">Format JSON</span>
+                  </label>
+                </div>
+                <textarea readOnly value={displayBody()} placeholder="Response will appear here"
+                  className="flex-1 p-3 text-xs font-mono bg-muted/5 outline-none resize-none text-foreground leading-relaxed placeholder:text-muted-foreground/30" />
+              </div>
             </div>
           </div>
-        </div>
 
-      </div>
+        </div>
+      </>
+    )}
     </div>
   );
 }
@@ -807,13 +1188,15 @@ export default function SubaccountDestModal({ org, allNames, initialName, initia
   const [newProps,      setNewProps]      = useState<DestProp[]>(() => structuredClone(DEFAULT_CREATE_PROPS));
   const [isCreatingSave, setIsCreatingSave] = useState(false);
   const [createError,   setCreateError]   = useState('');
+  // null = save to subaccount; set to an instance scope when Copy is triggered from an instance destination
+  const [createScope,   setCreateScope]   = useState<{ spaceName: string; instanceGuid: string; instanceName: string } | null>(null);
 
   // Changelog
   const [changelog,          setChangelog]          = useState('');
   const [isLoadingChangelog, setIsLoadingChangelog] = useState(false);
 
   // Per-subaccount refresh progress
-  type SubProgress = { type: 'refreshing' | 'done' | 'error'; created?: number; updated?: number; deleted?: number; received?: number; errors?: string[] };
+  type SubProgress = { type: 'refreshing' | 'done' | 'error'; created?: number; updated?: number; deleted?: number; received?: number; errors?: string[]; current?: number; total?: number; progressName?: string };
   const [subProgress, setSubProgress] = useState<SubProgress | null>(null);
   const subProgressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -952,6 +1335,19 @@ export default function SubaccountDestModal({ org, allNames, initialName, initia
       if (subProgressTimerRef.current) clearTimeout(subProgressTimerRef.current);
     };
   }, [onClose]);
+
+  // Track body container width to drive left-panel responsive text hiding
+  const [bodyWidth, setBodyWidth] = useState(0);
+  useEffect(() => {
+    const el = bodyRef.current;
+    if (!el) return;
+    setBodyWidth(el.offsetWidth);
+    const obs = new ResizeObserver(entries => {
+      setBodyWidth(entries[0]?.contentRect.width ?? el.offsetWidth);
+    });
+    obs.observe(el);
+    return () => obs.disconnect();
+  }, []);
 
   async function loadDest(name: string) {
     setIsLoading(true);
@@ -1172,15 +1568,27 @@ export default function SubaccountDestModal({ org, allNames, initialName, initia
     if (!name) { setCreateError('Destination name is required'); return; }
     setIsCreatingSave(true); setCreateError('');
     try {
-      const res  = await fetch(`/api/destinations/${enc(org.region)}/${enc(org.subdomain)}/${enc(name)}`, {
+      const url = createScope
+        ? `/api/destinations/${enc(org.region)}/${enc(org.subdomain)}/spaces/${enc(createScope.spaceName)}/instances/${enc(createScope.instanceGuid)}/${enc(name)}`
+        : `/api/destinations/${enc(org.region)}/${enc(org.subdomain)}/${enc(name)}`;
+      const res  = await fetch(url, {
         method:  'PUT',
         headers: { 'Content-Type': 'application/json' },
         body:    JSON.stringify({ data: fromProps(name, newProps), username }),
       });
       const json = await res.json() as { ok: boolean; error?: string };
       if (!json.ok) throw new Error(json.error ?? 'Create failed');
-      setLocalAllNames(prev => [...new Set([...prev, name])].sort());
-      selectDest(name);
+      if (createScope) {
+        setInstanceNames(prev => {
+          const m = new Map(prev);
+          m.set(createScope.instanceGuid, [...new Set([...(m.get(createScope.instanceGuid) ?? []), name])].sort());
+          return m;
+        });
+        loadInstDest(createScope.spaceName, createScope.instanceGuid, createScope.instanceName, name);
+      } else {
+        setLocalAllNames(prev => [...new Set([...prev, name])].sort());
+        selectDest(name);
+      }
       setIsCreating(false);
     } catch (err) {
       setCreateError(err instanceof Error ? err.message : 'Create failed');
@@ -1189,8 +1597,19 @@ export default function SubaccountDestModal({ org, allNames, initialName, initia
 
   function handleCreateClick() {
     setIsCreating(true);
+    setCreateScope(null);
     setNewName('');
     setNewProps(structuredClone(DEFAULT_CREATE_PROPS));
+    setCreateError('');
+    setActiveTab('properties');
+  }
+
+  function handleCopyClick() {
+    setIsCreating(true);
+    setCreateScope(activeInstScope);
+    setNewName(selectedName ? `${selectedName}_COPY` : '_COPY');
+    // editedProps never contains 'Name' (toProps filters it); copy all other props as-is
+    setNewProps(structuredClone(editedProps));
     setCreateError('');
     setActiveTab('properties');
   }
@@ -1198,6 +1617,18 @@ export default function SubaccountDestModal({ org, allNames, initialName, initia
   async function handleRefresh() {
     if (subProgressTimerRef.current) clearTimeout(subProgressTimerRef.current);
     setSubProgress({ type: 'refreshing' });
+
+    // Subscribe to inst-progress SSE events for this subaccount so the banner shows per-instance progress
+    const sse = new EventSource('/api/events?dest=1');
+    sse.addEventListener('update', (e: MessageEvent) => {
+      try {
+        const data = JSON.parse(e.data as string) as { type?: string; scope?: string; region?: string; subdomain?: string; current?: number; total?: number; name?: string };
+        if (data.type === 'inst-progress' && data.scope === 'subaccount' && data.region === org.region && data.subdomain === org.subdomain) {
+          setSubProgress(prev => ({ ...(prev ?? { type: 'refreshing' }), type: 'refreshing', current: data.current, total: data.total, progressName: data.name }));
+        }
+      } catch { /* ignore */ }
+    });
+
     try {
       const res  = await fetch(`/api/destinations/${enc(org.region)}/${enc(org.subdomain)}?force=1`);
       const json = await res.json() as { ok: boolean; names: string[]; refreshed: boolean; errors: string[]; created?: number; updated?: number; deleted?: number; received?: number };
@@ -1217,6 +1648,8 @@ export default function SubaccountDestModal({ org, allNames, initialName, initia
       subProgressTimerRef.current = setTimeout(() => setSubProgress(null), 3000);
     } catch (err) {
       setSubProgress({ type: 'error', errors: [String(err)] });
+    } finally {
+      sse.close();
     }
   }
 
@@ -1227,6 +1660,20 @@ export default function SubaccountDestModal({ org, allNames, initialName, initia
 
   const btnBase    = 'inline-flex items-center gap-1.5 px-2 sm:px-3 py-1.5 rounded text-xs font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed';
   const btnOutline = `${btnBase} border border-border hover:bg-accent hover:text-accent-foreground`;
+
+  // Left panel pixel width — used to decide whether button labels are shown.
+  // showBtnText = true when left panel is at least 700px wide.
+  const leftPanelWidth = showList ? bodyWidth * splitPct / 100 : 0;
+  const showBtnText = leftPanelWidth >= 700;
+
+  // Destination type badges shown in the right panel name bar
+  const destTypeBadge  = editedProps.find(p => p.key === 'Type')?.value ?? '';
+  const proxyTypeBadge = editedProps.find(p => p.key === 'ProxyType')?.value ?? '';
+  const authTypeBadge  = editedProps.find(p => p.key === 'Authentication')?.value ?? '';
+  const authTypeBadgeLabel = authTypeBadge === 'BasicAuthentication' ? 'Basic'
+    : authTypeBadge === 'PrincipalPropagation' ? 'PP'
+    : authTypeBadge;
+
   const exportCount = selectedNames.size;
   const exportTitle = exportCount > 1
     ? `Download ${exportCount} selected destinations as ${org.region}_${org.subdomain}_multi_destinations.json`
@@ -1262,7 +1709,7 @@ export default function SubaccountDestModal({ org, allNames, initialName, initia
           title="Import destination(s) from JSON"
         >
           <Upload className="h-3.5 w-3.5" />
-          {maximized && <span className="ml-1 max-[680px]:hidden">Import</span>}
+          {showBtnText && <span className="ml-1">Import</span>}
         </button>
         <button
           onClick={onExport}
@@ -1271,8 +1718,8 @@ export default function SubaccountDestModal({ org, allNames, initialName, initia
           title={opts.exportTitle}
         >
           <Download className="h-3.5 w-3.5" />
-          {maximized
-            ? <span className="ml-1 max-[680px]:hidden">Export{opts.exportCount > 0 ? ` (${opts.exportCount})` : ''}</span>
+          {showBtnText
+            ? <span className="ml-1">Export{opts.exportCount > 0 ? ` (${opts.exportCount})` : ''}</span>
             : opts.exportCount > 0 ? <span className="text-[10px]">{opts.exportCount}</span> : null
           }
         </button>
@@ -1283,8 +1730,8 @@ export default function SubaccountDestModal({ org, allNames, initialName, initia
           title={compareCount >= 2 ? `Compare ${compareCount} selected destinations` : 'Select 2+ destinations to compare'}
         >
           <GitCompare className="h-3.5 w-3.5" />
-          {maximized
-            ? <span className="ml-1 max-[680px]:hidden">Compare{compareCount > 0 ? ` (${compareCount})` : ''}</span>
+          {showBtnText
+            ? <span className="ml-1">Compare{compareCount > 0 ? ` (${compareCount})` : ''}</span>
             : compareCount > 0 ? <span className="text-[10px]">{compareCount}</span> : null
           }
         </button>
@@ -1295,8 +1742,8 @@ export default function SubaccountDestModal({ org, allNames, initialName, initia
           title={deleteCount > 0 ? `Delete ${deleteCount} selected destination${deleteCount !== 1 ? 's' : ''}` : 'Select destinations to delete'}
         >
           <Trash2 className="h-3.5 w-3.5" />
-          {maximized
-            ? <span className="ml-1 max-[680px]:hidden">Delete{deleteCount > 0 ? ` (${deleteCount})` : ''}</span>
+          {showBtnText
+            ? <span className="ml-1">Delete{deleteCount > 0 ? ` (${deleteCount})` : ''}</span>
             : deleteCount > 0 ? <span className="text-[10px]">{deleteCount}</span> : null
           }
         </button>
@@ -1364,7 +1811,7 @@ export default function SubaccountDestModal({ org, allNames, initialName, initia
               title="Refresh subaccount destinations"
             >
               <RefreshCw className="h-4 w-4" />
-              {maximized && <span className="max-[680px]:hidden">Refresh</span>}
+              {maximized && <span className="max-[1024px]:hidden">Refresh</span>}
             </button>
             <button
               onClick={() => setMaximized(v => !v)}
@@ -1386,11 +1833,20 @@ export default function SubaccountDestModal({ org, allNames, initialName, initia
             : subProgress.type === 'done' ? 'bg-green-500/5 border-green-500/20 text-green-700 dark:text-green-400'
             : 'bg-muted/30 border-border text-muted-foreground'
           }`}>
-            {subProgress.type === 'refreshing' && (
+            {subProgress.type === 'refreshing' && subProgress.total != null ? (
+              <div className="absolute bottom-0 left-0 h-0.5 bg-primary/40 w-full">
+                <div
+                  className="h-full bg-primary transition-all duration-300"
+                  style={{ width: `${Math.round(((subProgress.current ?? 0) / subProgress.total) * 100)}%` }}
+                />
+              </div>
+            ) : subProgress.type === 'refreshing' ? (
               <div className="absolute bottom-0 left-0 h-0.5 bg-primary/40 animate-pulse w-full" />
-            )}
+            ) : null}
             <span className="text-center">
-              {subProgress.type === 'refreshing' && 'Refreshing subaccount destinations…'}
+              {subProgress.type === 'refreshing' && subProgress.total != null
+                ? `Refreshing ${subProgress.current ?? 0}/${subProgress.total} — ${subProgress.progressName ?? '…'}`
+                : subProgress.type === 'refreshing' && 'Refreshing subaccount destinations…'}
               {subProgress.type === 'done' && (
                 (subProgress.created ?? 0) === 0 && (subProgress.updated ?? 0) === 0 && (subProgress.deleted ?? 0) === 0
                   ? 'Refreshed — no change'
@@ -1451,7 +1907,7 @@ export default function SubaccountDestModal({ org, allNames, initialName, initia
                           title="Expand all spaces"
                         >
                           <ChevronsUpDown className="h-3.5 w-3.5" />
-                          {maximized && <span className="ml-1 max-[680px]:hidden">Expand</span>}
+                          {showBtnText && <span className="ml-1">Expand</span>}
                         </button>
                         <button
                           onClick={() => setTreeExpanded(new Set(['__sa__']))}
@@ -1459,7 +1915,7 @@ export default function SubaccountDestModal({ org, allNames, initialName, initia
                           title="Collapse to space level"
                         >
                           <ChevronsDownUp className="h-3.5 w-3.5" />
-                          {maximized && <span className="ml-1 max-[680px]:hidden">Collapse</span>}
+                          {showBtnText && <span className="ml-1">Collapse</span>}
                         </button>
                         <div className="w-px h-3 bg-border mx-0.5" />
                         <button
@@ -1476,7 +1932,7 @@ export default function SubaccountDestModal({ org, allNames, initialName, initia
                           title="Select all"
                         >
                           <CheckSquare className="h-3.5 w-3.5" />
-                          {maximized && <span className="ml-1 max-[680px]:hidden">All</span>}
+                          {showBtnText && <span className="ml-1">All</span>}
                         </button>
                         <button
                           onClick={() => { setTreeSelectedKeys(new Set()); setLastTreeClickKey(''); }}
@@ -1484,7 +1940,7 @@ export default function SubaccountDestModal({ org, allNames, initialName, initia
                           title="Unselect all"
                         >
                           <Square className="h-3.5 w-3.5" />
-                          {maximized && <span className="ml-1 max-[680px]:hidden">None</span>}
+                          {showBtnText && <span className="ml-1">None</span>}
                         </button>
                       </div>
                     </div>
@@ -2079,12 +2535,17 @@ export default function SubaccountDestModal({ org, allNames, initialName, initia
               >
                 <PanelLeft className="h-3.5 w-3.5" />
               </button>
-              <span className="text-xs font-semibold font-mono truncate flex-1 min-w-0 flex flex-col gap-0 leading-tight">
+              <span className="text-xs font-semibold font-mono flex-1 min-w-0 flex flex-col gap-0 leading-tight">
                 {isCreating ? (
                   <span className="text-muted-foreground font-normal not-italic">New Destination</span>
                 ) : selectedName ? (
                   <>
-                    <span className="truncate">{selectedName}</span>
+                    <span className="flex items-center gap-1.5 min-w-0">
+                      <span className="truncate shrink min-w-0">{selectedName}</span>
+                      {destTypeBadge  && <span className="shrink-0 px-1.5 py-px rounded text-[10px] font-medium bg-muted/50 text-muted-foreground border border-border" title={`Type: ${destTypeBadge}`}>{destTypeBadge}</span>}
+                      {proxyTypeBadge && <span className="shrink-0 px-1.5 py-px rounded text-[10px] font-medium bg-muted/50 text-muted-foreground border border-border" title={`ProxyType: ${proxyTypeBadge}`}>{proxyTypeBadge}</span>}
+                      {authTypeBadge  && <span className="shrink-0 px-1.5 py-px rounded text-[10px] font-medium bg-muted/50 text-muted-foreground border border-border" title={`Authentication: ${authTypeBadge}`}>{authTypeBadgeLabel}</span>}
+                    </span>
                     {activeInstScope && (
                       <span className="text-[10px] font-normal text-muted-foreground truncate">{activeInstScope.spaceName} › {activeInstScope.instanceName}</span>
                     )}
@@ -2122,7 +2583,7 @@ export default function SubaccountDestModal({ org, allNames, initialName, initia
                     >
                       <GitCompare className="h-3.5 w-3.5" />
                       {maximized && (
-                        <span className="max-[680px]:hidden">
+                        <span className="max-[1024px]:hidden">
                           {selectedDests?.some(d => d.region === org.region && d.subdomain === org.subdomain && d.name === selectedName && (activeInstScope ? d.instanceGuid === activeInstScope.instanceGuid : !d.instanceGuid))
                             ? 'In Compare' : 'Select for Compare'}
                         </span>
@@ -2130,12 +2591,21 @@ export default function SubaccountDestModal({ org, allNames, initialName, initia
                     </button>
                   )}
                   <button
+                    onClick={handleCopyClick}
+                    disabled={!selectedName || isImportRunning}
+                    title="Copy destination"
+                    className={btnOutline}
+                  >
+                    <Copy className="h-3.5 w-3.5" />
+                    {maximized && <span className="max-[1024px]:hidden">Copy</span>}
+                  </button>
+                  <button
                     onClick={() => { setEditedProps(structuredClone(serverProps)); setSaveBanner(null); }}
                     disabled={!isDirty || isSaving || isImportRunning}
                     className={btnOutline}
                   >
                     <RotateCcw className="h-3.5 w-3.5" />
-                    {maximized && <span className="max-[680px]:hidden">Reset</span>}
+                    {maximized && <span className="max-[1024px]:hidden">Reset</span>}
                   </button>
                   <button
                     onClick={handleSave}
@@ -2143,7 +2613,7 @@ export default function SubaccountDestModal({ org, allNames, initialName, initia
                     className={`${btnBase} bg-primary text-primary-foreground hover:bg-primary/90`}
                   >
                     <Save className="h-3.5 w-3.5" />
-                    {maximized && <span className="max-[680px]:hidden">{isSaving ? 'Saving…' : 'Save'}</span>}
+                    {maximized && <span className="max-[1024px]:hidden">{isSaving ? 'Saving…' : 'Save'}</span>}
                   </button>
                 </div>
               )}
@@ -2187,7 +2657,14 @@ export default function SubaccountDestModal({ org, allNames, initialName, initia
             {activeTab === 'changelog' && (
               <ChangelogTab changelog={changelog} loading={isLoadingChangelog} />
             )}
-            {activeTab === 'test' && <TestTab />}
+            {/* Always mounted so form + response state survives tab switches.
+                key resets the component only when the selected destination changes. */}
+            <div className={`flex flex-col h-full min-h-0 overflow-hidden ${activeTab !== 'test' ? 'hidden' : ''}`}>
+              <TestTab
+                key={`${selectedName}::${activeInstScope?.instanceGuid ?? 'sa'}`}
+                org={org} name={selectedName} instScope={activeInstScope} editedProps={editedProps}
+              />
+            </div>
           </div>
         </div>
 

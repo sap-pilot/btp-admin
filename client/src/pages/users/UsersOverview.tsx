@@ -191,8 +191,12 @@ export default function UsersOverview() {
           const p = data as unknown as RefreshProgress;
           if (autoHideTimerRef.current) { clearTimeout(autoHideTimerRef.current); autoHideTimerRef.current = null; }
           setProgress(p);
-          if (p.type === 'done' && (!p.issues || p.issues.length === 0)) {
-            autoHideTimerRef.current = setTimeout(() => setProgress(null), 5000);
+          if (p.type === 'progress') setIsRefreshing(true);
+          if (p.type === 'done') {
+            setIsRefreshing(false);
+            if (!p.issues || p.issues.length === 0) {
+              autoHideTimerRef.current = setTimeout(() => setProgress(null), 5000);
+            }
           }
         } else {
           void fetch('/api/users/')
@@ -343,7 +347,7 @@ export default function UsersOverview() {
           <span className="text-sm font-semibold leading-tight">Users</span>
           {globalRefreshTs !== null && (
             <span className="text-[10px] text-muted-foreground/50 leading-tight">
-              Updated at {new Date(globalRefreshTs).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+              Updated at {new Date(globalRefreshTs).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' })}
             </span>
           )}
         </div>

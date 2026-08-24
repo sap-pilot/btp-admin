@@ -118,7 +118,7 @@ A global `{LOCAL_STORE_DIR}/users/changelog.md` is updated after each global ref
 4. **Subaccount Destinations modal** — opened from any destination cell, subaccount header, OTHERS button, or search result; when the subaccount has `manageDest` spaces the left panel splits into a collapsible space→instance tree (top) and a flat destination list (bottom), both vertically resizable; right panel has three tabs (deep-linkable: `/destinations/:region/:subdomain/:name/history` and `/test`; instance destinations use `/destinations/:region/:subdomain/:spaceName/:instanceName/:instanceGuid/:name`):
    - **Properties** — editable key/value table; sensitive fields (password, secret, credential) masked with a lock icon and eye-reveal toggle; toolbar: **Create** (new destination from scratch), **Import** (single or array JSON with pre-flight confirmation dialog), **Export** (single file or `multi_destinations.json` for N selected), **Refresh** (force-refreshes this subaccount), **Select for Compare**, **Delete** (selected destinations with confirmation), **Reset**, **Save**; save result shown as an inline banner (green auto-dismisses after 3 s, error stays with ✕)
    - **History** — field-level diff log prepended on every save, import, and create; each entry shows changed fields with before → after values and the author's identity
-   - **Test** — HTTP request builder with method selector, URL, request headers, and body editor; split response panel shows status, response headers, and body (Send not yet implemented)
+   - **Test** — live HTTP request builder: method selector, URL/path input (appended to the destination base URL), editable request headers, and body textarea; sends a real HTTP request through the destination (internet or OnPremise via Cloud Connector); response panel shows status badge (green ≤299 / amber 3xx–4xx / red 5xx), duration, response headers, and body; **Format JSON** checkbox in the response pane header formats the body when `content-type` is `application/json`; supports `NoAuthentication` and `BasicAuthentication` for internet destinations and all auth types (including `PrincipalPropagation` via `jwt-bearer` grant) for OnPremise destinations; if the destination has a `sap-client` property, the header is automatically forwarded; all test state (URL, headers, body, response) persists across tab switches and resets only when the selected destination changes
    - **Import dialog** — pre-flight confirmation dialog shows target scopes (left panel: subaccount and/or selected instances) and uploaded destinations (right panel); sequential PUTs with a live `X of Y created/updated: <name>` progress strip; completion shows a green success or amber/red error banner with a list of failed destinations; all imports share one grouped `[Manual] … destinations imported by …` entry in the destination changelog and in the global changelog
    - **Delete dialog** — confirmation dialog lists all destinations to be deleted with full path (`region > alias (subdomain) [> space > instance] > name`); amber warning that the operation is not reversible and to consider export first; sequential DELETEs with live `X of Y deleted: <name>` progress strip; each deleted destination gets a `[Manual] destination deleted by …` changelog entry; destination files are renamed to `{name}.deleted.json`; a grouped entry is added to the global changelog
 
@@ -889,14 +889,43 @@ Two options for providing the service config on BTP:
 ```yaml
 # config-dev.mtaext
 _schema-version: "3.3"
-extends: btp-status
+extends: btp-admin
 modules:
-  - name: btp-status
+  - name: btp-admin
     properties:
       CONFIG_JSON: '{"services":[...]}'
 ```
 
 Then deploy with: `cf deploy mta_archives/btp-admin.mtar -e config-dev.mtaext`
+
+### RFC Sidecar (OnPremise RFC Destinations)
+
+The **Test** tab in the Subaccount Destinations modal supports live RFC calls for destinations with `Type=RFC`. RFC testing is handled by the `btp-admin-sidecar` MTA module — a separate TomEE WAR deployed on `sap_java_buildpack_jakarta` that uses SAP JCo to execute RFC function calls.
+
+**How it works:** When a user tests an RFC destination, `btp-admin` copies the destination into the bound `btp-admin-dest` service instance as an instance-level destination, then calls the sidecar's `POST /api/test-rfc` endpoint. The sidecar resolves the destination via `JCoDestinationManager` (backed by the Kotyo provider and BTP Destination Service) and executes the RFC call through the Cloud Connector.
+
+**Supported auth types:** `BasicAuthentication` and `PrincipalPropagation`.
+
+**Cloud Connector backend protocol:** Must be **Protocol: RFC** (the JCo Kotyo provider uses the RFC port 20001, not the SOCKS5 port 20004). Ask your CC admin to set the backend entry to **Protocol: RFC**.
+
+#### Rebuilding the sidecar WAR (optional)
+
+The pre-built `sidecar/btp-admin-sidecar.war` is committed to the repository and included in the MTA package automatically. You only need to rebuild it if you modify `sidecar/SidecarServlet.java`.
+
+1. Download **SAP JCo 3** (`sapjco3.jar`) from the [SAP JCo download page](https://support.sap.com/en/product/connectors/jco.html) (SAP S-User required). Select the **Linux/x86_64** package.
+2. Place `sapjco3.jar` into the `sidecar/` folder:
+   ```
+   sidecar/
+   ├── sapjco3.jar          ← place here
+   └── SidecarServlet.java
+   ```
+3. Run the build script from the repo root:
+   ```bash
+   cd sidecar && ./build.sh
+   ```
+   This compiles `SidecarServlet.java` and packages `btp-admin-sidecar.war`.
+
+> `sidecar/sapjco3.jar` is in `.gitignore` — SAP JCo license prohibits redistribution; do not commit it. The `libsapjco3.so` native library is supplied by the `sap_java_buildpack_jakarta` buildpack at runtime.
 
 ### Operations
 

@@ -1,16 +1,17 @@
 _schema-version: "3.3"
 ID: btp-admin
-version: 1.5.0
+version: 1.6.0
 
 modules:
   - name: btp-admin
     type: nodejs
     path: server
+    properties:
+      npm_config_cache: /tmp/.npmcache
+      npm_config_prefer_offline: true
     parameters:
       memory: 2G         # Chrome is memory-hungry — 512M is not enough
-      disk-quota: 4G     # Chrome + libs are large
-      # docker:
-      #   image: sapux/btp-admin:latest
+      disk-quota: 8G     # Chrome + libs are large
       buildpacks:
         - https://github.com/cloudfoundry/apt-buildpack
         - nodejs_buildpack
@@ -29,6 +30,36 @@ modules:
         - pw-browsers/
     requires:
       - name: btp-admin-xsuaa
+      - name: btp-admin-conn
+      - name: btp-admin-dest
+      - name: btp-admin-sidecar-api
+        properties:
+          SIDECAR_URL: ~{url}
+
+  - name: btp-admin-sidecar
+    type: application
+    path: sidecar/btp-admin-sidecar.war    # pre-built; run: bash sidecar/build.sh before mbt build
+    properties:
+      TARGET_RUNTIME: tomee
+      USE_JCO: true
+    parameters:
+      memory: 1G
+      disk-quota: 2G
+      buildpack: sap_java_buildpack_jakarta
+      health-check-type: http
+      health-check-http-endpoint: /ping
+      enable-ssh: true
+    build-parameters:
+      builder: custom
+      commands: []
+    provides:
+      - name: btp-admin-sidecar-api
+        properties:
+          url: ${default-url}
+    requires:
+      - name: btp-admin-xsuaa
+      - name: btp-admin-conn
+      - name: btp-admin-dest
 
 resources:
   - name: btp-admin-xsuaa
@@ -39,3 +70,13 @@ resources:
       path: ./xs-security.json
       service: xsuaa
       service-plan: application
+  - name: btp-admin-conn
+    type: org.cloudfoundry.managed-service
+    parameters:
+      service: connectivity
+      service-plan: lite
+  - name: btp-admin-dest
+    type: org.cloudfoundry.managed-service
+    parameters:
+      service: destination
+      service-plan: lite

@@ -397,10 +397,47 @@ function normalizeRc(rc: RoleCollection): RoleCollection {
   };
 }
 
+function diffRoleRefs(prev: RoleReference[], next: RoleReference[]): string {
+  const prevMap = new Map(prev.map(r => [r.name, r]));
+  const nextMap = new Map(next.map(r => [r.name, r]));
+  const lines: string[] = [];
+  for (const [name, r] of nextMap) {
+    if (!prevMap.has(name)) lines.push(`  + ${name} (${r.roleTemplateAppId})`);
+  }
+  for (const [name, r] of prevMap) {
+    if (!nextMap.has(name)) lines.push(`  - ${name} (${r.roleTemplateAppId})`);
+  }
+  return lines.length ? `- roleReferences:\n${lines.join('\n')}` : '';
+}
+
+function diffGroupRefs(prev: GroupReference[], next: GroupReference[]): string {
+  const key = (r: GroupReference) => `${r.samlAttributeValue}||${r.samlAttrName}`;
+  const prevMap = new Map(prev.map(r => [key(r), r]));
+  const nextMap = new Map(next.map(r => [key(r), r]));
+  const lines: string[] = [];
+  for (const [k, r] of nextMap) {
+    if (!prevMap.has(k)) lines.push(`  + ${r.samlAttributeValue} (${r.samlAttrName})`);
+  }
+  for (const [k, r] of prevMap) {
+    if (!nextMap.has(k)) lines.push(`  - ${r.samlAttributeValue} (${r.samlAttrName})`);
+  }
+  return lines.length ? `- groupReferences:\n${lines.join('\n')}` : '';
+}
+
 function diffObjects(prev: Record<string, unknown>, next: Record<string, unknown>): string {
   const lines: string[] = [];
   const keys = new Set([...Object.keys(prev), ...Object.keys(next)]);
   for (const k of keys) {
+    if (k === 'roleReferences') {
+      const d = diffRoleRefs((prev[k] ?? []) as RoleReference[], (next[k] ?? []) as RoleReference[]);
+      if (d) lines.push(d);
+      continue;
+    }
+    if (k === 'groupReferences') {
+      const d = diffGroupRefs((prev[k] ?? []) as GroupReference[], (next[k] ?? []) as GroupReference[]);
+      if (d) lines.push(d);
+      continue;
+    }
     const pv = JSON.stringify(prev[k] ?? null);
     const nv = JSON.stringify(next[k] ?? null);
     if (pv !== nv) lines.push(`- ${k}: ${pv} → ${nv}`);
@@ -527,8 +564,7 @@ async function appendGlobalChangelog(
 
   const changeLines = changes.map(c => {
     const histLink = `/role-collections/${c.region}/${c.subdomain}/${encodeURIComponent(c.name)}/history`;
-    const suffix   = c.usersChanged ? ' → Users' : '';
-    return `- ${c.action}: ${c.region}.${c.subdomain} → ${c.name}${suffix} ([History](${histLink}))`;
+    return `- ${c.action}: ${c.region}.${c.subdomain} → ${c.name} ([History](${histLink}))`;
   });
 
   const existing = await readGlobalChangelog();
@@ -755,7 +791,7 @@ export async function refreshSubaccountRoleCollections(
     try {
       const result = await persistRC(rcDir, safeName, rc, userReferences ?? [], username, mode);
       if (result === 'created') { created++; changes.push({ region, subdomain, name: rc.name, action: 'created' }); }
-      else if (result === 'updated') { updated++; changes.push({ region, subdomain, name: rc.name, action: 'updated', usersChanged: true }); }
+      else if (result === 'updated') { updated++; changes.push({ region, subdomain, name: rc.name, action: 'updated' }); }
     } catch (err) {
       errors.push(`${loc}/${rc.name}: ${String(err)}`);
     }
@@ -857,7 +893,7 @@ export async function refreshRoleCollections(
         try {
           const result = await persistRC(rcDir, safeName, rc, userReferences ?? [], username, mode);
           if (result === 'created') { created++; allChanges.push({ region: sa.region, subdomain: sa.subdomain, name: rc.name, action: 'created' }); }
-          else if (result === 'updated') { updated++; allChanges.push({ region: sa.region, subdomain: sa.subdomain, name: rc.name, action: 'updated', usersChanged: true }); }
+          else if (result === 'updated') { updated++; allChanges.push({ region: sa.region, subdomain: sa.subdomain, name: rc.name, action: 'updated' }); }
         } catch (err) {
           issues.push(`${loc}/${rc.name}: ${String(err)}`);
         }

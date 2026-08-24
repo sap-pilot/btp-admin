@@ -22,14 +22,13 @@ interface RefreshProgress {
   current?:   number;
   total:      number;
   name?:      string;
-  received:           number;
-  refreshed?:         number;
-  created?:           number;
-  updated?:           number;
-  deleted?:           number;
-  issues?:            string[];
-  errors?:            string[];
-  obsoleteInstances?: number;
+  received:   number;
+  refreshed?: number;
+  created?:   number;
+  updated?:   number;
+  deleted?:   number;
+  issues?:    string[];
+  errors?:    string[];
 }
 
 interface Buckets { generic: string[]; s4: string[]; cep: string[]; others: string[] }
@@ -236,8 +235,12 @@ export default function DestinationOverview() {
           const p = data as unknown as RefreshProgress;
           if (autoHideTimerRef.current) { clearTimeout(autoHideTimerRef.current); autoHideTimerRef.current = null; }
           setProgress(p);
-          if (p.type === 'done' && (!p.issues || p.issues.length === 0)) {
-            autoHideTimerRef.current = setTimeout(() => setProgress(null), 5000);
+          if (p.type === 'progress') setIsRefreshing(true);
+          if (p.type === 'done') {
+            setIsRefreshing(false);
+            if (!p.issues || p.issues.length === 0) {
+              autoHideTimerRef.current = setTimeout(() => setProgress(null), 5000);
+            }
           }
         } else {
           void fetch('/api/destinations')
@@ -447,7 +450,7 @@ export default function DestinationOverview() {
           <span className="text-sm font-semibold leading-tight">Destination Overview</span>
           {globalRefreshTs !== null && (
             <span className="text-[10px] text-muted-foreground/50 leading-tight">
-              Updated at {new Date(globalRefreshTs).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+              Updated at {new Date(globalRefreshTs).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' })}
             </span>
           )}
         </div>
@@ -576,13 +579,13 @@ export default function DestinationOverview() {
 
         let msg: string;
         if (progress.type === 'progress') {
-          msg = `Refreshing ${progress.current ?? 0} of ${progress.total} subaccounts/spaces: ${progress.name ?? ''}${progress.received > 0 ? `, received ${progress.received} destinations` : ''}`;
+          const recvNote = progress.received > 0 ? `, received ${progress.received} destinations` : '';
+          const nameNote = progress.name ? `: ${progress.name}` : '';
+          msg = `Refreshing ${progress.current ?? 0} of ${progress.total} subaccounts${nameNote}${recvNote}`;
         } else {
-          const hasErrs   = (progress.issues?.length ?? 0) > 0;
-          const errNote   = hasErrs ? ` — ${progress.issues!.length} warning${progress.issues!.length !== 1 ? 's' : ''}` : '';
-          const obsolete  = progress.obsoleteInstances ?? 0;
-          const obsNote   = obsolete > 0 ? `, ${obsolete} obsolete instance${obsolete !== 1 ? 's' : ''} (no service key)` : '';
-          msg = `Refreshed ${progress.total} subaccounts/spaces, received ${progress.received} destinations, created ${progress.created ?? 0}, updated ${progress.updated ?? 0}, deleted ${progress.deleted ?? 0}${obsNote}${errNote}`;
+          const hasErrs = (progress.issues?.length ?? 0) > 0;
+          const errNote = hasErrs ? ` — ${progress.issues!.length} warning${progress.issues!.length !== 1 ? 's' : ''}` : '';
+          msg = `Refreshed ${progress.total} subaccounts, received ${progress.received} destinations, created ${progress.created ?? 0}, updated ${progress.updated ?? 0}, deleted ${progress.deleted ?? 0}${errNote}`;
         }
 
         return (

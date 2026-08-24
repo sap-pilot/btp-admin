@@ -1,0 +1,10 @@
+# Build outputs
+# btp-admin-sidecar.war
+WEB-INF/classes/
+
+# Compile-only dependencies (downloaded by build.sh, not committed)
+jakarta.servlet-api-*.jar
+
+# JCo native artifacts (redistribution prohibited — copy from SAP Service Marketplace)
+sapjco3.jar
+libsapjco3.so

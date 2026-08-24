@@ -43,13 +43,18 @@ class HttpError extends Error {
   }
 }
 
-// ── dest/changelog.md sync hook ───────────────────────────────────────────────
-// Called by executeSync when dest/changelog.md was included in a sync batch.
-// Registered by destinationService to update globalRefreshTs without a circular import.
+// ── dest sync hooks ───────────────────────────────────────────────────────────
+// onDestChangelogSynced: called when dest/changelog.md is in the batch.
+// onDestSynced: called whenever any dest/* files land — used to run file-level dedupe.
 let onDestChangelogSynced: (() => void) | null = null;
+let onDestSynced:          (() => void) | null = null;
 
 export function registerOnDestChangelogSynced(fn: () => void): void {
   onDestChangelogSynced = fn;
+}
+
+export function registerOnDestSynced(fn: () => void): void {
+  onDestSynced = fn;
 }
 
 let onRcsChangelogSynced: (() => void) | null = null;
@@ -682,6 +687,7 @@ async function executeSync(
     if (updatedFolders.has('dest')) {
       emit('dest', { ts });
       if (onDestChangelogSynced && missing.includes('dest/changelog.md')) onDestChangelogSynced();
+      if (onDestSynced) onDestSynced();
     }
     if (updatedFolders.has('rcs')) {
       const rcSaKeys = [...new Set(

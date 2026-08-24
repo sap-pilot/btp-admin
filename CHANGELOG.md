@@ -1,5 +1,38 @@
 # Changelog
 
+## [v1.6.0] - 2026-08-16
+
+### Added
+- **Test RFC Destination** — live RFC function call in the **Test** tab for `Type=RFC` destinations:
+  - RFC function name input (auto-uppercased) with suggestion dropdown; IMPORT parameter key/value rows; EXPORT/TABLE results as formatted JSON
+  - Transport: Node.js copies the stored JCo properties verbatim (no field-name conversion) into an instance-level destination in the bound `btp-admin-dest` service instance via `POST /destination-configuration/v1/instanceDestinations`, then sends only the generated destination name to `btp-admin-sidecar`; the sidecar calls `JCoDestinationManager.getDestination(name)` via the Kotyo provider, which resolves the instance destination from the same `btp-admin-dest` binding and handles Cloud Connector tunneling natively on port 20001
+  - `BasicAuthentication` and `PrincipalPropagation`; only `OnPremise` proxy type supported
+  - New endpoints: `POST /api/destinations/:region/:subdomain/:name/test-rfc` and `…/spaces/:spaceName/instances/:instanceGuid/:name/test-rfc`
+  - Requires `btp-admin-sidecar` MTA module — see README for sidecar rebuild steps
+- **Test HTTP Destination** — live HTTP request builder in the **Test** tab of the Subaccount Destinations modal:
+  - **Internet destinations** — supports `NoAuthentication` and `BasicAuthentication`; unsupported auth types (OAuth2, SAML, etc.) return a clear error message
+  - **OnPremise destinations** — routes requests through the SAP Connectivity Service HTTP forward proxy (Cloud Connector); supports all auth types including **PrincipalPropagation** (PP) via a `jwt-bearer` token exchange that embeds user identity in the `Proxy-Authorization` token; `SAP-Connectivity-Authentication` header is intentionally omitted to prevent the ABAP ICM JWT handler from intercepting the request before the SCC-generated PP X.509 certificate can authenticate
+  - **`sap-client` forwarding** — when the destination has a `sap-client` property, the header `sap-client: <value>` is included in the outgoing test request so the ABAP backend routes to the correct client
+  - **Request editor** — method selector, URL/path input (appended to destination base URL), editable request headers (key/value rows with add/remove), request body textarea
+  - **Response panel** — status badge (green ≤299, amber 3xx/4xx, red 5xx), duration in ms, response headers table, response body textarea
+  - **Format JSON checkbox** — in the Response Body pane header; enabled only when the response `content-type` is `application/json`; formats body with 2-space indentation on click
+  - **Test tab state persistence** — all entered data (URL, headers, body, response) persists when switching away from the Test tab and back; state resets only when the selected destination changes
+  - **New REST endpoints**: `POST /api/destinations/:region/:subdomain/:name/test` and `POST /api/destinations/:region/:subdomain/spaces/:spaceName/instances/:instanceGuid/:name/test`
+- **Copy Destination button** — new **Copy** button (before Reset) in the destination name bar; copies all current destination properties, sets the name to `<source>_COPY`, and enters create mode; preserves the source scope (subaccount-level or destination service instance) so a copy of an instance-level destination is saved to the same instance
+- **Destination auth badge shortening** — `BasicAuthentication` → `Basic`, `PrincipalPropagation` → `PP` in the destination title bar badge; full value shown in tooltip
+
+### Fixed
+- **Destination deletion now syncs to peers** — deleting a destination (SA-level or instance-level, manually or via refresh) renames the local file to `{name}.deleted.json`, immediately updates its mtime via `utimes()` so delta sync picks it up, and calls `notifyCallbacks()` so remote peers are triggered to pull the change; on receiving a sync batch, both peers run a dedupe pass that deletes the older of any `{name}.json` / `{name}.deleted.json` pair so the filesystem stays clean; the same pass runs on server startup
+- **Destination import/delete now syncs to BTP Destination Service** — previously, deleting a destination or importing one via JSON only updated the local file store; the BTP Destination Service API (`DELETE /subaccountDestinations/{name}` and `DELETE /instanceDestinations/{name}`) is now called first, and 404 responses are treated as success (already absent)
+- **Destination import — `jco.client.passwd` no longer replaced with `***`** — when exporting an RFC destination and importing it into another subaccount or instance, the password field was being replaced with the redaction sentinel; fixed by removing the premature redaction from `getInstanceDestination`
+- **Destination refresh — new instances (e.g. `btp-admin-dest` with only an app binding) are now discovered** — discovery now uses `service_offering_names=destination` (was `service_plan_names=lite`) and no longer filters by `dashboard_url`; if a destination service instance has no service key, a new key named `btp-admin-sk` is auto-created via the CF API and cached for future refreshes
+- **Subaccount destination refresh — progress bar shows per-instance progress** — when spaces with `manageDest=true` are present, the modal progress bar now tracks `(instances refreshed) / (total destination service instances + 1 for SA)` with a real fill, updated live via SSE; previously the bar only pulsed with no counter
+- **Role Collections, Destinations, and Users overview — "Updated at" badge date format** — the tiny muted badge below each page title now shows both the date and time in local format (e.g. `8/16/2026, 10:30 AM`) instead of time only
+- **Principal Propagation via SCC** — switched from the two-header approach (`client_credentials` token + `SAP-Connectivity-Authentication`) to a `jwt-bearer` token exchange; the `SAP-Connectivity-Authentication` header is no longer forwarded to the backend, preventing the ABAP ICM JWT authentication handler from rejecting the request before the SCC-generated PP X.509 certificate can authenticate
+- **Destinations / Role Collections / Users overview — Refresh button reflects remote refresh** — when another user triggers a global refresh, the local page's Refresh button now switches to "Refreshing…" (spinning icon, disabled) as soon as the first SSE progress event arrives, and restores to normal on the `done` event; previously the button stayed idle while only the progress bar updated
+- **Role Collections changelog — spurious `→ Users` suffix removed** — global changelog entries for updated role collections no longer append `→ Users`; user membership changes are intentionally excluded from the per-RC changelog and the suffix was misleading (it appeared on every `updated` entry regardless of whether users actually changed)
+- **Role Collections changelog — `roleReferences` diff is now set-based** — adding or removing a role reference now produces individual `+ RoleName (AppId)` / `- RoleName (AppId)` diff lines instead of dumping the entire old and new arrays as JSON strings; reordering role references produces no diff; same per-item approach applied to `groupReferences`
+
 ## [v1.5.0] - 2026-08-12
 
 ### Added
