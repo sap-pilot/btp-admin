@@ -429,21 +429,42 @@ export default function AppsPage() {
   const allSas = saData.filter(sa => !sa.restricted);
 
   const isSearchMode   = searchResults !== null;
+  const isAodMode      = viewMode === 'aod';
   const searchMap      = isSearchMode ? makeTopAppsMap(searchResults!) : null;
   const topAppsMap     = makeTopAppsMap(topApps);
 
+  // Map of SA key → set of space names with aod=true (used to filter in AOD mode)
+  const aodSpaceNamesMap = new Map<string, Set<string>>();
+  for (const sa of allSas) {
+    const names = new Set((sa.org?.spaces ?? []).filter(sp => sp.aod).map(sp => sp.spaceName));
+    if (names.size > 0) aodSpaceNamesMap.set(`${sa.region}/${sa.subdomain}`, names);
+  }
+
+  // Returns apps for a SA key, filtered to AOD spaces when in AOD mode
+  function getApps(key: string): AppTopEntry[] {
+    const apps = isSearchMode ? (searchMap!.get(key) ?? []) : (topAppsMap.get(key) ?? []);
+    if (isAodMode) {
+      const aodSpaces = aodSpaceNamesMap.get(key);
+      return aodSpaces ? apps.filter(app => aodSpaces.has(app.spaceName)) : [];
+    }
+    return apps;
+  }
+
   const visibleTabs = tabEntries.filter(te =>
-    te.sections.some(s => s.type === 'subaccountGroup' && allSas.some(sa => csvIncludes(sa.groupIds, s.groupId))),
+    te.sections.some(s =>
+      s.type === 'subaccountGroup' &&
+      allSas.some(sa => csvIncludes(sa.groupIds, s.groupId) && (!isAodMode || aodSpaceNamesMap.has(`${sa.region}/${sa.subdomain}`))),
+    ),
   );
 
-  // In search mode, only show tabs that have at least one SA with matches
+  // In search mode, only show tabs that have at least one SA with matches (respecting AOD filter)
   const tabsWithMatches: Set<string> | null = isSearchMode
     ? new Set(visibleTabs
         .filter(te => te.sections
           .filter((s): s is Extract<TabSection, { type: 'subaccountGroup' }> => s.type === 'subaccountGroup')
           .some(grp => allSas
             .filter(sa => csvIncludes(sa.groupIds, grp.groupId))
-            .some(sa => (searchMap!.get(`${sa.region}/${sa.subdomain}`)?.length ?? 0) > 0),
+            .some(sa => getApps(`${sa.region}/${sa.subdomain}`).length > 0),
           ),
         )
         .map(te => te.tab))
@@ -514,19 +535,19 @@ export default function AppsPage() {
             {isRefreshing ? 'Scanning…' : 'Refresh'}
           </button>
 
-          {/* All apps / AOD apps toggle */}
+          {/* Memory Consumption (All) / AOD toggle */}
           <div className="flex h-8 rounded-md border border-input overflow-hidden text-sm">
             <button
               onClick={() => navigateTo('all', duration)}
               className={`px-3 transition-colors ${viewMode === 'all' ? 'bg-primary text-primary-foreground' : 'bg-background text-foreground hover:bg-accent hover:text-accent-foreground'}`}
             >
-              All apps
+              Memory Consumption (All)
             </button>
             <button
               onClick={() => navigateTo('aod', duration)}
               className={`px-3 transition-colors border-l border-input ${viewMode === 'aod' ? 'bg-primary text-primary-foreground' : 'bg-background text-foreground hover:bg-accent hover:text-accent-foreground'}`}
             >
-              AOD apps
+              AOD
             </button>
           </div>
         </div>
@@ -572,7 +593,13 @@ export default function AppsPage() {
             : <span className="text-muted-foreground">
                 Results for <span className="font-medium text-foreground">"{committedSearch}"</span>
                 {searchResults && searchResults.length > 0
-                  ? ` — ${searchResults.reduce((s, sa) => s + sa.apps.length, 0)} app(s) across ${searchResults.length} subaccount(s)`
+                  ? (() => {
+                      const matchedSas = searchResults.filter(sa => getApps(`${sa.region}/${sa.subdomain}`).length > 0);
+                      const total = matchedSas.reduce((s, sa) => s + getApps(`${sa.region}/${sa.subdomain}`).length, 0);
+                      return total > 0
+                        ? ` — ${total} app(s) across ${matchedSas.length} subaccount(s)`
+                        : ' — no matches';
+                    })()
                   : ' — no matches'
                 }
               </span>
@@ -603,9 +630,8 @@ export default function AppsPage() {
           />
           {viewMode === 'aod' && (
             <InfoBlock
-              label="Memory Saving"
+              label={latest ? `Memory Saving: ${fmtMB(latest.sumStoppedMB)}` : 'Memory Saving'}
               value={`${savingPct}%`}
-              sub={latest ? `${fmtMB(latest.sumStoppedMB)} idle / ${fmtMB(totalMB)} total` : undefined}
               accent="text-emerald-500"
             />
           )}
@@ -666,14 +692,16 @@ export default function AppsPage() {
               .sort((a, b) => a.pos - b.pos);
             if (grpSas.length === 0) return null;
 
-            // In search mode, filter columns to SAs with matches
+            // In search mode, filter columns to SAs with matches (AOD filter applied via getApps); in AOD mode filter to AOD SAs
             const displayCols = isSearchMode
-              ? grpSas.filter(sa => (searchMap!.get(`${sa.region}/${sa.subdomain}`)?.length ?? 0) > 0)
+              ? grpSas.filter(sa => getApps(`${sa.region}/${sa.subdomain}`).length > 0)
+              : isAodMode
+              ? grpSas.filter(sa => aodSpaceNamesMap.has(`${sa.region}/${sa.subdomain}`))
               : grpSas;
-            if (isSearchMode && displayCols.length === 0) return null;
+            if ((isSearchMode || isAodMode) && displayCols.length === 0) return null;
 
-            const rowCount = isSearchMode
-              ? Math.max(...displayCols.map(sa => searchMap!.get(`${sa.region}/${sa.subdomain}`)?.length ?? 0), 0)
+            const rowCount = (isSearchMode || isAodMode)
+              ? Math.max(...displayCols.map(sa => getApps(`${sa.region}/${sa.subdomain}`).length), 0)
               : 10;
 
             return (
@@ -708,7 +736,7 @@ export default function AppsPage() {
                           <tr key={i} className="hover:bg-muted/20">
                             {displayCols.map(sa => {
                               const key  = `${sa.region}/${sa.subdomain}`;
-                              const apps = isSearchMode ? (searchMap!.get(key) ?? []) : (topAppsMap.get(key) ?? []);
+                              const apps = getApps(key);
                               const app  = apps[i];
                               return (
                                 <Fragment key={sa.subaccountId}>
