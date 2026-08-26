@@ -1,9 +1,12 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { Fragment, useCallback, useEffect, useRef, useState } from 'react';
 import { useParams, useNavigate, useLocation } from 'react-router';
-import { PanelLeft, RefreshCw, X } from 'lucide-react';
+import { PanelLeft, RefreshCw, Search, X } from 'lucide-react';
 import { useSidebar } from '@/components/AppLayout';
 import DateRangePicker from '@/components/DateRangePicker';
 import { fmtDateRange } from '@/hooks/useTimeRange';
+import type { SubaccountEntry } from '@/components/config/SubaccountsTable';
+import type { TabEntry, TabSection } from '@/components/config/TabsTable';
+import SubaccountAppsModal from './SubaccountAppsModal';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -29,6 +32,21 @@ interface SseMsg {
   error?:    boolean | string;
   allStats?: StatsRow | null;
   aodStats?: StatsRow | null;
+}
+
+interface AppTopEntry {
+  guid:      string;
+  name:      string;
+  spaceName: string;
+  memoryMB:  number;
+}
+
+interface SubaccountTopApps {
+  region:         string;
+  subdomain:      string;
+  subaccountName: string;
+  alias:          string;
+  apps:           AppTopEntry[];
 }
 
 interface ScanProgress {
@@ -83,9 +101,13 @@ function durationToRange(dur: DurationMode): { fromSecs: number; toSecs: number 
   const [fy, fm, fd] = dur.fromDate.split('-').map(Number);
   const [uy, um, ud] = dur.untilDate.split('-').map(Number);
   return {
-    fromSecs: Math.floor(new Date(fy, fm - 1, fd, 0, 0, 0).getTime() / 1000),
-    toSecs:   Math.floor(new Date(uy, um - 1, ud, 23, 59, 59).getTime() / 1000),
+    fromSecs: Math.floor(new Date(fy!, fm! - 1, fd!, 0, 0, 0).getTime() / 1000),
+    toSecs:   Math.floor(new Date(uy!, um! - 1, ud!, 23, 59, 59).getTime() / 1000),
   };
+}
+
+function csvIncludes(csv: string, id: string): boolean {
+  return csv.split(',').map(s => s.trim()).includes(id);
 }
 
 // ─── SVG Chart ────────────────────────────────────────────────────────────────
@@ -104,7 +126,6 @@ function StatsChart({ rows, toSecs }: { rows: StatsRow[]; toSecs: number }) {
     );
   }
 
-  // X axis starts from first available data point within the range
   const effectiveFrom = rows[0]!.timestamp;
   const maxMB  = Math.max(...rows.flatMap(r => [r.sumStartedMB, r.sumStoppedMB]), 1);
   const xOf    = (ts: number) => pad.l + ((ts - effectiveFrom) / (toSecs - effectiveFrom)) * cW;
@@ -181,13 +202,41 @@ export default function AppsPage() {
   const [loadingData, setLoadingData]       = useState(false);
   const autoHideRef                         = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  const [topApps, setTopApps]               = useState<SubaccountTopApps[]>([]);
+  const [tabEntries, setTabEntries]         = useState<TabEntry[]>([]);
+  const [saData, setSaData]                 = useState<SubaccountEntry[]>([]);
+  const [activeTab, setActiveTab]           = useState('');
+
+  const [searchInput, setSearchInput]         = useState('');
+  const [committedSearch, setCommittedSearch] = useState('');
+  const [isSearching, setIsSearching]         = useState(false);
+  const [searchResults, setSearchResults]     = useState<SubaccountTopApps[] | null>(null);
+  const [modalState, setModalState]           = useState<{ region: string; subdomain: string; guid: string; spaceName: string; appName: string } | null>(null);
+  const savedPath                             = useRef<string>('');
+
   // ── Navigation helpers ────────────────────────────────────────────────────
 
   function navigateTo(view: ViewMode, dur: DurationMode) {
     navigate(`/apps/${view}${buildSearch(dur)}`, { replace: true });
   }
 
+  // ── Top apps lookup map ───────────────────────────────────────────────────
+
+  function makeTopAppsMap(data: SubaccountTopApps[]): Map<string, AppTopEntry[]> {
+    const m = new Map<string, AppTopEntry[]>();
+    for (const sa of data) m.set(`${sa.region}/${sa.subdomain}`, sa.apps);
+    return m;
+  }
+
   // ── Fetch stats data ──────────────────────────────────────────────────────
+
+  const fetchTopApps = useCallback(async () => {
+    try {
+      const res  = await fetch('/api/aod/apps/top');
+      const data = await res.json() as { ok: boolean; data: SubaccountTopApps[] };
+      if (data.ok) setTopApps(data.data);
+    } catch { /* ignore */ }
+  }, []);
 
   const fetchStats = useCallback(async (from: number, to: number, mode: ViewMode) => {
     setLoadingData(true);
@@ -208,6 +257,16 @@ export default function AppsPage() {
       .then(r => r.json() as Promise<{ ok: boolean; refreshing: boolean }>)
       .then(d => { if (d.ok) setIsRefreshing(d.refreshing); })
       .catch(() => {});
+
+    void Promise.all([
+      fetch('/api/config/tabs').then(r => r.json() as Promise<{ ok: boolean; data: TabEntry[] }>),
+      fetch('/api/config/subaccounts').then(r => r.json() as Promise<{ ok: boolean; data: SubaccountEntry[] }>),
+    ]).then(([tabs, sas]) => {
+      if (tabs.ok) setTabEntries(tabs.data);
+      if (sas.ok)  setSaData(sas.data);
+    }).catch(() => {});
+
+    void fetchTopApps();
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -223,8 +282,6 @@ export default function AppsPage() {
   useEffect(() => {
     const es = new EventSource('/api/events?aod=1');
 
-    // On every SSE connect/reconnect, re-sync state in case refresh-done was missed
-    // (scan ran before we connected, or we were briefly disconnected)
     es.addEventListener('connected', () => {
       void fetch('/api/aod/apps/status')
         .then(r => r.json() as Promise<{ ok: boolean; refreshing: boolean }>)
@@ -234,6 +291,7 @@ export default function AppsPage() {
           setProgress(prev => {
             if (prev?.type === 'progress') {
               void fetchStats(fromSecs, toSecs, viewMode);
+              void fetchTopApps();
               return null;
             }
             return prev;
@@ -258,6 +316,7 @@ export default function AppsPage() {
             const newLatest = viewMode === 'aod' ? (msg.aodStats ?? null) : (msg.allStats ?? null);
             if (newLatest) setLatest(newLatest);
             void fetchStats(fromSecs, toSecs, viewMode);
+            void fetchTopApps();
           } else {
             setProgress({ type: 'error', error: typeof msg.error === 'string' ? msg.error : 'Scan failed' });
           }
@@ -282,6 +341,53 @@ export default function AppsPage() {
     } catch { /* ignore */ }
   }
 
+  // ── Search ────────────────────────────────────────────────────────────────
+
+  async function handleSearch(q: string) {
+    const trimmed = q.trim();
+    if (!trimmed) { clearSearch(); return; }
+    setIsSearching(true);
+    setCommittedSearch(trimmed);
+    try {
+      const res  = await fetch(`/api/aod/apps/search?q=${encodeURIComponent(trimmed)}`);
+      const data = await res.json() as { ok: boolean; data: SubaccountTopApps[] };
+      if (data.ok) setSearchResults(data.data);
+    } catch { /* ignore */ } finally {
+      setIsSearching(false);
+    }
+  }
+
+  function clearSearch() {
+    setSearchInput('');
+    setSearchResults(null);
+    setCommittedSearch('');
+  }
+
+  // ── Modal URL sync ────────────────────────────────────────────────────────
+
+  function openModal(region: string, subdomain: string, guid: string, spaceName: string, appName: string) {
+    savedPath.current = window.location.pathname + window.location.search;
+    const url = `/apps/${encodeURIComponent(region)}/${encodeURIComponent(subdomain)}/${encodeURIComponent(spaceName)}/${encodeURIComponent(appName)}`;
+    window.history.pushState({ modal: true }, '', url);
+    setModalState({ region, subdomain, guid, spaceName, appName });
+  }
+
+  function closeModal() {
+    if (savedPath.current) {
+      window.history.replaceState(null, '', savedPath.current);
+      savedPath.current = '';
+    }
+    setModalState(null);
+  }
+
+  // Handle browser back button while modal is open
+  useEffect(() => {
+    if (!modalState) return;
+    const handler = () => setModalState(null);
+    window.addEventListener('popstate', handler);
+    return () => window.removeEventListener('popstate', handler);
+  }, [modalState]);
+
   // ── Duration select ───────────────────────────────────────────────────────
 
   function handleDurationChange(v: string) {
@@ -294,13 +400,60 @@ export default function AppsPage() {
     ? fmtDateRange(duration.fromDate, duration.untilDate)
     : null;
 
+  // ── Tab / group derivations ───────────────────────────────────────────────
+
+  const allSas = saData.filter(sa => !sa.restricted);
+
+  const isSearchMode   = searchResults !== null;
+  const searchMap      = isSearchMode ? makeTopAppsMap(searchResults!) : null;
+  const topAppsMap     = makeTopAppsMap(topApps);
+
+  const visibleTabs = tabEntries.filter(te =>
+    te.sections.some(s => s.type === 'subaccountGroup' && allSas.some(sa => csvIncludes(sa.groupIds, s.groupId))),
+  );
+
+  // In search mode, only show tabs that have at least one SA with matches
+  const tabsWithMatches: Set<string> | null = isSearchMode
+    ? new Set(visibleTabs
+        .filter(te => te.sections
+          .filter((s): s is Extract<TabSection, { type: 'subaccountGroup' }> => s.type === 'subaccountGroup')
+          .some(grp => allSas
+            .filter(sa => csvIncludes(sa.groupIds, grp.groupId))
+            .some(sa => (searchMap!.get(`${sa.region}/${sa.subdomain}`)?.length ?? 0) > 0),
+          ),
+        )
+        .map(te => te.tab))
+    : null;
+
+  const displayedTabs = tabsWithMatches ? visibleTabs.filter(te => tabsWithMatches.has(te.tab)) : visibleTabs;
+
+  const activeTabEntry = displayedTabs.find(te => te.tab === activeTab) ?? displayedTabs[0];
+
+  // Keep activeTab in sync when displayed tabs change
+  useEffect(() => {
+    if (displayedTabs.length > 0 && (!activeTab || !displayedTabs.some(te => te.tab === activeTab))) {
+      setActiveTab(displayedTabs[0]!.tab);
+    }
+  }, [displayedTabs, activeTab]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // ── Derived stats ──────────────────────────────────────────────────────────
 
   const totalMB   = (latest?.sumStartedMB ?? 0) + (latest?.sumStoppedMB ?? 0);
   const savingPct = totalMB > 0 ? ((latest?.sumStoppedMB ?? 0) / totalMB * 100).toFixed(1) : '—';
 
+  const tabCls = (active: boolean) =>
+    `px-4 py-2 text-sm transition-colors border-b-2 shrink-0 ${
+      active
+        ? 'border-primary text-foreground font-medium'
+        : 'border-transparent text-muted-foreground hover:text-foreground'
+    }`;
+
+  // ── Modal subaccount list ──────────────────────────────────────────────────
+  // Pass full SubaccountEntry so the modal can build cockpit links
+
   return (
     <div className="flex flex-col h-full min-h-0">
+
       {/* Header */}
       <div className="border-b border-border bg-background px-3 flex items-center gap-2 shrink-0 min-h-[52px]">
         <button onClick={toggle} className="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-accent/50 transition-colors" title="Toggle sidebar">
@@ -308,6 +461,25 @@ export default function AppsPage() {
         </button>
         <span className="text-sm font-semibold">Apps</span>
         <div className="ml-auto flex items-center gap-2">
+
+          {/* Search box */}
+          <div className="relative flex items-center">
+            <Search className="absolute left-2 h-3.5 w-3.5 text-muted-foreground pointer-events-none" />
+            <input
+              type="text"
+              value={searchInput}
+              onChange={e => setSearchInput(e.target.value)}
+              onKeyDown={e => { if (e.key === 'Enter') void handleSearch(searchInput); else if (e.key === 'Escape') clearSearch(); }}
+              placeholder="Search apps…"
+              className="h-8 pl-7 pr-7 rounded-md border border-input bg-background text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring w-48"
+            />
+            {(searchInput || committedSearch) && (
+              <button onClick={clearSearch} className="absolute right-1.5 p-0.5 text-muted-foreground hover:text-foreground">
+                <X className="h-3.5 w-3.5" />
+              </button>
+            )}
+          </div>
+
           {/* Refresh button */}
           <button
             onClick={() => void handleRefresh()}
@@ -368,8 +540,30 @@ export default function AppsPage() {
         );
       })()}
 
+      {/* Search results banner */}
+      {isSearchMode && (
+        <div className="shrink-0 border-b border-border bg-muted/20 px-4 py-2 flex items-center gap-2 text-xs">
+          {isSearching
+            ? <span className="text-muted-foreground">Searching for "{committedSearch}"…</span>
+            : <span className="text-muted-foreground">
+                Results for <span className="font-medium text-foreground">"{committedSearch}"</span>
+                {searchResults && searchResults.length > 0
+                  ? ` — ${searchResults.reduce((s, sa) => s + sa.apps.length, 0)} app(s) across ${searchResults.length} subaccount(s)`
+                  : ' — no matches'
+                }
+              </span>
+          }
+          <button
+            onClick={clearSearch}
+            className="ml-auto inline-flex items-center gap-1 px-2 py-0.5 rounded border border-border text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
+          >
+            <X className="h-3 w-3" /> Clear
+          </button>
+        </div>
+      )}
+
       {/* Content */}
-      <div className="flex-1 overflow-auto min-h-0 p-6 flex flex-col gap-6">
+      <div className="flex-1 overflow-auto min-h-0 p-6 space-y-6">
 
         {/* Info blocks */}
         <div className={`grid gap-4 ${viewMode === 'aod' ? 'grid-cols-2 md:grid-cols-4' : 'grid-cols-2 md:grid-cols-3'}`}>
@@ -423,7 +617,116 @@ export default function AppsPage() {
           </div>
           <StatsChart rows={rows} toSecs={toSecs} />
         </div>
+
+        {/* Tab bar — below the chart, above the groups */}
+        {displayedTabs.length > 1 && (
+          <div className="flex items-stretch border-b border-border overflow-x-auto">
+            {displayedTabs.map(te => (
+              <button key={te.tab} className={tabCls(te === activeTabEntry)} onClick={() => setActiveTab(te.tab)}>
+                {te.tab}
+              </button>
+            ))}
+          </div>
+        )}
+
+        {/* Subaccount groups (tabs → groups → subaccounts table) */}
+        {visibleTabs.length === 0 && saData.length === 0 && (
+          <div className="text-xs text-muted-foreground text-center py-8">
+            Loading subaccounts…
+          </div>
+        )}
+
+        {activeTabEntry?.sections
+          .filter((s): s is Extract<TabSection, { type: 'subaccountGroup' }> => s.type === 'subaccountGroup')
+          .map(grp => {
+            const grpSas = allSas
+              .filter(sa => csvIncludes(sa.groupIds, grp.groupId))
+              .sort((a, b) => a.pos - b.pos);
+            if (grpSas.length === 0) return null;
+
+            // In search mode, filter columns to SAs with matches
+            const displayCols = isSearchMode
+              ? grpSas.filter(sa => (searchMap!.get(`${sa.region}/${sa.subdomain}`)?.length ?? 0) > 0)
+              : grpSas;
+            if (isSearchMode && displayCols.length === 0) return null;
+
+            const rowCount = isSearchMode
+              ? Math.max(...displayCols.map(sa => searchMap!.get(`${sa.region}/${sa.subdomain}`)?.length ?? 0), 0)
+              : 10;
+
+            return (
+              <div key={grp.groupId} className="space-y-1.5">
+                <div className="px-1">
+                  <span className="text-xs font-semibold text-foreground">{grp.title ?? grp.groupId}</span>
+                </div>
+                <div className="border border-border rounded-md overflow-hidden">
+                  <div className="overflow-x-auto">
+                    <table className="w-full border-collapse text-sm" style={{ tableLayout: 'auto' }}>
+                      <thead>
+                        <tr className="bg-muted/30">
+                          {displayCols.map(sa => (
+                            <th
+                              key={sa.subaccountId}
+                              colSpan={2}
+                              className="text-center text-xs font-medium px-3 py-2 min-w-[260px] border-l border-b border-border text-muted-foreground first:border-l-0"
+                            >
+                              <div className="flex flex-col gap-0.5 items-center">
+                                <span>{sa.alias || sa.subaccountName}</span>
+                                <span className="text-[10px] font-normal font-mono text-muted-foreground/60 leading-tight">{sa.subdomain}</span>
+                              </div>
+                            </th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {Array.from({ length: rowCount }, (_, i) => (
+                          <tr key={i} className="hover:bg-muted/20">
+                            {displayCols.map(sa => {
+                              const key  = `${sa.region}/${sa.subdomain}`;
+                              const apps = isSearchMode ? (searchMap!.get(key) ?? []) : (topAppsMap.get(key) ?? []);
+                              const app  = apps[i];
+                              return (
+                                <Fragment key={sa.subaccountId}>
+                                  <td className="px-3 py-1 text-xs border-b border-border border-l first:border-l-0 max-w-[200px]">
+                                    {app
+                                      ? <button
+                                          className="truncate block w-full text-left hover:text-primary transition-colors"
+                                          title={`${app.name} (${app.spaceName})`}
+                                          onClick={() => openModal(sa.region, sa.subdomain, app.guid, app.spaceName, app.name)}
+                                        >
+                                          {app.name}
+                                          <span className="text-muted-foreground/50 ml-1">({app.spaceName})</span>
+                                        </button>
+                                      : <span className="text-muted-foreground/30">—</span>
+                                    }
+                                  </td>
+                                  <td className="px-2 py-1 text-[11px] border-b border-border text-muted-foreground whitespace-nowrap tabular-nums w-[72px]">
+                                    {app ? fmtMB(app.memoryMB) : ''}
+                                  </td>
+                                </Fragment>
+                              );
+                            })}
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              </div>
+            );
+          })}
       </div>
+
+      {/* Subaccount apps modal */}
+      {modalState && (
+        <SubaccountAppsModal
+          initialRegion={modalState.region}
+          initialSubdomain={modalState.subdomain}
+          initialGuid={modalState.guid}
+          allSubaccounts={allSas}
+          onClose={closeModal}
+        />
+      )}
 
       {/* Date range picker */}
       <DateRangePicker

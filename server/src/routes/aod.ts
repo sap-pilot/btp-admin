@@ -1,5 +1,5 @@
 import { appendFile, mkdir, rename, stat } from 'node:fs/promises';
-import { scanApps, getStatsData, getLatestStats, isRefreshRunning } from '../services/aodAppsService.js';
+import { scanApps, getStatsData, getLatestStats, isRefreshRunning, getTopAppsPerSubaccount, getCachedTopApps, getSubaccountApps, searchApps } from '../services/aodAppsService.js';
 import { join } from 'node:path';
 import type { Request, Response, NextFunction } from 'express';
 import { Router } from 'express';
@@ -44,6 +44,32 @@ router.post('/apps/refresh', requireAdmin, (_req, res) => {
   res.json({ ok: true, started: true });
 });
 
+router.get('/apps/top', requireAdmin, async (_req, res, next) => {
+  try {
+    const data = getCachedTopApps().length > 0 ? getCachedTopApps() : await getTopAppsPerSubaccount();
+    res.json({ ok: true, data });
+  } catch (err) { next(err); }
+});
+
+router.get('/apps/subaccount', requireAdmin, async (req, res, next) => {
+  try {
+    const region    = typeof req.query['region']    === 'string' ? req.query['region']    : '';
+    const subdomain = typeof req.query['subdomain'] === 'string' ? req.query['subdomain'] : '';
+    if (!region || !subdomain) { res.status(400).json({ ok: false, error: 'region and subdomain required' }); return; }
+    const data = await getSubaccountApps(region, subdomain);
+    res.json({ ok: true, data });
+  } catch (err) { next(err); }
+});
+
+router.get('/apps/search', requireAdmin, async (req, res, next) => {
+  try {
+    const q = typeof req.query['q'] === 'string' ? req.query['q'].trim() : '';
+    if (q.length < 2) { res.json({ ok: true, data: [] }); return; }
+    const data = await searchApps(q);
+    res.json({ ok: true, data });
+  } catch (err) { next(err); }
+});
+
 router.get('/apps/stats', requireAdmin, async (req, res, next) => {
   try {
     const nowSecs  = Math.floor(Date.now() / 1000);
@@ -52,6 +78,46 @@ router.get('/apps/stats', requireAdmin, async (req, res, next) => {
     const aodOnly  = req.query['aod'] === '1';
     const [data, latest] = await Promise.all([getStatsData(from, to, aodOnly), getLatestStats(aodOnly)]);
     res.json({ ok: true, data, latest });
+  } catch (err) { next(err); }
+});
+
+router.post('/apps/:guid/start', requireAdmin, async (req, res, next) => {
+  try {
+    const guid   = req.params['guid'] ?? '';
+    const region = typeof req.query['region'] === 'string' ? req.query['region'] : '';
+    if (!guid || !region) { res.status(400).json({ ok: false, error: 'guid and region required' }); return; }
+    const token  = await getOrRefreshToken(region);
+    const cfRes  = await fetch(`${token.api_url}/v3/apps/${guid}/actions/start`, {
+      method: 'POST',
+      headers: { Authorization: `${token.token_type} ${token.access_token}`, 'Content-Type': 'application/json' },
+    });
+    if (!cfRes.ok) {
+      const text = await cfRes.text().catch(() => '');
+      res.status(502).json({ ok: false, error: `CF ${cfRes.status}: ${text.slice(0, 200)}` });
+      return;
+    }
+    logger.info({ guid, region }, 'AOD: app started via UI');
+    res.json({ ok: true });
+  } catch (err) { next(err); }
+});
+
+router.post('/apps/:guid/stop', requireAdmin, async (req, res, next) => {
+  try {
+    const guid   = req.params['guid'] ?? '';
+    const region = typeof req.query['region'] === 'string' ? req.query['region'] : '';
+    if (!guid || !region) { res.status(400).json({ ok: false, error: 'guid and region required' }); return; }
+    const token  = await getOrRefreshToken(region);
+    const cfRes  = await fetch(`${token.api_url}/v3/apps/${guid}/actions/stop`, {
+      method: 'POST',
+      headers: { Authorization: `${token.token_type} ${token.access_token}`, 'Content-Type': 'application/json' },
+    });
+    if (!cfRes.ok) {
+      const text = await cfRes.text().catch(() => '');
+      res.status(502).json({ ok: false, error: `CF ${cfRes.status}: ${text.slice(0, 200)}` });
+      return;
+    }
+    logger.info({ guid, region }, 'AOD: app stopped via UI');
+    res.json({ ok: true });
   } catch (err) { next(err); }
 });
 

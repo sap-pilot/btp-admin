@@ -1,5 +1,9 @@
 import { appendFile, mkdir, readdir, readFile, rename, stat, writeFile } from 'node:fs/promises';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import { join } from 'node:path';
+
+const execFileAsync = promisify(execFile);
 import { config } from '../config.js';
 import { logger } from '../logger.js';
 import { readSubaccounts } from './subaccountsService.js';
@@ -12,8 +16,10 @@ const STATS_ROTATE_BYTES = 2 * 1024 * 1024;
 
 let schedulerTimer: ReturnType<typeof setInterval> | null = null;
 let refreshRunning = false;
+let topAppsCache:   SubaccountTopApps[] | null = null;
 
-export function isRefreshRunning(): boolean { return refreshRunning; }
+export function isRefreshRunning(): boolean  { return refreshRunning; }
+export function getCachedTopApps(): SubaccountTopApps[] { return topAppsCache ?? []; }
 
 // ─── CF API helpers ───────────────────────────────────────────────────────────
 
@@ -69,7 +75,7 @@ interface CfRoute {
   destinations?: Array<{ app: { guid: string } }>;
 }
 
-interface AppFile {
+export interface AppFileData {
   guid:        string;
   name:        string;
   state:       string;
@@ -82,6 +88,7 @@ interface AppFile {
   urls?:       string[];
   lastUpdated: number;
 }
+type AppFile = AppFileData;
 
 export interface StatsRow {
   timestamp:    number;
@@ -162,6 +169,132 @@ export async function getLatestStats(aodOnly = false): Promise<StatsRow | null> 
     if (row && (!latest || row.timestamp > latest.timestamp)) latest = row;
   }
   return latest;
+}
+
+// ─── Top apps per subaccount ─────────────────────────────────────────────────
+
+export interface AppTopEntry {
+  guid:      string;
+  name:      string;
+  spaceName: string;
+  memoryMB:  number;
+}
+
+export interface SubaccountTopApps {
+  region:         string;
+  subdomain:      string;
+  subaccountName: string;
+  alias:          string;
+  apps:           AppTopEntry[];
+}
+
+async function buildTopApps(): Promise<SubaccountTopApps[]> {
+  const subaccounts = await readSubaccounts();
+  const result: SubaccountTopApps[] = [];
+
+  for (const sa of subaccounts) {
+    if (sa.restricted) continue;
+    const saDir = join(APPS_DIR, sa.region, sa.subdomain);
+    const apps: AppTopEntry[] = [];
+
+    try {
+      const spaces = await readdir(saDir);
+      for (const spaceFolder of spaces) {
+        const spaceDir = join(saDir, spaceFolder);
+        try {
+          const files = await readdir(spaceDir);
+          for (const file of files) {
+            if (!file.endsWith('.json') || file.endsWith('.deleted.json')) continue;
+            try {
+              const raw = await readFile(join(spaceDir, file), 'utf-8');
+              const app = JSON.parse(raw) as AppFile;
+              if (app.state !== 'STARTED') continue;
+              const memoryMB = (app.process?.instances ?? 1) * (app.process?.memory_in_mb ?? 0);
+              apps.push({ guid: app.guid, name: app.name, spaceName: app.spaceName, memoryMB });
+            } catch { /* skip corrupted file */ }
+          }
+        } catch { /* skip unreadable space dir */ }
+      }
+    } catch { /* dir not yet created */ }
+
+    apps.sort((a, b) => b.memoryMB - a.memoryMB);
+    result.push({
+      region:         sa.region,
+      subdomain:      sa.subdomain,
+      subaccountName: sa.subaccountName,
+      alias:          sa.alias,
+      apps:           apps.slice(0, 10),
+    });
+  }
+
+  return result;
+}
+
+async function doRefreshTopAppsCache(): Promise<void> {
+  try { topAppsCache = await buildTopApps(); } catch { /* keep stale */ }
+}
+
+export async function getTopAppsPerSubaccount(): Promise<SubaccountTopApps[]> {
+  if (topAppsCache !== null) return topAppsCache;
+  topAppsCache = await buildTopApps();
+  return topAppsCache;
+}
+
+export async function getSubaccountApps(region: string, subdomain: string): Promise<AppFileData[]> {
+  const saDir = join(APPS_DIR, region, subdomain);
+  const apps: AppFileData[] = [];
+  try {
+    const spaces = await readdir(saDir);
+    for (const spaceFolder of spaces) {
+      const spaceDir = join(saDir, spaceFolder);
+      try {
+        const files = await readdir(spaceDir);
+        for (const file of files) {
+          if (!file.endsWith('.json') || file.endsWith('.deleted.json')) continue;
+          try {
+            const raw = await readFile(join(spaceDir, file), 'utf-8');
+            apps.push(JSON.parse(raw) as AppFileData);
+          } catch { /* skip */ }
+        }
+      } catch { /* skip */ }
+    }
+  } catch { /* dir not yet created */ }
+  return apps;
+}
+
+export async function searchApps(keyword: string): Promise<SubaccountTopApps[]> {
+  let matchedPaths: string[] = [];
+  try {
+    const { stdout } = await execFileAsync('grep', ['-rl', '--include=*.json', '--', keyword, APPS_DIR]);
+    matchedPaths = stdout.trim().split('\n').filter(p =>
+      p && p.endsWith('.json') && !p.endsWith('.deleted.json') &&
+      // only app files: APPS_DIR/{region}/{subdomain}/{space}/{guid}.json  (depth 4)
+      p.slice(APPS_DIR.length).split('/').length === 5,
+    );
+  } catch { return []; }
+
+  const subaccounts = await readSubaccounts();
+  const saLookup = new Map(subaccounts.filter(sa => !sa.restricted).map(sa => [`${sa.region}/${sa.subdomain}`, sa]));
+  const byKey = new Map<string, { region: string; subdomain: string; subaccountName: string; alias: string; apps: AppTopEntry[] }>();
+
+  for (const filePath of matchedPaths) {
+    try {
+      const raw = await readFile(filePath, 'utf-8');
+      const app = JSON.parse(raw) as AppFileData;
+      const key = `${app.region}/${app.subdomain}`;
+      const sa  = saLookup.get(key);
+      if (!sa) continue;
+      let entry = byKey.get(key);
+      if (!entry) {
+        entry = { region: sa.region, subdomain: sa.subdomain, subaccountName: sa.subaccountName, alias: sa.alias, apps: [] };
+        byKey.set(key, entry);
+      }
+      const memoryMB = (app.process?.instances ?? 1) * (app.process?.memory_in_mb ?? 0);
+      entry.apps.push({ guid: app.guid, name: app.name, spaceName: app.spaceName, memoryMB });
+    } catch { /* skip */ }
+  }
+
+  return [...byKey.values()];
 }
 
 // ─── App file helpers ──────────────────────────────────────────────────────────
@@ -373,6 +506,7 @@ export async function scanApps(): Promise<void> {
 
     logger.info({ totalStarted, totalStopped, sumStartedMB, sumStoppedMB, aodStarted, aodStopped }, 'AOD apps scan complete');
     emitImmediate('aod-apps', { type: 'refresh-done', ts: Date.now(), allStats: allRow, aodStats: aodRow });
+    void doRefreshTopAppsCache();
   } catch (err) {
     logger.error({ err }, 'AOD apps scan failed');
     emitImmediate('aod-apps', { type: 'refresh-error', ts: Date.now(), error: String(err) });

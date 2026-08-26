@@ -9,7 +9,7 @@ const ConfigPage             = lazy(() => import('@/pages/ConfigPage'));
 const DestinationOverview    = lazy(() => import('@/pages/destination/DestinationOverview'));
 const RoleCollectionsOverview = lazy(() => import('@/pages/rcs/RoleCollectionsOverview'));
 const UsersOverview           = lazy(() => import('@/pages/users/UsersOverview'));
-const AppsPage                = lazy(() => import('@/pages/AppsPage'));
+const AppsPage                = lazy(() => import('@/pages/apps/AppsPage'));
 
 
 interface EBState { error: Error | null }
