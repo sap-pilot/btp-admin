@@ -1,5 +1,5 @@
 import { appendFile, mkdir, rename, stat } from 'node:fs/promises';
-import { scanApps, getStatsData, getLatestStats, isRefreshRunning, getTopAppsPerSubaccount, getCachedTopApps, getSubaccountApps, searchApps, updateAppFileState, refreshTopAppsAndNotify } from '../services/aodAppsService.js';
+import { scanApps, getStatsData, getLatestStats, isRefreshRunning, getTopAppsPerSubaccount, getCachedTopApps, getSubaccountApps, searchApps, updateAppFileState, refreshTopAppsAndNotify, scanSubaccountApps } from '../services/aodAppsService.js';
 import { join } from 'node:path';
 import type { Request, Response, NextFunction } from 'express';
 import { Router } from 'express';
@@ -58,6 +58,16 @@ router.get('/apps/subaccount', requireAdmin, async (req, res, next) => {
     if (!region || !subdomain) { res.status(400).json({ ok: false, error: 'region and subdomain required' }); return; }
     const data = await getSubaccountApps(region, subdomain);
     res.json({ ok: true, data });
+  } catch (err) { next(err); }
+});
+
+router.post('/apps/refresh-subaccount', requireAdmin, async (req, res, next) => {
+  try {
+    const region    = typeof req.query['region']    === 'string' ? req.query['region']    : '';
+    const subdomain = typeof req.query['subdomain'] === 'string' ? req.query['subdomain'] : '';
+    if (!region || !subdomain) { res.status(400).json({ ok: false, error: 'region and subdomain required' }); return; }
+    const result = await scanSubaccountApps(region, subdomain);
+    res.json({ ok: true, ...result });
   } catch (err) { next(err); }
 });
 
@@ -243,11 +253,21 @@ async function appendCsvLog(
 
 async function checkAppUp(appUrl: string): Promise<boolean> {
   try {
-    const ctrl = new AbortController();
-    const id   = setTimeout(() => ctrl.abort(), 5000);
-    const res  = await fetch(appUrl, { method: 'HEAD', signal: ctrl.signal }).finally(() => clearTimeout(id));
+    // Check only the origin so we don't accidentally follow an app-specific path that might
+    // return a non-502 even while the app process is down (e.g. a CF login redirect).
+    const origin = new URL(appUrl).origin;
+    const ctrl   = new AbortController();
+    const id     = setTimeout(() => ctrl.abort(), 5000);
+    const res    = await fetch(origin, { signal: ctrl.signal }).finally(() => clearTimeout(id));
     // CF GoRouter returns 502/503 when the app process is down
-    return res.status !== 502 && res.status !== 503;
+    if (res.status === 502 || res.status === 503) return false;
+    // CF GoRouter returns 404 with "Requested route ('...') does not exist" when the app is
+    // stopped or scaled to zero and the route is no longer routable
+    if (res.status === 404) {
+      const body = await res.text();
+      return !body.includes('Requested route (');
+    }
+    return true;
   } catch {
     return false;
   }
@@ -296,8 +316,9 @@ export async function aodProxyHandler(req: Request, res: Response, next: NextFun
   const t0       = Date.now();
   const appUrl   = req.headers['x-aod-app-url'];
   const appId    = req.headers['x-aod-app-id'];
-  const rawIp    = req.headers['x-cf-true-client-ip'] ?? req.ip ?? '';
-  const clientIp = Array.isArray(rawIp) ? (rawIp[0] ?? '') : rawIp;
+  const rawFwd   = req.headers['x-forwarded-for'] ?? req.ip ?? '';
+  const fwdStr   = Array.isArray(rawFwd) ? (rawFwd[0] ?? '') : rawFwd;
+  const clientIp = fwdStr.split(',')[0]?.trim() ?? '';
 
   if (!appUrl || typeof appUrl !== 'string' || !appId || typeof appId !== 'string') {
     res.status(400).json({ ok: false, error: 'Missing x-aod-app-url or x-aod-app-id headers' });
@@ -309,6 +330,8 @@ export async function aodProxyHandler(req: Request, res: Response, next: NextFun
   const hSubdomain = req.headers['x-aod-subdomain'];
   const region     = typeof hRegion    === 'string' ? hRegion    : (extractRegion(appUrl) ?? 'unknown');
   const subdomain  = typeof hSubdomain === 'string' ? hSubdomain : 'unknown';
+
+  logger.debug({ appUrl, appId, region, subdomain, path: req.path, method: req.method }, 'AOD: incoming request');
 
   const userId = extractUserId(req);
 
@@ -329,12 +352,14 @@ export async function aodProxyHandler(req: Request, res: Response, next: NextFun
       const outcome = await ensureAppRunning(appUrl, region, appId);
       startupMs     = Date.now() - t1;
       if (outcome === 'timeout') {
+        logger.warn({ appUrl, appId, region, subdomain, startupMs }, 'AOD: app did not become responsive before timeout');
         const totalMs = Date.now() - t0;
         const geo     = await geoPromise;
         void appendCsvLog(region, subdomain, Math.floor(t0 / 1000), appUrl, appId, clientIp, geo.city, geo.lat, geo.lon, userId, startupMs, totalMs);
         res.status(503).json({ ok: false, error: 'App did not start within timeout' });
         return;
       }
+      logger.info({ appUrl, appId, region, subdomain, startupMs }, 'AOD: app was stopped — started and became responsive');
     }
 
     // Build proxy headers — strip host and x-aod-* headers

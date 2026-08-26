@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import {
   ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown,
-  ExternalLink, Maximize2, Minimize2, PanelLeft, Play, Square, X,
+  ExternalLink, Maximize2, Minimize2, PanelLeft, Play, RefreshCw, Square, X,
 } from 'lucide-react';
 import { useSettings } from '@/components/AppLayout';
 import type { SubaccountEntry, SpaceEntry } from '@/components/config/SubaccountsTable';
@@ -183,6 +183,8 @@ export default function SubaccountAppsModal({
   const [appActionLoading, setAppActionLoading] = useState<'start' | 'stop' | null>(null);
   const [appActionError,   setAppActionError]   = useState<string | null>(null);
   const [showStopConfirm,  setShowStopConfirm]  = useState(false);
+  const [saRefreshing,     setSaRefreshing]     = useState(false);
+  const [saRefreshResult,  setSaRefreshResult]  = useState<{ updated: number; created: number; deleted: number } | null>(null);
 
   const bodyRef        = useRef<HTMLDivElement>(null);
   const splitResizeRef = useRef<{ startX: number; startPct: number; containerW: number } | null>(null);
@@ -190,6 +192,7 @@ export default function SubaccountAppsModal({
   // ── Load apps ─────────────────────────────────────────────────────────────
 
   useEffect(() => {
+    setSaRefreshResult(null);
     setLoading(true);
     fetch(`/api/aod/apps/subaccount?region=${encodeURIComponent(region)}&subdomain=${encodeURIComponent(subdomain)}`)
       .then(r => r.json() as Promise<{ ok: boolean; data: AppFileData[] }>)
@@ -208,6 +211,27 @@ export default function SubaccountAppsModal({
       .finally(() => setLoading(false));
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [region, subdomain]);
+
+  // ── Per-subaccount refresh ────────────────────────────────────────────────
+
+  async function handleSaRefresh() {
+    if (saRefreshing) return;
+    setSaRefreshing(true);
+    setSaRefreshResult(null);
+    try {
+      const res  = await fetch(`/api/aod/apps/refresh-subaccount?region=${encodeURIComponent(region)}&subdomain=${encodeURIComponent(subdomain)}`, { method: 'POST' });
+      const data = await res.json() as { ok: boolean; updated: number; created: number; deleted: number };
+      if (data.ok) {
+        setSaRefreshResult({ updated: data.updated, created: data.created, deleted: data.deleted });
+        // Reload apps list
+        const appsRes  = await fetch(`/api/aod/apps/subaccount?region=${encodeURIComponent(region)}&subdomain=${encodeURIComponent(subdomain)}`);
+        const appsData = await appsRes.json() as { ok: boolean; data: AppFileData[] };
+        if (appsData.ok) setApps(appsData.data);
+      }
+    } catch { /* ignore */ } finally {
+      setSaRefreshing(false);
+    }
+  }
 
   // ── Keyboard ──────────────────────────────────────────────────────────────
 
@@ -429,6 +453,16 @@ export default function SubaccountAppsModal({
               <span className="text-muted-foreground font-normal shrink-0">› Apps</span>
             </div>
 
+            {!currentSa?.restricted && (
+              <button
+                onClick={() => { void handleSaRefresh(); }}
+                disabled={saRefreshing}
+                className={`${iconBtn} ${saRefreshing ? 'opacity-50 cursor-not-allowed' : ''}`}
+                title="Refresh apps"
+              >
+                <RefreshCw className={`h-4 w-4 ${saRefreshing ? 'animate-spin' : ''}`} />
+              </button>
+            )}
             <button onClick={() => setMaximized(m => !m)} className={iconBtn} title={maximized ? 'Restore' : 'Maximize'}>
               {maximized ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}
             </button>
@@ -436,6 +470,26 @@ export default function SubaccountAppsModal({
               <X className="h-4 w-4" />
             </button>
           </div>
+
+          {/* Refresh progress bar */}
+          {(saRefreshing || saRefreshResult) && (
+            <div className="shrink-0 px-4 py-1.5 border-b border-border bg-muted/20 flex items-center gap-2 text-xs text-muted-foreground">
+              {saRefreshing
+                ? <>
+                    <div className="h-1.5 w-1.5 rounded-full bg-primary animate-pulse shrink-0" />
+                    Refreshing apps under <span className="font-medium text-foreground">{saLabel}</span>…
+                  </>
+                : saRefreshResult && <>
+                    <div className="h-1.5 w-1.5 rounded-full bg-emerald-500 shrink-0" />
+                    Refreshed apps under <span className="font-medium text-foreground">{saLabel}</span>
+                    {(saRefreshResult.updated + saRefreshResult.created + saRefreshResult.deleted) > 0
+                      ? <> — Found <span className="text-foreground">{saRefreshResult.updated}</span> updated, <span className="text-foreground">{saRefreshResult.created}</span> created, <span className="text-foreground">{saRefreshResult.deleted}</span> deleted apps</>
+                      : <> — No changes</>
+                    }
+                  </>
+              }
+            </div>
+          )}
 
           {/* Body */}
           <div ref={bodyRef} className="flex flex-1 min-h-0 overflow-hidden">

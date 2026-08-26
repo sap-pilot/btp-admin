@@ -534,6 +534,115 @@ export async function scanApps(): Promise<void> {
   }
 }
 
+// ─── Per-subaccount scan ──────────────────────────────────────────────────────
+
+export interface SubaccountScanResult {
+  updated: number;
+  created: number;
+  deleted: number;
+}
+
+export async function scanSubaccountApps(region: string, subdomain: string): Promise<SubaccountScanResult> {
+  const subaccounts = await readSubaccounts();
+  const sa = subaccounts.find(s => s.region === region && s.subdomain === subdomain);
+  if (!sa || sa.restricted) throw new Error('Subaccount not found or restricted');
+
+  const spaces = sa.org?.spaces ?? [];
+  if (spaces.length === 0) return { updated: 0, created: 0, deleted: 0 };
+
+  const spaceGuids = spaces.map(sp => sp.spaceId);
+  const spaceGuidsParam = spaceGuids.join(',');
+  const spaceMap = new Map(spaces.map(sp => [sp.spaceId, sp.spaceName]));
+
+  const [apps, processes, routes] = await Promise.all([
+    cfGetAll<CfApp>(region, `/v3/apps?per_page=5000&space_guids=${encodeURIComponent(spaceGuidsParam)}`),
+    cfGetAll<CfProcess>(region, `/v3/processes?per_page=5000&space_guids=${encodeURIComponent(spaceGuidsParam)}`),
+    cfGetAll<CfRoute>(region, `/v3/routes?per_page=5000&space_guids=${encodeURIComponent(spaceGuidsParam)}`),
+  ]);
+
+  const processMap = new Map<string, CfProcess>();
+  for (const p of processes) {
+    const ag = p.relationships.app.data.guid;
+    if (!processMap.has(ag) || p.type === 'web') processMap.set(ag, p);
+  }
+
+  const routesByApp = new Map<string, string[]>();
+  for (const route of routes) {
+    for (const dest of route.destinations ?? []) {
+      const guid = dest.app.guid;
+      const url  = `https://${route.url}`;
+      const existing = routesByApp.get(guid);
+      if (existing) existing.push(url);
+      else routesByApp.set(guid, [url]);
+    }
+  }
+
+  // Pre-scan existing JSON files per space
+  const existingBySpace = new Map<string, Set<string>>();
+  for (const [spaceGuid, spaceName] of spaceMap) {
+    const dir = join(APPS_DIR, region, subdomain, sanitizeName(spaceName));
+    try {
+      const files = await readdir(dir);
+      const guids = new Set(files.filter(f => f.endsWith('.json') && !f.endsWith('.deleted.json')).map(f => f.slice(0, -5)));
+      existingBySpace.set(spaceGuid, guids);
+    } catch { /* dir not yet created */ }
+  }
+
+  const now        = Math.floor(Date.now() / 1000);
+  const seenGuids  = new Set<string>();
+  let updated = 0, created = 0;
+
+  for (const app of apps) {
+    const spaceName = spaceMap.get(app.relationships.space.data.guid);
+    if (!spaceName) continue;
+
+    const dir = join(APPS_DIR, region, subdomain, sanitizeName(spaceName));
+    await mkdir(dir, { recursive: true });
+
+    const existing = existingBySpace.get(app.relationships.space.data.guid);
+    const isNew = !existing?.has(app.guid);
+
+    let existingAod = false;
+    try {
+      const raw = JSON.parse(await readFile(join(dir, `${app.guid}.json`), 'utf-8')) as AppFile;
+      existingAod = raw.aod ?? false;
+    } catch { /* new file */ }
+
+    const proc = processMap.get(app.guid);
+    const appFile: AppFile = {
+      guid: app.guid, name: app.name, state: app.state,
+      spaceGuid: app.relationships.space.data.guid, region, subdomain, spaceName,
+      process: proc ? { type: proc.type, instances: proc.instances, memory_in_mb: proc.memory_in_mb, disk_in_mb: proc.disk_in_mb } : undefined,
+      aod: existingAod,
+      urls: routesByApp.get(app.guid) ?? [],
+      lastUpdated: now,
+    };
+
+    await writeFile(join(dir, `${app.guid}.json`), JSON.stringify(appFile, null, 2), 'utf-8');
+    seenGuids.add(app.guid);
+    if (isNew) created++; else updated++;
+  }
+
+  // Mark disappeared apps as deleted
+  let deleted = 0;
+  for (const [spaceGuid, spaceName] of spaceMap) {
+    const dir      = join(APPS_DIR, region, subdomain, sanitizeName(spaceName));
+    const existing = existingBySpace.get(spaceGuid) ?? new Set<string>();
+    for (const guid of existing) {
+      if (!seenGuids.has(guid)) {
+        try {
+          await rename(join(dir, `${guid}.json`), join(dir, `${guid}.deleted.json`));
+          deleted++;
+        } catch { /* already gone */ }
+      }
+    }
+  }
+
+  invalidateTopAppsCache();
+  logger.info({ region, subdomain, updated, created, deleted }, 'AOD: per-subaccount scan complete');
+  return { updated, created, deleted };
+}
+
 // ─── Scheduler ───────────────────────────────────────────────────────────────
 
 export function startAppsScheduler(): void {

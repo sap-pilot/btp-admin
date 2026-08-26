@@ -928,6 +928,44 @@ async function appendSubaccountGlobalChangelog(
   await writeFile(changelogPath, entry + prev, 'utf-8');
 }
 
+// Writes a per-destination changelog entry and a global changelog entry when AOD
+// proxy is installed, updated (proxy URL changed), or uninstalled for a destination.
+async function appendAodDestChangelog(
+  instanceDir: string,
+  destName:    string,
+  before:      Record<string, unknown>,
+  after:       Record<string, unknown>,
+  action:      'installed' | 'updated' | 'uninstalled',
+  username:    string,
+  inst:        { region: string; subdomain: string; spaceName: string; name: string; guid: string },
+): Promise<void> {
+  const dateStr = new Date().toISOString().replace('T', ' ').slice(0, 19) + ' UTC';
+
+  // Per-destination .changelog.md
+  const changelogPath = join(instanceDir, `${destName}.changelog.md`);
+  const diff  = diffDestination(before, after);
+  const entry = `## AOD ${action} by <${username}> at ${dateStr}\n${diff}\n\n`;
+  const prev  = existsSync(changelogPath) ? await readFile(changelogPath, 'utf-8') : '';
+  await writeFile(changelogPath, entry + prev, 'utf-8');
+
+  // Global dest/changelog.md (with size-based rotation)
+  await mkdir(LOCAL_DEST_DIR, { recursive: true });
+  const globalPath = join(LOCAL_DEST_DIR, 'changelog.md');
+  try {
+    const info = await stat(globalPath);
+    if (info.size > 2 * 1024 * 1024) {
+      const archiveName = `changelog.${formatChangelogTs(new Date())}.md`;
+      await rename(globalPath, join(LOCAL_DEST_DIR, archiveName));
+      logger.info({ archiveName }, 'Rotated global changelog');
+    }
+  } catch { /* may not exist yet */ }
+  const histPath = `/destinations/${encodeURIComponent(inst.region)}/${encodeURIComponent(inst.subdomain)}/${encodeURIComponent(inst.spaceName)}/${encodeURIComponent(inst.name)}/${encodeURIComponent(inst.guid)}/${encodeURIComponent(destName)}/history`;
+  const scopeLabel   = `${inst.region} > ${inst.subdomain} > ${inst.spaceName} > ${inst.name}`;
+  const globalEntry  = `## [Auto] AOD ${action} by <${username}> at ${dateStr}\n\n- ${action}: ${scopeLabel} → ${destName} ([History](${histPath}))\n\n`;
+  const prevGlobal   = existsSync(globalPath) ? await readFile(globalPath, 'utf-8') : '';
+  await writeFile(globalPath, globalEntry + prevGlobal, 'utf-8');
+}
+
 // ─── AOD: routes table + proxy install/uninstall ─────────────────────────────
 
 const CFAPPS_URL_RE = /https?:\/\/[^/]+\.cfapps\.[^/]+\.hana\.ondemand\.com/i;
@@ -1851,6 +1889,11 @@ export async function refreshSpaceDestinations(
               ? String(updated['URL.headers.x-aod-app-url'] ?? '')
               : String(updated['URL'] ?? '');
             void updateAppFileAod(appGuid, inst.region, inst.subdomain, destUrl, aodInstalled);
+            // Write AOD-specific changelog entries
+            const wasAod    = 'URL.headers.x-aod-app-url' in dest;
+            const isAod     = 'URL.headers.x-aod-app-url' in updated;
+            const aodAction = (!wasAod && isAod) ? 'installed' : (wasAod && !isAod) ? 'uninstalled' : 'updated';
+            void appendAodDestChangelog(instanceDir, destName, dest, updated, aodAction, username, inst);
           }
         } catch (aodErr) {
           logger.warn({ label, destName, err: aodErr }, 'AOD apply failed for destination');
