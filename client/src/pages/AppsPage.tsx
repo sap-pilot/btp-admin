@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
+import { useParams, useNavigate, useLocation } from 'react-router';
 import { RefreshCw } from 'lucide-react';
 import DateRangePicker from '@/components/DateRangePicker';
 import { fmtDateRange } from '@/hooks/useTimeRange';
@@ -23,10 +24,29 @@ interface SseMsg {
   type:      string;
   current?:  number;
   total?:    number;
-  region?:   string;
-  error?:    boolean | string;
   allStats?: StatsRow | null;
   aodStats?: StatsRow | null;
+}
+
+const VALID_DAYS = new Set([1, 2, 3, 7]);
+
+// ─── URL helpers ──────────────────────────────────────────────────────────────
+
+function parseDuration(search: string): DurationMode {
+  const p    = new URLSearchParams(search);
+  const from = p.get('from');
+  const to   = p.get('to');
+  if (from && to && /^\d{4}-\d{2}-\d{2}$/.test(from) && /^\d{4}-\d{2}-\d{2}$/.test(to)) {
+    return { mode: 'dateRange', fromDate: from, untilDate: to };
+  }
+  const d = Number(p.get('days'));
+  if (VALID_DAYS.has(d)) return { mode: 'days', days: d as 1 | 2 | 3 | 7 };
+  return { mode: 'days', days: 3 };
+}
+
+function buildSearch(dur: DurationMode): string {
+  if (dur.mode === 'dateRange') return `?from=${dur.fromDate}&to=${dur.untilDate}`;
+  return `?days=${dur.days}`;
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -46,11 +66,11 @@ function toYMD(d: Date): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
-function durationToRange(mode: DurationMode): { fromSecs: number; toSecs: number } {
+function durationToRange(dur: DurationMode): { fromSecs: number; toSecs: number } {
   const now = Math.floor(Date.now() / 1000);
-  if (mode.mode === 'days') return { fromSecs: now - mode.days * 86400, toSecs: now };
-  const [fy, fm, fd] = mode.fromDate.split('-').map(Number);
-  const [uy, um, ud] = mode.untilDate.split('-').map(Number);
+  if (dur.mode === 'days') return { fromSecs: now - dur.days * 86400, toSecs: now };
+  const [fy, fm, fd] = dur.fromDate.split('-').map(Number);
+  const [uy, um, ud] = dur.untilDate.split('-').map(Number);
   return {
     fromSecs: Math.floor(new Date(fy, fm - 1, fd, 0, 0, 0).getTime() / 1000),
     toSecs:   Math.floor(new Date(uy, um - 1, ud, 23, 59, 59).getTime() / 1000),
@@ -73,17 +93,17 @@ function StatsChart({ rows, fromSecs, toSecs }: { rows: StatsRow[]; fromSecs: nu
     );
   }
 
-  const maxMB = Math.max(...rows.flatMap(r => [r.sumStartedMB, r.sumStoppedMB]), 1);
-  const xOf   = (ts: number) => pad.l + ((ts - fromSecs) / (toSecs - fromSecs)) * cW;
-  const yOf   = (mb: number) => pad.t + cH - (mb / maxMB) * cH;
-  const pathOf = (getter: (r: StatsRow) => number) =>
-    rows.map((r, i) => `${i === 0 ? 'M' : 'L'}${xOf(r.timestamp).toFixed(1)},${yOf(getter(r)).toFixed(1)}`).join(' ');
+  const maxMB  = Math.max(...rows.flatMap(r => [r.sumStartedMB, r.sumStoppedMB]), 1);
+  const xOf    = (ts: number) => pad.l + ((ts - fromSecs) / (toSecs - fromSecs)) * cW;
+  const yOf    = (mb: number) => pad.t + cH - (mb / maxMB) * cH;
+  const pathOf = (get: (r: StatsRow) => number) =>
+    rows.map((r, i) => `${i === 0 ? 'M' : 'L'}${xOf(r.timestamp).toFixed(1)},${yOf(get(r)).toFixed(1)}`).join(' ');
 
   const yTicks = Array.from({ length: 5 }, (_, i) => (maxMB * i) / 4);
   const rangeSecs = toSecs - fromSecs;
   const xTicks = Array.from({ length: 5 }, (_, i) => {
-    const ts = fromSecs + (rangeSecs / 4) * i;
-    const d  = new Date(ts * 1000);
+    const ts    = fromSecs + (rangeSecs / 4) * i;
+    const d     = new Date(ts * 1000);
     const label = rangeSecs <= 2 * 86400
       ? d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })
       : d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
@@ -131,16 +151,26 @@ function InfoBlock({ label, value, sub, accent }: { label: string; value: string
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
 export default function AppsPage() {
-  const [duration, setDuration]         = useState<DurationMode>({ mode: 'days', days: 1 });
-  const [viewMode, setViewMode]         = useState<ViewMode>('all');
-  const [datePickerOpen, setDatePickerOpen] = useState(false);
-  const [rows, setRows]                 = useState<StatsRow[]>([]);
-  const [latest, setLatest]             = useState<StatsRow | null>(null);
-  const [isRefreshing, setIsRefreshing] = useState(false);
-  const [progress, setProgress]         = useState<{ current: number; total: number } | null>(null);
-  const [loadingData, setLoadingData]   = useState(false);
+  const { view: viewParam } = useParams<{ view: string }>();
+  const navigate            = useNavigate();
+  const location            = useLocation();
 
+  const viewMode: ViewMode = viewParam === 'aod' ? 'aod' : 'all';
+  const duration            = parseDuration(location.search);
   const { fromSecs, toSecs } = durationToRange(duration);
+
+  const [datePickerOpen, setDatePickerOpen] = useState(false);
+  const [rows, setRows]                     = useState<StatsRow[]>([]);
+  const [latest, setLatest]                 = useState<StatsRow | null>(null);
+  const [isRefreshing, setIsRefreshing]     = useState(false);
+  const [progress, setProgress]             = useState<{ current: number; total: number } | null>(null);
+  const [loadingData, setLoadingData]       = useState(false);
+
+  // ── Navigation helpers ────────────────────────────────────────────────────
+
+  function navigateTo(view: ViewMode, dur: DurationMode) {
+    navigate(`/apps/${view}${buildSearch(dur)}`, { replace: true });
+  }
 
   // ── Fetch stats data ──────────────────────────────────────────────────────
 
@@ -163,7 +193,6 @@ export default function AppsPage() {
       .then(r => r.json() as Promise<{ ok: boolean; refreshing: boolean }>)
       .then(d => { if (d.ok) setIsRefreshing(d.refreshing); })
       .catch(() => {});
-    void fetchStats(fromSecs, toSecs, viewMode);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -191,7 +220,6 @@ export default function AppsPage() {
           setIsRefreshing(false);
           setProgress(null);
           if (msg.type === 'refresh-done') {
-            // Update latest from SSE payload for the active view mode
             const newLatest = viewMode === 'aod' ? (msg.aodStats ?? null) : (msg.allStats ?? null);
             if (newLatest) setLatest(newLatest);
             void fetchStats(fromSecs, toSecs, viewMode);
@@ -219,10 +247,11 @@ export default function AppsPage() {
 
   function handleDurationChange(v: string) {
     if (v === 'range') { setDatePickerOpen(true); return; }
-    setDuration({ mode: 'days', days: Number(v) as 1 | 2 | 3 | 7 });
+    navigateTo(viewMode, { mode: 'days', days: Number(v) as 1 | 2 | 3 | 7 });
   }
 
-  const durationLabel = duration.mode === 'dateRange'
+  const durationSelectValue = duration.mode === 'dateRange' ? 'range' : String(duration.days);
+  const durationLabel       = duration.mode === 'dateRange'
     ? fmtDateRange(duration.fromDate, duration.untilDate)
     : null;
 
@@ -243,7 +272,7 @@ export default function AppsPage() {
         <div className="flex items-center gap-2">
           {/* Duration select */}
           <select
-            value={duration.mode === 'dateRange' ? 'range' : String(duration.days)}
+            value={durationSelectValue}
             onChange={e => handleDurationChange(e.target.value)}
             className="h-8 rounded-md border border-input bg-background px-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring"
           >
@@ -270,13 +299,13 @@ export default function AppsPage() {
           {/* All apps / AOD apps toggle */}
           <div className="flex h-8 rounded-md border border-input overflow-hidden text-sm">
             <button
-              onClick={() => setViewMode('all')}
+              onClick={() => navigateTo('all', duration)}
               className={`px-3 transition-colors ${viewMode === 'all' ? 'bg-primary text-primary-foreground' : 'bg-background text-foreground hover:bg-accent hover:text-accent-foreground'}`}
             >
               All apps
             </button>
             <button
-              onClick={() => setViewMode('aod')}
+              onClick={() => navigateTo('aod', duration)}
               className={`px-3 transition-colors border-l border-input ${viewMode === 'aod' ? 'bg-primary text-primary-foreground' : 'bg-background text-foreground hover:bg-accent hover:text-accent-foreground'}`}
             >
               AOD apps
@@ -343,7 +372,7 @@ export default function AppsPage() {
       <DateRangePicker
         open={datePickerOpen}
         onClose={() => setDatePickerOpen(false)}
-        onApply={(from, until) => setDuration({ mode: 'dateRange', fromDate: from, untilDate: until })}
+        onApply={(from, until) => navigateTo(viewMode, { mode: 'dateRange', fromDate: from, untilDate: until })}
         fromDate={duration.mode === 'dateRange' ? duration.fromDate : toYMD(new Date(Date.now() - 86400000))}
         untilDate={duration.mode === 'dateRange' ? duration.untilDate : toYMD(new Date())}
         maxStorageDays={3650}
