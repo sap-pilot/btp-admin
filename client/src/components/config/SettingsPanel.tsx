@@ -26,7 +26,7 @@ const NAV_ITEMS: { id: NavItem; label: string }[] = [
 
 // ─── AOD data ─────────────────────────────────────────────────────────────────
 
-export interface AodData { stopAppsUnusedAfterHours?: number; excludeApps?: string[] }
+export interface AodData { stopAppsUnusedAfterHrs?: number; excludeApps?: string[] }
 
 // ─── Props ────────────────────────────────────────────────────────────────────
 
@@ -365,7 +365,7 @@ function AodSection({ data, onChange }: { data: AodData; onChange: (d: AodData) 
 
   function setHours(val: string) {
     const n = val === '' ? undefined : parseInt(val, 10);
-    onChange({ ...data, stopAppsUnusedAfterHours: Number.isNaN(n) ? undefined : n });
+    onChange({ ...data, stopAppsUnusedAfterHrs: Number.isNaN(n) ? undefined : n });
   }
 
   function updatePattern(i: number, val: string) {
@@ -391,7 +391,7 @@ function AodSection({ data, onChange }: { data: AodData; onChange: (d: AodData) 
           type="number"
           min={0}
           step={1}
-          value={data.stopAppsUnusedAfterHours ?? ''}
+          value={data.stopAppsUnusedAfterHrs ?? ''}
           onChange={e => setHours(e.target.value)}
           placeholder="e.g. 8"
           className={inpCls}

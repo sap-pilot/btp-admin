@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { RefreshCw } from 'lucide-react';
 import DateRangePicker from '@/components/DateRangePicker';
 import { fmtDateRange } from '@/hooks/useTimeRange';
@@ -13,7 +13,21 @@ interface StatsRow {
   sumStoppedMB: number;
 }
 
-type DurationMode = { mode: 'days'; days: 1 | 2 | 3 | 7 } | { mode: 'dateRange'; fromDate: string; untilDate: string };
+type DurationMode =
+  | { mode: 'days'; days: 1 | 2 | 3 | 7 }
+  | { mode: 'dateRange'; fromDate: string; untilDate: string };
+
+type ViewMode = 'all' | 'aod';
+
+interface SseMsg {
+  type:      string;
+  current?:  number;
+  total?:    number;
+  region?:   string;
+  error?:    boolean | string;
+  allStats?: StatsRow | null;
+  aodStats?: StatsRow | null;
+}
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -23,7 +37,9 @@ function fmtMB(mb: number): string {
 }
 
 function fmtTime(unixSecs: number): string {
-  return new Date(unixSecs * 1000).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  return new Date(unixSecs * 1000).toLocaleTimeString(undefined, {
+    hour: '2-digit', minute: '2-digit', second: '2-digit',
+  });
 }
 
 function toYMD(d: Date): string {
@@ -32,9 +48,7 @@ function toYMD(d: Date): string {
 
 function durationToRange(mode: DurationMode): { fromSecs: number; toSecs: number } {
   const now = Math.floor(Date.now() / 1000);
-  if (mode.mode === 'days') {
-    return { fromSecs: now - mode.days * 86400, toSecs: now };
-  }
+  if (mode.mode === 'days') return { fromSecs: now - mode.days * 86400, toSecs: now };
   const [fy, fm, fd] = mode.fromDate.split('-').map(Number);
   const [uy, um, ud] = mode.untilDate.split('-').map(Number);
   return {
@@ -48,8 +62,8 @@ function durationToRange(mode: DurationMode): { fromSecs: number; toSecs: number
 function StatsChart({ rows, fromSecs, toSecs }: { rows: StatsRow[]; fromSecs: number; toSecs: number }) {
   const W = 900, H = 240;
   const pad = { t: 24, r: 24, b: 40, l: 72 };
-  const cW = W - pad.l - pad.r;
-  const cH = H - pad.t - pad.b;
+  const cW  = W - pad.l - pad.r;
+  const cH  = H - pad.t - pad.b;
 
   if (rows.length === 0) {
     return (
@@ -62,70 +76,42 @@ function StatsChart({ rows, fromSecs, toSecs }: { rows: StatsRow[]; fromSecs: nu
   const maxMB = Math.max(...rows.flatMap(r => [r.sumStartedMB, r.sumStoppedMB]), 1);
   const xOf   = (ts: number) => pad.l + ((ts - fromSecs) / (toSecs - fromSecs)) * cW;
   const yOf   = (mb: number) => pad.t + cH - (mb / maxMB) * cH;
-
   const pathOf = (getter: (r: StatsRow) => number) =>
     rows.map((r, i) => `${i === 0 ? 'M' : 'L'}${xOf(r.timestamp).toFixed(1)},${yOf(getter(r)).toFixed(1)}`).join(' ');
 
-  // 5 Y ticks
   const yTicks = Array.from({ length: 5 }, (_, i) => (maxMB * i) / 4);
-
-  // X ticks: ~5 evenly spaced
   const rangeSecs = toSecs - fromSecs;
-  const xTickCount = 5;
-  const xTicks = Array.from({ length: xTickCount }, (_, i) => {
-    const ts = fromSecs + (rangeSecs / (xTickCount - 1)) * i;
+  const xTicks = Array.from({ length: 5 }, (_, i) => {
+    const ts = fromSecs + (rangeSecs / 4) * i;
     const d  = new Date(ts * 1000);
-    let label: string;
-    if (rangeSecs <= 2 * 86400) {
-      label = d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
-    } else {
-      label = d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
-    }
+    const label = rangeSecs <= 2 * 86400
+      ? d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })
+      : d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
     return { ts, label };
   });
 
   return (
     <svg viewBox={`0 0 ${W} ${H}`} className="w-full h-auto" style={{ maxHeight: 280 }}>
-      {/* grid lines */}
       {yTicks.map((mb, i) => (
         <line key={i} x1={pad.l} y1={yOf(mb).toFixed(1)} x2={pad.l + cW} y2={yOf(mb).toFixed(1)}
           stroke="currentColor" strokeOpacity={0.08} strokeWidth={1} />
       ))}
-
-      {/* started line (blue) */}
       <path d={pathOf(r => r.sumStartedMB)} fill="none" stroke="#3b82f6" strokeWidth={2.5} strokeLinejoin="round" strokeLinecap="round" />
-      {/* stopped line (orange) */}
       <path d={pathOf(r => r.sumStoppedMB)} fill="none" stroke="#f97316" strokeWidth={2.5} strokeLinejoin="round" strokeLinecap="round" />
-
-      {/* Y axis labels */}
       {yTicks.map((mb, i) => (
         <text key={i} x={pad.l - 8} y={yOf(mb).toFixed(1)} textAnchor="end" dominantBaseline="middle"
-          fontSize={10} fill="currentColor" opacity={0.5}>
-          {fmtMB(mb)}
-        </text>
+          fontSize={10} fill="currentColor" opacity={0.5}>{fmtMB(mb)}</text>
       ))}
-
-      {/* X axis labels */}
       {xTicks.map(({ ts, label }) => (
         <text key={ts} x={xOf(ts).toFixed(1)} y={H - pad.b + 16} textAnchor="middle"
-          fontSize={10} fill="currentColor" opacity={0.5}>
-          {label}
-        </text>
+          fontSize={10} fill="currentColor" opacity={0.5}>{label}</text>
       ))}
-
-      {/* axes */}
       <line x1={pad.l} y1={pad.t} x2={pad.l} y2={pad.t + cH} stroke="currentColor" strokeOpacity={0.15} />
       <line x1={pad.l} y1={pad.t + cH} x2={pad.l + cW} y2={pad.t + cH} stroke="currentColor" strokeOpacity={0.15} />
-
-      {/* legend */}
       <circle cx={pad.l + 12} cy={pad.t - 8} r={4} fill="#3b82f6" />
-      <text x={pad.l + 20} y={pad.t - 8} dominantBaseline="middle" fontSize={11} fill="currentColor" opacity={0.7}>
-        Started MB
-      </text>
+      <text x={pad.l + 20} y={pad.t - 8} dominantBaseline="middle" fontSize={11} fill="currentColor" opacity={0.7}>Started MB</text>
       <circle cx={pad.l + 110} cy={pad.t - 8} r={4} fill="#f97316" />
-      <text x={pad.l + 118} y={pad.t - 8} dominantBaseline="middle" fontSize={11} fill="currentColor" opacity={0.7}>
-        Stopped MB
-      </text>
+      <text x={pad.l + 118} y={pad.t - 8} dominantBaseline="middle" fontSize={11} fill="currentColor" opacity={0.7}>Stopped MB</text>
     </svg>
   );
 }
@@ -146,21 +132,23 @@ function InfoBlock({ label, value, sub, accent }: { label: string; value: string
 
 export default function AppsPage() {
   const [duration, setDuration]         = useState<DurationMode>({ mode: 'days', days: 1 });
+  const [viewMode, setViewMode]         = useState<ViewMode>('all');
   const [datePickerOpen, setDatePickerOpen] = useState(false);
   const [rows, setRows]                 = useState<StatsRow[]>([]);
   const [latest, setLatest]             = useState<StatsRow | null>(null);
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [progress, setProgress]         = useState<{ current: number; total: number } | null>(null);
   const [loadingData, setLoadingData]   = useState(false);
-  const esRef = useRef<EventSource | null>(null);
 
   const { fromSecs, toSecs } = durationToRange(duration);
 
   // ── Fetch stats data ──────────────────────────────────────────────────────
 
-  const fetchStats = useCallback(async (from: number, to: number) => {
+  const fetchStats = useCallback(async (from: number, to: number, mode: ViewMode) => {
     setLoadingData(true);
     try {
-      const res  = await fetch(`/api/aod/apps/stats?from=${from}&to=${to}`);
+      const aodParam = mode === 'aod' ? '&aod=1' : '';
+      const res  = await fetch(`/api/aod/apps/stats?from=${from}&to=${to}${aodParam}`);
       const data = await res.json() as { ok: boolean; data: StatsRow[]; latest: StatsRow | null };
       if (data.ok) { setRows(data.data); setLatest(data.latest); }
     } catch { /* ignore */ } finally {
@@ -168,48 +156,53 @@ export default function AppsPage() {
     }
   }, []);
 
-  // ── Initial load (status + stats) ────────────────────────────────────────
+  // ── Initial load ──────────────────────────────────────────────────────────
 
   useEffect(() => {
     void fetch('/api/aod/apps/status')
       .then(r => r.json() as Promise<{ ok: boolean; refreshing: boolean }>)
       .then(d => { if (d.ok) setIsRefreshing(d.refreshing); })
       .catch(() => {});
-    void fetchStats(fromSecs, toSecs);
+    void fetchStats(fromSecs, toSecs, viewMode);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // ── Re-fetch when duration changes ───────────────────────────────────────
+  // ── Re-fetch on duration / viewMode change ────────────────────────────────
 
   useEffect(() => {
-    void fetchStats(fromSecs, toSecs);
+    void fetchStats(fromSecs, toSecs, viewMode);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [fromSecs, toSecs]);
+  }, [fromSecs, toSecs, viewMode]);
 
   // ── SSE ───────────────────────────────────────────────────────────────────
 
   useEffect(() => {
     const es = new EventSource('/api/events?aod=1');
-    esRef.current = es;
 
     es.addEventListener('update', (e: MessageEvent) => {
       try {
-        const msg = JSON.parse(e.data as string) as { type: string; stats?: StatsRow | null };
+        const msg = JSON.parse(e.data as string) as SseMsg;
         if (msg.type === 'refresh-start') {
           setIsRefreshing(true);
+          setProgress(null);
+        } else if (msg.type === 'refresh-progress') {
+          setProgress({ current: msg.current ?? 0, total: msg.total ?? 1 });
         } else if (msg.type === 'refresh-done' || msg.type === 'refresh-error') {
           setIsRefreshing(false);
-          if (msg.type === 'refresh-done' && msg.stats) {
-            setLatest(msg.stats);
-            void fetchStats(fromSecs, toSecs);
+          setProgress(null);
+          if (msg.type === 'refresh-done') {
+            // Update latest from SSE payload for the active view mode
+            const newLatest = viewMode === 'aod' ? (msg.aodStats ?? null) : (msg.allStats ?? null);
+            if (newLatest) setLatest(newLatest);
+            void fetchStats(fromSecs, toSecs, viewMode);
           }
         }
       } catch { /* ignore */ }
     });
 
-    return () => { es.close(); esRef.current = null; };
+    return () => es.close();
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [fromSecs, toSecs]);
+  }, [fromSecs, toSecs, viewMode]);
 
   // ── Refresh ───────────────────────────────────────────────────────────────
 
@@ -226,8 +219,7 @@ export default function AppsPage() {
 
   function handleDurationChange(v: string) {
     if (v === 'range') { setDatePickerOpen(true); return; }
-    const days = Number(v) as 1 | 2 | 3 | 7;
-    setDuration({ mode: 'days', days });
+    setDuration({ mode: 'days', days: Number(v) as 1 | 2 | 3 | 7 });
   }
 
   const durationLabel = duration.mode === 'dateRange'
@@ -238,6 +230,10 @@ export default function AppsPage() {
 
   const totalMB   = (latest?.sumStartedMB ?? 0) + (latest?.sumStoppedMB ?? 0);
   const savingPct = totalMB > 0 ? ((latest?.sumStoppedMB ?? 0) / totalMB * 100).toFixed(1) : '—';
+
+  const progressLabel = progress
+    ? `Refreshing ${progress.current} / ${progress.total} regions`
+    : 'Scanning…';
 
   return (
     <div className="flex flex-col h-full min-h-0">
@@ -270,13 +266,35 @@ export default function AppsPage() {
             <RefreshCw className={`h-3.5 w-3.5 ${isRefreshing ? 'animate-spin' : ''}`} />
             {isRefreshing ? 'Scanning…' : 'Refresh'}
           </button>
+
+          {/* All apps / AOD apps toggle */}
+          <div className="flex h-8 rounded-md border border-input overflow-hidden text-sm">
+            <button
+              onClick={() => setViewMode('all')}
+              className={`px-3 transition-colors ${viewMode === 'all' ? 'bg-primary text-primary-foreground' : 'bg-background text-foreground hover:bg-accent hover:text-accent-foreground'}`}
+            >
+              All apps
+            </button>
+            <button
+              onClick={() => setViewMode('aod')}
+              className={`px-3 transition-colors border-l border-input ${viewMode === 'aod' ? 'bg-primary text-primary-foreground' : 'bg-background text-foreground hover:bg-accent hover:text-accent-foreground'}`}
+            >
+              AOD apps
+            </button>
+          </div>
         </div>
       </div>
 
       {/* Progress bar */}
       {isRefreshing && (
-        <div className="h-0.5 bg-border shrink-0 overflow-hidden relative">
-          <div className="absolute inset-y-0 bg-primary animate-pulse" style={{ left: '0%', width: '60%' }} />
+        <div className="flex items-center gap-3 border-b border-border bg-muted/30 px-6 py-1.5 shrink-0">
+          <div className="flex-1 h-1.5 rounded-full bg-border overflow-hidden">
+            <div
+              className="h-full bg-primary transition-all duration-500"
+              style={{ width: progress ? `${Math.round((progress.current / progress.total) * 100)}%` : '10%' }}
+            />
+          </div>
+          <span className="text-xs text-muted-foreground whitespace-nowrap">{progressLabel}</span>
         </div>
       )}
 
@@ -284,7 +302,7 @@ export default function AppsPage() {
       <div className="flex-1 overflow-auto min-h-0 p-6 flex flex-col gap-6">
 
         {/* Info blocks */}
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+        <div className={`grid gap-4 ${viewMode === 'aod' ? 'grid-cols-2 md:grid-cols-4' : 'grid-cols-2 md:grid-cols-3'}`}>
           <InfoBlock
             label="Started Apps"
             value={latest ? String(latest.startedApps) : '—'}
@@ -297,12 +315,14 @@ export default function AppsPage() {
             sub={latest ? fmtMB(latest.sumStoppedMB) : undefined}
             accent="text-orange-500"
           />
-          <InfoBlock
-            label="Memory Saving"
-            value={`${savingPct}%`}
-            sub={latest ? `${fmtMB(latest.sumStoppedMB)} idle / ${fmtMB(totalMB)} total` : undefined}
-            accent="text-emerald-500"
-          />
+          {viewMode === 'aod' && (
+            <InfoBlock
+              label="Memory Saving"
+              value={`${savingPct}%`}
+              sub={latest ? `${fmtMB(latest.sumStoppedMB)} idle / ${fmtMB(totalMB)} total` : undefined}
+              accent="text-emerald-500"
+            />
+          )}
           <InfoBlock
             label="Last Checked"
             value={latest ? fmtTime(latest.timestamp) : '—'}

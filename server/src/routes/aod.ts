@@ -49,7 +49,8 @@ router.get('/apps/stats', requireAdmin, async (req, res, next) => {
     const nowSecs  = Math.floor(Date.now() / 1000);
     const from     = typeof req.query['from'] === 'string' ? Number(req.query['from']) : nowSecs - 86400;
     const to       = typeof req.query['to']   === 'string' ? Number(req.query['to'])   : nowSecs;
-    const [data, latest] = await Promise.all([getStatsData(from, to), getLatestStats()]);
+    const aodOnly  = req.query['aod'] === '1';
+    const [data, latest] = await Promise.all([getStatsData(from, to, aodOnly), getLatestStats(aodOnly)]);
     res.json({ ok: true, data, latest });
   } catch (err) { next(err); }
 });

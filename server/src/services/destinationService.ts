@@ -10,6 +10,7 @@ import { getOrRefreshToken, fetchWithRateLimit } from './cfLoginService.js';
 import { getRestrictedIds, getAutoSubaccountRefreshMs } from './configService.js';
 import { readSubaccounts, type SubaccountEntry } from './subaccountsService.js';
 import { readAodConfig, type AodConfig } from './aodConfigService.js';
+import { updateAppFileAod } from './aodAppsService.js';
 import { notifyCallbacks, registerOnDestChangelogSynced, registerOnDestSynced } from './syncService.js';
 import { emit, emitImmediate } from './liveEvents.js';
 
@@ -1843,6 +1844,13 @@ export async function refreshSpaceDestinations(
           );
           if (updated) {
             await persistSpaceDestination(instanceDir, destName, updated, username);
+            // Update {appGuid}.json->aod and ->urls after AOD install/uninstall
+            const aodInstalled = 'URL.headers.x-aod-app-id' in updated;
+            const appGuid      = String(updated['URL.headers.x-aod-app-id'] ?? dest['URL.headers.x-aod-app-id'] ?? '');
+            const destUrl      = aodInstalled
+              ? String(updated['URL.headers.x-aod-app-url'] ?? '')
+              : String(updated['URL'] ?? '');
+            void updateAppFileAod(appGuid, inst.region, inst.subdomain, destUrl, aodInstalled);
           }
         } catch (aodErr) {
           logger.warn({ label, destName, err: aodErr }, 'AOD apply failed for destination');
