@@ -505,8 +505,8 @@ export async function scanApps(): Promise<void> {
     await Promise.all([appendStatsFile('stats.csv', allRow), appendStatsFile('aod-stats.csv', aodRow)]);
 
     logger.info({ totalStarted, totalStopped, sumStartedMB, sumStoppedMB, aodStarted, aodStopped }, 'AOD apps scan complete');
+    await doRefreshTopAppsCache();
     emitImmediate('aod-apps', { type: 'refresh-done', ts: Date.now(), allStats: allRow, aodStats: aodRow });
-    void doRefreshTopAppsCache();
   } catch (err) {
     logger.error({ err }, 'AOD apps scan failed');
     emitImmediate('aod-apps', { type: 'refresh-error', ts: Date.now(), error: String(err) });

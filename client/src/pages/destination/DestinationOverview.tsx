@@ -31,7 +31,7 @@ interface RefreshProgress {
   errors?:    string[];
 }
 
-interface Buckets { generic: string[]; s4: string[]; cep: string[]; others: string[] }
+interface Buckets { generic: string[]; cep: string[]; others: string[] }
 
 interface ModalState { sa: SubaccountEntry; allNames: string[]; initialName?: string; initialTab?: 'properties' | 'changelog' | 'test'; initialShowList?: boolean; initialSpaceName?: string; initialInstanceName?: string; initialInstanceGuid?: string }
 
@@ -55,13 +55,13 @@ function saOrgId(sa: SubaccountEntry): string {
 
 function categorise(name: string): keyof Buckets {
   if (/^API_(S4|MDG)_(HTTP|RFC)_/i.test(name))  return 'generic';
-  if (/^API_/i.test(name))                       return 's4';
+  if (/^API_/i.test(name))                       return 'others';
   if (/^cep-.*-runtime$/i.test(name))            return 'cep';
   return 'others';
 }
 
 function bucketSa(dests: DestItem[]): Buckets {
-  const b: Buckets = { generic: [], s4: [], cep: [], others: [] };
+  const b: Buckets = { generic: [], cep: [], others: [] };
   for (const d of dests) b[categorise(d.name)].push(d.name);
   return b;
 }
@@ -88,7 +88,6 @@ function Highlight({ text, query }: { text: string; query: string }) {
 
 const CAT_META = {
   generic: { label: 'Generic',      pattern: 'API_[S4|MDG]_[HTTP|RFC]_*' },
-  s4:      { label: 'Specific S/4', pattern: 'other API_*' },
   cep:     { label: 'Workzone',     pattern: 'cep-*-runtime' },
 } as const;
 
@@ -861,10 +860,10 @@ export default function DestinationOverview() {
                           ));
                         })() : (
                           <>
-                            {(['generic', 's4', 'cep'] as const).map(cat => {
+                            {(['generic', 'cep'] as const).map(cat => {
                               const { label, pattern } = CAT_META[cat];
 
-                              if (cat === 's4' || cat === 'generic' || cat === 'cep') {
+                              {
                                 const sortedPerSa = saBuckets.map(b => ({
                                   sa:       b.sa,
                                   names:    [...b.buckets[cat]].sort(),

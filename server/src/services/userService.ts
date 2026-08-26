@@ -428,6 +428,7 @@ export async function refreshUsers(
       emitImmediate('refresh-users', {
         type: 'progress', scope: 'global',
         current: i + 1, total,
+        name: sa.alias || sa.subaccountName || sa.subdomain,
         received: totalReceived,
       });
 
