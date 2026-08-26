@@ -7,6 +7,7 @@ import { fmtDateRange } from '@/hooks/useTimeRange';
 import type { SubaccountEntry } from '@/components/config/SubaccountsTable';
 import type { TabEntry, TabSection } from '@/components/config/TabsTable';
 import SubaccountAppsModal from './SubaccountAppsModal';
+import UsageAnalyticsView from './UsageAnalyticsView';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -22,7 +23,7 @@ type DurationMode =
   | { mode: 'days'; days: 1 | 2 | 3 | 7 }
   | { mode: 'dateRange'; fromDate: string; untilDate: string };
 
-type ViewMode = 'all' | 'aod';
+type ViewMode = 'all' | 'aod' | 'analytics';
 
 interface SseMsg {
   type:      string;
@@ -207,7 +208,7 @@ export default function AppsPage() {
   const location             = useLocation();
   const { toggle }           = useSidebar();
 
-  const viewMode: ViewMode = viewParam === 'aod' ? 'aod' : 'all';
+  const viewMode: ViewMode = viewParam === 'aod' ? 'aod' : viewParam === 'analytics' ? 'analytics' : 'all';
   const duration            = parseDuration(location.search);
   const { fromSecs, toSecs } = durationToRange(duration);
 
@@ -535,7 +536,7 @@ export default function AppsPage() {
             {isRefreshing ? 'Scanning…' : 'Refresh'}
           </button>
 
-          {/* Memory Consumption (All) / AOD toggle */}
+          {/* View mode toggle */}
           <div className="flex h-8 rounded-md border border-input overflow-hidden text-sm">
             <button
               onClick={() => navigateTo('all', duration)}
@@ -548,6 +549,12 @@ export default function AppsPage() {
               className={`px-3 transition-colors border-l border-input ${viewMode === 'aod' ? 'bg-primary text-primary-foreground' : 'bg-background text-foreground hover:bg-accent hover:text-accent-foreground'}`}
             >
               AOD
+            </button>
+            <button
+              onClick={() => navigateTo('analytics', duration)}
+              className={`px-3 transition-colors border-l border-input ${viewMode === 'analytics' ? 'bg-primary text-primary-foreground' : 'bg-background text-foreground hover:bg-accent hover:text-accent-foreground'}`}
+            >
+              Usage Analytics
             </button>
           </div>
         </div>
@@ -613,8 +620,15 @@ export default function AppsPage() {
         </div>
       )}
 
-      {/* Content */}
-      <div className="flex-1 overflow-auto min-h-0 p-6 space-y-6">
+      {/* Usage Analytics view */}
+      {viewMode === 'analytics' && (
+        <div className="flex-1 overflow-auto min-h-0">
+          <UsageAnalyticsView saList={allSas} tabs={tabEntries} isDarkMap />
+        </div>
+      )}
+
+      {/* Content (normal / AOD view) */}
+      {viewMode !== 'analytics' && <div className="flex-1 overflow-auto min-h-0 p-6 space-y-6">
 
         {/* Info blocks */}
         <div className={`grid gap-3 sm:gap-4 ${viewMode === 'aod' ? 'grid-cols-2 sm:grid-cols-4' : 'grid-cols-2 sm:grid-cols-3'}`}>
@@ -768,7 +782,7 @@ export default function AppsPage() {
               </div>
             );
           })}
-      </div>
+      </div>}
 
       {/* Subaccount apps modal */}
       {modalState && (

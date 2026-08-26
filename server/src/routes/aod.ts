@@ -1,5 +1,6 @@
 import { appendFile, mkdir, rename, stat } from 'node:fs/promises';
 import { scanApps, getStatsData, getLatestStats, isRefreshRunning, getTopAppsPerSubaccount, getCachedTopApps, getSubaccountApps, searchApps, updateAppFileState, refreshTopAppsAndNotify, scanSubaccountApps } from '../services/aodAppsService.js';
+import { getAnalytics, recordAodRequest } from '../services/aodAnalyticsService.js';
 import { join } from 'node:path';
 import type { Request, Response, NextFunction } from 'express';
 import { Router } from 'express';
@@ -132,6 +133,17 @@ router.post('/apps/:guid/stop', requireAdmin, async (req, res, next) => {
     logger.info({ guid, region }, 'AOD: app stopped via UI');
     res.json({ ok: true });
     if (subdomain) void updateAppFileState(guid, region, subdomain, 'STOPPED').then(() => refreshTopAppsAndNotify());
+  } catch (err) { next(err); }
+});
+
+// ─── Analytics ───────────────────────────────────────────────────────────────
+
+router.get('/analytics', async (req, res, next) => {
+  try {
+    const raw   = req.query['duration'];
+    const hours = typeof raw === 'string' ? Math.max(1, Math.min(168, Number(raw) || 24)) : 24;
+    const data  = await getAnalytics(hours);
+    res.json({ ok: true, data });
   } catch (err) { next(err); }
 });
 
@@ -356,6 +368,7 @@ export async function aodProxyHandler(req: Request, res: Response, next: NextFun
         const totalMs = Date.now() - t0;
         const geo     = await geoPromise;
         void appendCsvLog(region, subdomain, Math.floor(t0 / 1000), appUrl, appId, clientIp, geo.city, geo.lat, geo.lon, userId, startupMs, totalMs);
+        recordAodRequest({ region, subdomain, appId, userId, city: geo.city, lat: geo.lat, lon: geo.lon, ts: Math.floor(t0 / 1000) });
         res.status(503).json({ ok: false, error: 'App did not start within timeout' });
         return;
       }
@@ -390,8 +403,9 @@ export async function aodProxyHandler(req: Request, res: Response, next: NextFun
     const upBuf = await upstream.arrayBuffer();
     res.end(Buffer.from(upBuf));
 
-    // Write access log after response is sent (non-blocking)
+    // Write access log + fire analytics event after response is sent (non-blocking)
     void appendCsvLog(region, subdomain, Math.floor(t0 / 1000), appUrl, appId, clientIp, geo.city, geo.lat, geo.lon, userId, startupMs, totalMs);
+    recordAodRequest({ region, subdomain, appId, userId, city: geo.city, lat: geo.lat, lon: geo.lon, ts: Math.floor(t0 / 1000) });
   } catch (err) {
     logger.error({ err, appUrl, targetUrl }, 'AOD proxy error');
     next(err);
