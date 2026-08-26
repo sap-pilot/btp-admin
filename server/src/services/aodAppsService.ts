@@ -20,6 +20,25 @@ let topAppsCache:   SubaccountTopApps[] | null = null;
 
 export function isRefreshRunning(): boolean  { return refreshRunning; }
 export function getCachedTopApps(): SubaccountTopApps[] { return topAppsCache ?? []; }
+export function invalidateTopAppsCache(): void { topAppsCache = null; }
+
+export async function refreshTopAppsAndNotify(): Promise<void> {
+  try { topAppsCache = await buildTopApps(); } catch { /* keep stale */ }
+  emitImmediate('aod-apps', { type: 'app-state-changed' });
+}
+
+export async function updateAppFileState(guid: string, region: string, subdomain: string, newState: string): Promise<void> {
+  const filePath = await findAppFile(guid, region, subdomain);
+  if (!filePath) return;
+  try {
+    const raw = await readFile(filePath, 'utf-8');
+    const obj = JSON.parse(raw) as AppFile;
+    obj.state = newState;
+    await writeFile(filePath, JSON.stringify(obj, null, 2), 'utf-8');
+  } catch (err) {
+    logger.warn({ err, guid, region, subdomain }, 'AOD: failed to update app state in JSON');
+  }
+}
 
 // ─── CF API helpers ───────────────────────────────────────────────────────────
 

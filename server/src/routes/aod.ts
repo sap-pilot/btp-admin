@@ -1,5 +1,5 @@
 import { appendFile, mkdir, rename, stat } from 'node:fs/promises';
-import { scanApps, getStatsData, getLatestStats, isRefreshRunning, getTopAppsPerSubaccount, getCachedTopApps, getSubaccountApps, searchApps } from '../services/aodAppsService.js';
+import { scanApps, getStatsData, getLatestStats, isRefreshRunning, getTopAppsPerSubaccount, getCachedTopApps, getSubaccountApps, searchApps, updateAppFileState, refreshTopAppsAndNotify } from '../services/aodAppsService.js';
 import { join } from 'node:path';
 import type { Request, Response, NextFunction } from 'express';
 import { Router } from 'express';
@@ -83,8 +83,9 @@ router.get('/apps/stats', requireAdmin, async (req, res, next) => {
 
 router.post('/apps/:guid/start', requireAdmin, async (req, res, next) => {
   try {
-    const guid   = req.params['guid'] ?? '';
-    const region = typeof req.query['region'] === 'string' ? req.query['region'] : '';
+    const guid      = typeof req.params['guid']      === 'string' ? req.params['guid']      : '';
+    const region    = typeof req.query['region']     === 'string' ? req.query['region']     : '';
+    const subdomain = typeof req.query['subdomain']  === 'string' ? req.query['subdomain']  : '';
     if (!guid || !region) { res.status(400).json({ ok: false, error: 'guid and region required' }); return; }
     const token  = await getOrRefreshToken(region);
     const cfRes  = await fetch(`${token.api_url}/v3/apps/${guid}/actions/start`, {
@@ -98,13 +99,15 @@ router.post('/apps/:guid/start', requireAdmin, async (req, res, next) => {
     }
     logger.info({ guid, region }, 'AOD: app started via UI');
     res.json({ ok: true });
+    if (subdomain) void updateAppFileState(guid, region, subdomain, 'STARTED').then(() => refreshTopAppsAndNotify());
   } catch (err) { next(err); }
 });
 
 router.post('/apps/:guid/stop', requireAdmin, async (req, res, next) => {
   try {
-    const guid   = req.params['guid'] ?? '';
-    const region = typeof req.query['region'] === 'string' ? req.query['region'] : '';
+    const guid      = typeof req.params['guid']      === 'string' ? req.params['guid']      : '';
+    const region    = typeof req.query['region']     === 'string' ? req.query['region']     : '';
+    const subdomain = typeof req.query['subdomain']  === 'string' ? req.query['subdomain']  : '';
     if (!guid || !region) { res.status(400).json({ ok: false, error: 'guid and region required' }); return; }
     const token  = await getOrRefreshToken(region);
     const cfRes  = await fetch(`${token.api_url}/v3/apps/${guid}/actions/stop`, {
@@ -118,6 +121,7 @@ router.post('/apps/:guid/stop', requireAdmin, async (req, res, next) => {
     }
     logger.info({ guid, region }, 'AOD: app stopped via UI');
     res.json({ ok: true });
+    if (subdomain) void updateAppFileState(guid, region, subdomain, 'STOPPED').then(() => refreshTopAppsAndNotify());
   } catch (err) { next(err); }
 });
 

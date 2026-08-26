@@ -262,7 +262,7 @@ export default function SubaccountAppsModal({
     setAppActionLoading(action);
     setAppActionError(null);
     try {
-      const res  = await fetch(`/api/aod/apps/${selectedApp.guid}/${action}?region=${encodeURIComponent(region)}`, { method: 'POST' });
+      const res  = await fetch(`/api/aod/apps/${selectedApp.guid}/${action}?region=${encodeURIComponent(region)}&subdomain=${encodeURIComponent(subdomain)}`, { method: 'POST' });
       const data = await res.json() as { ok: boolean; error?: string };
       if (!data.ok) { setAppActionError(data.error ?? `Failed to ${action} app`); return; }
       // Optimistically update local state

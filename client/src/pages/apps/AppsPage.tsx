@@ -326,6 +326,11 @@ export default function AppsPage() {
           setProgress({ type: 'progress', current: 0, total: 0 });
         } else if (msg.type === 'refresh-progress') {
           setProgress({ type: 'progress', current: msg.current ?? 0, total: msg.total ?? 1, region: msg.region });
+        } else if (msg.type === 'app-state-changed') {
+          void fetchTopApps();
+        } else if (msg.type === 'apps-synced') {
+          void fetchStats(fromSecs, toSecs, viewMode);
+          void fetchTopApps();
         } else if (msg.type === 'refresh-done' || msg.type === 'refresh-error') {
           setIsRefreshing(false);
           if (msg.type === 'refresh-done') {
@@ -382,11 +387,13 @@ export default function AppsPage() {
 
   // ── Modal URL sync ────────────────────────────────────────────────────────
 
-  function openModal(region: string, subdomain: string, guid: string, spaceName: string, appName: string) {
+  function openModal(region: string, subdomain: string, guid: string, spaceName?: string, appName?: string) {
     savedPath.current = window.location.pathname + window.location.search;
-    const url = `/apps/${encodeURIComponent(region)}/${encodeURIComponent(subdomain)}/${encodeURIComponent(spaceName)}/${encodeURIComponent(appName)}`;
+    const url = spaceName && appName
+      ? `/apps/${encodeURIComponent(region)}/${encodeURIComponent(subdomain)}/${encodeURIComponent(spaceName)}/${encodeURIComponent(appName)}`
+      : `/apps/${encodeURIComponent(region)}/${encodeURIComponent(subdomain)}`;
     window.history.pushState({ modal: true }, '', url);
-    setModalState({ region, subdomain, guid, spaceName, appName });
+    setModalState({ region, subdomain, guid, spaceName: spaceName ?? '', appName: appName ?? '' });
   }
 
   function closeModal() {
@@ -683,12 +690,15 @@ export default function AppsPage() {
                             <th
                               key={sa.subaccountId}
                               colSpan={2}
-                              className="text-center text-xs font-medium px-3 py-2 min-w-[260px] border-l border-b border-border text-muted-foreground first:border-l-0"
+                              className="text-center text-xs font-medium px-3 py-2 min-w-[260px] border-l border-b border-border first:border-l-0"
                             >
-                              <div className="flex flex-col gap-0.5 items-center">
+                              <button
+                                onClick={() => openModal(sa.region, sa.subdomain, '')}
+                                className="flex flex-col gap-0.5 items-center w-full text-muted-foreground hover:text-primary transition-colors"
+                              >
                                 <span>{sa.alias || sa.subaccountName}</span>
                                 <span className="text-[10px] font-normal font-mono text-muted-foreground/60 leading-tight">{sa.subdomain}</span>
-                              </div>
+                              </button>
                             </th>
                           ))}
                         </tr>

@@ -66,6 +66,27 @@ router.post('/batch', requireSyncAuth, async (req, res, next) => {
           rejectBatch(400, `invalid users path (expected 2 or 5 segments): ${p}`);
           return;
         }
+      } else if (parts[0] === 'apps') {
+        // apps paths: stats/config (2 segs), accesslog (4 segs), per-app JSON (5 segs)
+        if (parts.length === 2) {
+          if (!parts[1] || !/^(stats|aod-stats|aod-config)\.(csv|json)$/.test(parts[1])) {
+            rejectBatch(400, `invalid apps root file: ${p}`);
+            return;
+          }
+        } else if (parts.length === 4) {
+          if (!parts[1] || !parts[2] || !parts[3] || !/^accesslog(\.\d{8})?\.csv$/.test(parts[3])) {
+            rejectBatch(400, `invalid apps access log path: ${p}`);
+            return;
+          }
+        } else if (parts.length === 5) {
+          if (!parts[1] || !parts[2] || !parts[3] || !parts[4] || !/^[\w-]+(?:\.deleted)?\.json$/.test(parts[4])) {
+            rejectBatch(400, `invalid apps file path: ${p}`);
+            return;
+          }
+        } else {
+          rejectBatch(400, `invalid apps path (expected 2, 4, or 5 segments): ${p}`);
+          return;
+        }
       } else if (parts.length !== 2 || !parts[0] || !parts[1]) {
         rejectBatch(400, `path must be filename or folder/filename: ${p}`);
         return;

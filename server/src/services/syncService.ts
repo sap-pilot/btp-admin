@@ -13,6 +13,7 @@ import { extractZip } from './zipBuilder.js';
 import { getSyncKey, getAllServices } from './configService.js';
 import { emit } from './liveEvents.js';
 import { refreshLastUpdated } from './lastUpdatedService.js';
+import { invalidateTopAppsCache } from './aodAppsService.js';
 
 const gunzipAsync = promisify(gunzip);
 const BATCH_MAX_ATTEMPTS   = 3;
@@ -426,10 +427,11 @@ async function downloadBatch(
             logger.warn({ name }, 'Skipping ZIP apps entry: path traversal detected');
             return;
           }
-          const aodParts = filename.split('/');
-          const isConfig = filename === 'aod-config.json';
-          const isLog    = aodParts.length === 3 && /^accesslog(\.\d{8})?\.csv$/.test(aodParts[2] ?? '');
-          if (!isConfig && !isLog) return;
+          const appParts = filename.split('/');
+          const isRoot   = filename === 'aod-config.json' || filename === 'stats.csv' || filename === 'aod-stats.csv';
+          const isLog    = appParts.length === 3 && /^accesslog(\.\d{8})?\.csv$/.test(appParts[2] ?? '');
+          const isApp    = appParts.length === 4 && /^[\w-]+(?:\.deleted)?\.json$/.test(appParts[3] ?? '');
+          if (!isRoot && !isLog && !isApp) return;
           const lastSlash = filename.lastIndexOf('/');
           const parentDir = lastSlash !== -1
             ? join(config.LOCAL_STORE_DIR, 'apps', filename.slice(0, lastSlash))
@@ -698,6 +700,10 @@ async function executeSync(
     if (updatedFolders.has('conf') || updatedFolders.has('apps')) {
       emit('config', { ts });
       void refreshLastUpdated(); // re-read file mtimes set by utimes() during sync
+    }
+    if (updatedFolders.has('apps')) {
+      invalidateTopAppsCache();
+      emit('aod-apps', { type: 'apps-synced', ts });
     }
     if (updatedFolders.has('dest')) {
       emit('dest', { ts });

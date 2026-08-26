@@ -294,18 +294,29 @@ function pathToFolderEntry(relPath: string): { folder: string; name: string } | 
   }
 
   if (first === 'apps') {
-    if (rest === 'aod-config.json') return { folder: 'apps', name: rest };
-    // apps/{region}/{subdomain}/accesslog*.csv
+    // apps-root flat files: stats CSV and config
+    if (rest === 'aod-config.json' || rest === 'stats.csv' || rest === 'aod-stats.csv') {
+      return { folder: 'apps', name: rest };
+    }
     const s2 = rest.indexOf('/');
     if (s2 === -1) return null;
     const region = rest.slice(0, s2);
     const after2 = rest.slice(s2 + 1);
     const s3 = after2.indexOf('/');
     if (s3 === -1) return null;
-    const sub  = after2.slice(0, s3);
-    const name = after2.slice(s3 + 1);
-    if (name && !name.includes('/') && /^accesslog(\.\d{8})?\.csv$/.test(name)) {
-      return { folder: `apps/${region}/${sub}`, name };
+    const sub    = after2.slice(0, s3);
+    const after3 = after2.slice(s3 + 1);
+    // apps/{region}/{subdomain}/accesslog*.csv
+    if (!after3.includes('/') && /^accesslog(\.\d{8})?\.csv$/.test(after3)) {
+      return { folder: `apps/${region}/${sub}`, name: after3 };
+    }
+    // apps/{region}/{subdomain}/{space}/{guid}.json or {guid}.deleted.json
+    const s4    = after3.indexOf('/');
+    if (s4 === -1) return null;
+    const space = after3.slice(0, s4);
+    const name  = after3.slice(s4 + 1);
+    if (name && !name.includes('/') && /^[\w-]+(?:\.deleted)?\.json$/.test(name)) {
+      return { folder: `apps/${region}/${sub}/${space}`, name };
     }
     return null;
   }
@@ -617,13 +628,14 @@ export async function responseFileSize(folder: string, filename: string): Promis
   }
 }
 
-/** Read a file from LOCAL_STORE_DIR/apps/: aod-config.json or {region}/{subdomain}/accesslog*.csv. */
+/** Read a file from LOCAL_STORE_DIR/apps/: stats CSVs, aod-config.json, accesslog CSVs, or per-app JSON files. */
 export async function readAodFile(relPath: string): Promise<Buffer> {
   const parts    = relPath.split('/');
-  const isConfig = relPath === 'aod-config.json';
+  const isRoot   = relPath === 'aod-config.json' || relPath === 'stats.csv' || relPath === 'aod-stats.csv';
   const isLog    = parts.length === 3 && /^accesslog(\.\d{8})?\.csv$/.test(parts[2] ?? '');
-  if ((!isConfig && !isLog) || parts.some(p => p === '..' || p === '.' || p === '')) {
-    throw new Error('Invalid aod path');
+  const isApp    = parts.length === 4 && /^[\w-]+(?:\.deleted)?\.json$/.test(parts[3] ?? '');
+  if ((!isRoot && !isLog && !isApp) || parts.some(p => p === '..' || p === '.' || p === '')) {
+    throw new Error('Invalid apps path');
   }
   return readFile(join(config.LOCAL_STORE_DIR, 'apps', relPath));
 }
