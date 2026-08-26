@@ -421,13 +421,20 @@ async function downloadBatch(
             : join(config.LOCAL_STORE_DIR, 'users');
           await mkdir(parentDir, { recursive: true });
         } else if (folder === 'aod') {
-          if (filename !== 'aod-config.json') return; // only sync aod-config.json
           target = resolvePath(config.LOCAL_STORE_DIR, 'aod', filename);
           if (!target.startsWith(safeBase + '/')) {
             logger.warn({ name }, 'Skipping ZIP aod entry: path traversal detected');
             return;
           }
-          await mkdir(join(config.LOCAL_STORE_DIR, 'aod'), { recursive: true });
+          const aodParts = filename.split('/');
+          const isConfig = filename === 'aod-config.json';
+          const isLog    = aodParts.length === 3 && /^accesslog(\.\d{8})?\.csv$/.test(aodParts[2] ?? '');
+          if (!isConfig && !isLog) return;
+          const lastSlash = filename.lastIndexOf('/');
+          const parentDir = lastSlash !== -1
+            ? join(config.LOCAL_STORE_DIR, 'aod', filename.slice(0, lastSlash))
+            : join(config.LOCAL_STORE_DIR, 'aod');
+          await mkdir(parentDir, { recursive: true });
         } else {
           target = resolvePath(config.LOCAL_STORE_DIR, 'resp', folder, filename);
           if (!target.startsWith(safeBase + '/')) {

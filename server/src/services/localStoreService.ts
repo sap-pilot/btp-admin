@@ -294,7 +294,20 @@ function pathToFolderEntry(relPath: string): { folder: string; name: string } | 
   }
 
   if (first === 'aod') {
-    return rest === 'aod-config.json' ? { folder: 'aod', name: rest } : null;
+    if (rest === 'aod-config.json') return { folder: 'aod', name: rest };
+    // aod/{region}/{subdomain}/accesslog*.csv
+    const s2 = rest.indexOf('/');
+    if (s2 === -1) return null;
+    const region = rest.slice(0, s2);
+    const after2 = rest.slice(s2 + 1);
+    const s3 = after2.indexOf('/');
+    if (s3 === -1) return null;
+    const sub  = after2.slice(0, s3);
+    const name = after2.slice(s3 + 1);
+    if (name && !name.includes('/') && /^accesslog(\.\d{8})?\.csv$/.test(name)) {
+      return { folder: `aod/${region}/${sub}`, name };
+    }
+    return null;
   }
 
   if (first === 'dest' || first === 'rcs') {
@@ -604,8 +617,13 @@ export async function responseFileSize(folder: string, filename: string): Promis
   }
 }
 
-/** Read a file from LOCAL_STORE_DIR/aod/ — only aod-config.json is permitted. */
-export async function readAodFile(filename: string): Promise<Buffer> {
-  if (filename !== 'aod-config.json') throw new Error('Invalid aod filename');
-  return readFile(join(config.LOCAL_STORE_DIR, 'aod', filename));
+/** Read a file from LOCAL_STORE_DIR/aod/: aod-config.json or {region}/{subdomain}/accesslog*.csv. */
+export async function readAodFile(relPath: string): Promise<Buffer> {
+  const parts    = relPath.split('/');
+  const isConfig = relPath === 'aod-config.json';
+  const isLog    = parts.length === 3 && /^accesslog(\.\d{8})?\.csv$/.test(parts[2] ?? '');
+  if ((!isConfig && !isLog) || parts.some(p => p === '..' || p === '.' || p === '')) {
+    throw new Error('Invalid aod path');
+  }
+  return readFile(join(config.LOCAL_STORE_DIR, 'aod', relPath));
 }

@@ -977,9 +977,10 @@ async function buildRoutesTable(subaccounts: SubaccountEntry[]): Promise<Map<str
 }
 
 async function applyAodToDestination(
-  dest:       Record<string, unknown>,
-  spaceAod:   boolean,
-  region:     string,
+  dest:        Record<string, unknown>,
+  spaceAod:    boolean,
+  region:      string,
+  subdomain:   string,
   accessToken: string,
   credential:  DestCredentials,
   routesTable: Map<string, string>,
@@ -1014,7 +1015,14 @@ async function applyAodToDestination(
       logger.warn({ label, url }, 'AOD: no app.guid found in routes table for URL — skipping AOD install');
       return null;
     }
-    const updated = { ...dest, URL: proxyUrl, 'URL.headers.x-aod-app-url': url, 'URL.headers.x-aod-app-id': appGuid };
+    const updated = {
+      ...dest,
+      URL:                            proxyUrl,
+      'URL.headers.x-aod-app-url':   url,
+      'URL.headers.x-aod-app-id':    appGuid,
+      'URL.headers.x-aod-region':    region,
+      'URL.headers.x-aod-subdomain': subdomain,
+    };
     await pushAodDestination(region, credential, accessToken, updated, label);
     logger.info({ label, url, proxyUrl }, `AOD: ${label}->${url} has been switched to AOD`);
     return updated;
@@ -1027,6 +1035,8 @@ async function applyAodToDestination(
     const updated: Record<string, unknown> = { ...dest, URL: originalUrl };
     delete updated['URL.headers.x-aod-app-url'];
     delete updated['URL.headers.x-aod-app-id'];
+    delete updated['URL.headers.x-aod-region'];
+    delete updated['URL.headers.x-aod-subdomain'];
     await pushAodDestination(region, credential, accessToken, updated, label);
     logger.info({ label, to: originalUrl }, `AOD: ${label}->${originalUrl} has been reverted (AOD uninstalled)`);
     return updated;
@@ -1828,7 +1838,7 @@ export async function refreshSpaceDestinations(
         if (!destName) continue;
         try {
           const updated = await applyAodToDestination(
-            dest, inst.aod ?? false, inst.region, finalToken, finalCredential,
+            dest, inst.aod ?? false, inst.region, inst.subdomain, finalToken, finalCredential,
             routesTable, aodConfig, `${label}/${destName}`,
           );
           if (updated) {
