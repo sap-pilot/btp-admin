@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useParams, useNavigate, useLocation } from 'react-router';
-import { RefreshCw } from 'lucide-react';
+import { PanelLeft, RefreshCw, X } from 'lucide-react';
+import { useSidebar } from '@/components/AppLayout';
 import DateRangePicker from '@/components/DateRangePicker';
 import { fmtDateRange } from '@/hooks/useTimeRange';
 
@@ -24,8 +25,18 @@ interface SseMsg {
   type:      string;
   current?:  number;
   total?:    number;
+  region?:   string;
+  error?:    boolean | string;
   allStats?: StatsRow | null;
   aodStats?: StatsRow | null;
+}
+
+interface ScanProgress {
+  type:     'progress' | 'done' | 'error';
+  current?: number;
+  total?:   number;
+  region?:  string;
+  error?:   string;
 }
 
 const VALID_DAYS = new Set([1, 2, 3, 7]);
@@ -79,7 +90,7 @@ function durationToRange(dur: DurationMode): { fromSecs: number; toSecs: number 
 
 // ─── SVG Chart ────────────────────────────────────────────────────────────────
 
-function StatsChart({ rows, fromSecs, toSecs }: { rows: StatsRow[]; fromSecs: number; toSecs: number }) {
+function StatsChart({ rows, toSecs }: { rows: StatsRow[]; toSecs: number }) {
   const W = 900, H = 240;
   const pad = { t: 24, r: 24, b: 40, l: 72 };
   const cW  = W - pad.l - pad.r;
@@ -93,16 +104,18 @@ function StatsChart({ rows, fromSecs, toSecs }: { rows: StatsRow[]; fromSecs: nu
     );
   }
 
+  // X axis starts from first available data point within the range
+  const effectiveFrom = rows[0]!.timestamp;
   const maxMB  = Math.max(...rows.flatMap(r => [r.sumStartedMB, r.sumStoppedMB]), 1);
-  const xOf    = (ts: number) => pad.l + ((ts - fromSecs) / (toSecs - fromSecs)) * cW;
+  const xOf    = (ts: number) => pad.l + ((ts - effectiveFrom) / (toSecs - effectiveFrom)) * cW;
   const yOf    = (mb: number) => pad.t + cH - (mb / maxMB) * cH;
   const pathOf = (get: (r: StatsRow) => number) =>
     rows.map((r, i) => `${i === 0 ? 'M' : 'L'}${xOf(r.timestamp).toFixed(1)},${yOf(get(r)).toFixed(1)}`).join(' ');
 
   const yTicks = Array.from({ length: 5 }, (_, i) => (maxMB * i) / 4);
-  const rangeSecs = toSecs - fromSecs;
+  const rangeSecs = toSecs - effectiveFrom;
   const xTicks = Array.from({ length: 5 }, (_, i) => {
-    const ts    = fromSecs + (rangeSecs / 4) * i;
+    const ts    = effectiveFrom + (rangeSecs / 4) * i;
     const d     = new Date(ts * 1000);
     const label = rangeSecs <= 2 * 86400
       ? d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })
@@ -151,9 +164,10 @@ function InfoBlock({ label, value, sub, accent }: { label: string; value: string
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
 export default function AppsPage() {
-  const { view: viewParam } = useParams<{ view: string }>();
-  const navigate            = useNavigate();
-  const location            = useLocation();
+  const { view: viewParam }  = useParams<{ view: string }>();
+  const navigate             = useNavigate();
+  const location             = useLocation();
+  const { toggle }           = useSidebar();
 
   const viewMode: ViewMode = viewParam === 'aod' ? 'aod' : 'all';
   const duration            = parseDuration(location.search);
@@ -163,8 +177,9 @@ export default function AppsPage() {
   const [rows, setRows]                     = useState<StatsRow[]>([]);
   const [latest, setLatest]                 = useState<StatsRow | null>(null);
   const [isRefreshing, setIsRefreshing]     = useState(false);
-  const [progress, setProgress]             = useState<{ current: number; total: number } | null>(null);
+  const [progress, setProgress]             = useState<ScanProgress | null>(null);
   const [loadingData, setLoadingData]       = useState(false);
+  const autoHideRef                         = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // ── Navigation helpers ────────────────────────────────────────────────────
 
@@ -208,22 +223,45 @@ export default function AppsPage() {
   useEffect(() => {
     const es = new EventSource('/api/events?aod=1');
 
+    // On every SSE connect/reconnect, re-sync state in case refresh-done was missed
+    // (scan ran before we connected, or we were briefly disconnected)
+    es.addEventListener('connected', () => {
+      void fetch('/api/aod/apps/status')
+        .then(r => r.json() as Promise<{ ok: boolean; refreshing: boolean }>)
+        .then(d => {
+          if (!d.ok || d.refreshing) return;
+          setIsRefreshing(false);
+          setProgress(prev => {
+            if (prev?.type === 'progress') {
+              void fetchStats(fromSecs, toSecs, viewMode);
+              return null;
+            }
+            return prev;
+          });
+        })
+        .catch(() => {});
+    });
+
     es.addEventListener('update', (e: MessageEvent) => {
       try {
         const msg = JSON.parse(e.data as string) as SseMsg;
         if (msg.type === 'refresh-start') {
           setIsRefreshing(true);
-          setProgress(null);
+          if (autoHideRef.current) { clearTimeout(autoHideRef.current); autoHideRef.current = null; }
+          setProgress({ type: 'progress', current: 0, total: 0 });
         } else if (msg.type === 'refresh-progress') {
-          setProgress({ current: msg.current ?? 0, total: msg.total ?? 1 });
+          setProgress({ type: 'progress', current: msg.current ?? 0, total: msg.total ?? 1, region: msg.region });
         } else if (msg.type === 'refresh-done' || msg.type === 'refresh-error') {
           setIsRefreshing(false);
-          setProgress(null);
           if (msg.type === 'refresh-done') {
+            setProgress(prev => ({ type: 'done', total: prev?.total ?? 0 }));
             const newLatest = viewMode === 'aod' ? (msg.aodStats ?? null) : (msg.allStats ?? null);
             if (newLatest) setLatest(newLatest);
             void fetchStats(fromSecs, toSecs, viewMode);
+          } else {
+            setProgress({ type: 'error', error: typeof msg.error === 'string' ? msg.error : 'Scan failed' });
           }
+          autoHideRef.current = setTimeout(() => setProgress(null), 5000);
         }
       } catch { /* ignore */ }
     });
@@ -236,10 +274,11 @@ export default function AppsPage() {
 
   async function handleRefresh() {
     if (isRefreshing) return;
+    if (autoHideRef.current) { clearTimeout(autoHideRef.current); autoHideRef.current = null; }
     try {
       const res  = await fetch('/api/aod/apps/refresh', { method: 'POST' });
       const data = await res.json() as { ok: boolean; started?: boolean };
-      if (data.ok && data.started) setIsRefreshing(true);
+      if (data.ok && data.started) { setIsRefreshing(true); setProgress({ type: 'progress', current: 0, total: 0 }); }
     } catch { /* ignore */ }
   }
 
@@ -260,32 +299,15 @@ export default function AppsPage() {
   const totalMB   = (latest?.sumStartedMB ?? 0) + (latest?.sumStoppedMB ?? 0);
   const savingPct = totalMB > 0 ? ((latest?.sumStoppedMB ?? 0) / totalMB * 100).toFixed(1) : '—';
 
-  const progressLabel = progress
-    ? `Refreshing ${progress.current} / ${progress.total} regions`
-    : 'Scanning…';
-
   return (
     <div className="flex flex-col h-full min-h-0">
       {/* Header */}
-      <div className="flex items-center justify-between gap-3 border-b border-border px-6 min-h-[52px] shrink-0">
-        <h1 className="text-sm font-semibold">Apps</h1>
-        <div className="flex items-center gap-2">
-          {/* Duration select */}
-          <select
-            value={durationSelectValue}
-            onChange={e => handleDurationChange(e.target.value)}
-            className="h-8 rounded-md border border-input bg-background px-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring"
-          >
-            <option value="1">1 Day</option>
-            <option value="2">2 Days</option>
-            <option value="3">3 Days</option>
-            <option value="7">7 Days</option>
-            {duration.mode === 'dateRange'
-              ? <option value="range">{durationLabel}</option>
-              : <option value="range">Custom Range…</option>
-            }
-          </select>
-
+      <div className="border-b border-border bg-background px-3 flex items-center gap-2 shrink-0 min-h-[52px]">
+        <button onClick={toggle} className="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-accent/50 transition-colors" title="Toggle sidebar">
+          <PanelLeft className="h-4 w-4" />
+        </button>
+        <span className="text-sm font-semibold">Apps</span>
+        <div className="ml-auto flex items-center gap-2">
           {/* Refresh button */}
           <button
             onClick={() => void handleRefresh()}
@@ -315,17 +337,36 @@ export default function AppsPage() {
       </div>
 
       {/* Progress bar */}
-      {isRefreshing && (
-        <div className="flex items-center gap-3 border-b border-border bg-muted/30 px-6 py-1.5 shrink-0">
-          <div className="flex-1 h-1.5 rounded-full bg-border overflow-hidden">
-            <div
-              className="h-full bg-primary transition-all duration-500"
-              style={{ width: progress ? `${Math.round((progress.current / progress.total) * 100)}%` : '10%' }}
-            />
+      {progress && (() => {
+        const isDone    = progress.type === 'done';
+        const isError   = progress.type === 'error';
+        const pct       = isDone ? 100 : (progress.total ?? 0) > 0 ? Math.round(((progress.current ?? 0) / progress.total!) * 100) : 0;
+        const barColor  = isError ? 'bg-amber-500' : isDone ? 'bg-green-500' : 'bg-primary';
+        const textColor = isError ? 'text-amber-600 dark:text-amber-400' : isDone ? 'text-green-600 dark:text-green-400' : 'text-foreground';
+        const bgColor   = isError ? 'bg-amber-500/8' : isDone ? 'bg-green-500/8' : 'bg-muted/40';
+        const msg       = isError
+          ? (progress.error ?? 'Scan failed')
+          : isDone
+            ? `Scanned ${progress.total ?? 0} regions`
+            : (progress.total ?? 0) > 0
+              ? `Refreshing ${progress.current ?? 0} of ${progress.total} regions${progress.region ? `: ${progress.region}` : ''}`
+              : 'Starting scan…';
+        return (
+          <div className={`relative shrink-0 border-b border-border ${bgColor}`}>
+            <div className="h-1 w-full bg-transparent">
+              <div className={`h-full transition-all duration-300 ${barColor}`} style={{ width: `${pct}%` }} />
+            </div>
+            <div className={`px-4 py-1.5 text-xs text-center pr-8 ${textColor}`}>{msg}</div>
+            <button
+              onClick={() => setProgress(null)}
+              className="absolute top-1 right-1 p-0.5 rounded text-muted-foreground/60 hover:text-foreground hover:bg-black/10 dark:hover:bg-white/10 transition-colors"
+              title="Dismiss"
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
           </div>
-          <span className="text-xs text-muted-foreground whitespace-nowrap">{progressLabel}</span>
-        </div>
-      )}
+        );
+      })()}
 
       {/* Content */}
       <div className="flex-1 overflow-auto min-h-0 p-6 flex flex-col gap-6">
@@ -362,9 +403,25 @@ export default function AppsPage() {
         <div className="rounded-lg border border-border bg-card px-5 py-4 min-h-0">
           <div className="flex items-center justify-between mb-3">
             <span className="text-sm font-medium text-foreground">Memory Over Time</span>
-            {loadingData && <span className="text-xs text-muted-foreground">Loading…</span>}
+            <div className="flex items-center gap-2">
+              {loadingData && <span className="text-xs text-muted-foreground">Loading…</span>}
+              <select
+                value={durationSelectValue}
+                onChange={e => handleDurationChange(e.target.value)}
+                className="h-7 rounded-md border border-input bg-background px-2 text-xs text-foreground focus:outline-none focus:ring-2 focus:ring-ring"
+              >
+                <option value="1">1 Day</option>
+                <option value="2">2 Days</option>
+                <option value="3">3 Days</option>
+                <option value="7">7 Days</option>
+                {duration.mode === 'dateRange'
+                  ? <option value="range">{durationLabel}</option>
+                  : <option value="range">Custom Range…</option>
+                }
+              </select>
+            </div>
           </div>
-          <StatsChart rows={rows} fromSecs={fromSecs} toSecs={toSecs} />
+          <StatsChart rows={rows} toSecs={toSecs} />
         </div>
       </div>
 

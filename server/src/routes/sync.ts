@@ -97,7 +97,7 @@ router.post('/batch', requireSyncAuth, async (req, res, next) => {
             data = await readRcsFile(rest);
           } else if (folder === 'users') {
             data = await readUsersFile(rest);
-          } else if (folder === 'aod') {
+          } else if (folder === 'apps') {
             data = await readAodFile(rest);
           } else {
             data = await readRawResponseFile(folder, rest);

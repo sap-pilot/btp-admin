@@ -7,7 +7,7 @@ import { notifyCallbacks } from './syncService.js';
 import { emit } from './liveEvents.js';
 import { touchLastUpdated } from './lastUpdatedService.js';
 
-const AOD_DIR         = join(config.LOCAL_STORE_DIR, 'aod');
+const AOD_DIR         = join(config.LOCAL_STORE_DIR, 'apps');
 const AOD_CONFIG_PATH = join(AOD_DIR, 'aod-config.json');
 
 export interface AodConfig {

@@ -7,7 +7,7 @@ import { getOrRefreshToken } from './cfLoginService.js';
 import { readAodConfig } from './aodConfigService.js';
 import { emitImmediate } from './liveEvents.js';
 
-const AOD_DIR = join(config.LOCAL_STORE_DIR, 'aod');
+const APPS_DIR = join(config.LOCAL_STORE_DIR, 'apps');
 const STATS_ROTATE_BYTES = 2 * 1024 * 1024;
 
 let schedulerTimer: ReturnType<typeof setInterval> | null = null;
@@ -64,6 +64,11 @@ interface CfProcess {
   relationships: { app: { data: { guid: string } } };
 }
 
+interface CfRoute {
+  url:          string;
+  destinations?: Array<{ app: { guid: string } }>;
+}
+
 interface AppFile {
   guid:        string;
   name:        string;
@@ -95,15 +100,15 @@ function sanitizeName(s: string): string {
 const STATS_HEADER = '"timestamp","startedApps","stoppedApps","sumStartedMB","sumStoppedMB"\n';
 
 async function appendStatsFile(filename: string, row: StatsRow): Promise<void> {
-  const filePath = join(AOD_DIR, filename);
-  await mkdir(AOD_DIR, { recursive: true });
+  const filePath = join(APPS_DIR, filename);
+  await mkdir(APPS_DIR, { recursive: true });
 
   try {
     const info = await stat(filePath);
     if (info.size >= STATS_ROTATE_BYTES) {
       const dateStr = new Date().toISOString().slice(0, 10).replace(/-/g, '');
       const rotated = filename.replace(/\.csv$/, `.${dateStr}.csv`);
-      await rename(filePath, join(AOD_DIR, rotated));
+      await rename(filePath, join(APPS_DIR, rotated));
     }
   } catch { /* file may not exist yet */ }
 
@@ -134,7 +139,7 @@ function statsFilename(aodOnly: boolean): string {
 }
 
 export async function getStatsData(fromSecs: number, toSecs: number, aodOnly = false): Promise<StatsRow[]> {
-  const filePath = join(AOD_DIR, statsFilename(aodOnly));
+  const filePath = join(APPS_DIR, statsFilename(aodOnly));
   let raw = '';
   try { raw = await readFile(filePath, 'utf-8'); } catch { return []; }
 
@@ -147,7 +152,7 @@ export async function getStatsData(fromSecs: number, toSecs: number, aodOnly = f
 }
 
 export async function getLatestStats(aodOnly = false): Promise<StatsRow | null> {
-  const filePath = join(AOD_DIR, statsFilename(aodOnly));
+  const filePath = join(APPS_DIR, statsFilename(aodOnly));
   let raw = '';
   try { raw = await readFile(filePath, 'utf-8'); } catch { return null; }
 
@@ -161,9 +166,9 @@ export async function getLatestStats(aodOnly = false): Promise<StatsRow | null> 
 
 // ─── App file helpers ──────────────────────────────────────────────────────────
 
-// Find appGuid.json under AOD_DIR/region/subdomain/*/
+// Find appGuid.json under APPS_DIR/region/subdomain/*/
 async function findAppFile(appGuid: string, region: string, subdomain: string): Promise<string | null> {
-  const searchDir = join(AOD_DIR, region, subdomain);
+  const searchDir = join(APPS_DIR, region, subdomain);
   const target    = `${appGuid}.json`;
   try {
     const spaces = await readdir(searchDir);
@@ -237,7 +242,7 @@ export async function scanApps(): Promise<void> {
     // Pre-scan existing .json files per space for deletion tracking
     const existingBySpace = new Map<string, Set<string>>();
     for (const [spaceGuid, { region, subdomain, spaceName }] of spaceMap) {
-      const dir = join(AOD_DIR, region, subdomain, sanitizeName(spaceName));
+      const dir = join(APPS_DIR, region, subdomain, sanitizeName(spaceName));
       try {
         const files = await readdir(dir);
         const guids = new Set<string>();
@@ -268,9 +273,10 @@ export async function scanApps(): Promise<void> {
     for (const [region, spaceGuids] of byRegion) {
       try {
         const spaceGuidsParam = spaceGuids.join(',');
-        const [apps, processes] = await Promise.all([
+        const [apps, processes, routes] = await Promise.all([
           cfGetAll<CfApp>(region, `/v3/apps?per_page=5000&space_guids=${encodeURIComponent(spaceGuidsParam)}`),
           cfGetAll<CfProcess>(region, `/v3/processes?per_page=5000&space_guids=${encodeURIComponent(spaceGuidsParam)}`),
+          cfGetAll<CfRoute>(region, `/v3/routes?per_page=5000&space_guids=${encodeURIComponent(spaceGuidsParam)}`),
         ]);
 
         // Process map: appGuid → web process (prefer type=web)
@@ -280,22 +286,32 @@ export async function scanApps(): Promise<void> {
           if (!processMap.has(ag) || p.type === 'web') processMap.set(ag, p);
         }
 
+        // Routes map: appGuid → array of https:// URLs
+        const routesByApp = new Map<string, string[]>();
+        for (const route of routes) {
+          for (const dest of route.destinations ?? []) {
+            const guid = dest.app.guid;
+            const url  = `https://${route.url}`;
+            const existing = routesByApp.get(guid);
+            if (existing) existing.push(url);
+            else routesByApp.set(guid, [url]);
+          }
+        }
+
         for (const app of apps) {
           const spaceGuid = app.relationships.space.data.guid;
           const meta      = spaceMap.get(spaceGuid);
           if (!meta) continue;
 
           const { subdomain, spaceName } = meta;
-          const dir = join(AOD_DIR, region, subdomain, sanitizeName(spaceName));
+          const dir = join(APPS_DIR, region, subdomain, sanitizeName(spaceName));
           await mkdir(dir, { recursive: true });
 
-          // Preserve existing aod/urls from prior JSON
-          let existingAod  = false;
-          let existingUrls: string[] = [];
+          // Preserve existing aod flag from prior JSON; urls are replaced by CF routes
+          let existingAod = false;
           try {
             const existing = JSON.parse(await readFile(join(dir, `${app.guid}.json`), 'utf-8')) as AppFile;
-            existingAod  = existing.aod  ?? false;
-            existingUrls = existing.urls ?? [];
+            existingAod = existing.aod ?? false;
           } catch { /* new file */ }
 
           const proc    = processMap.get(app.guid);
@@ -307,7 +323,7 @@ export async function scanApps(): Promise<void> {
               memory_in_mb: proc.memory_in_mb, disk_in_mb: proc.disk_in_mb,
             } : undefined,
             aod: existingAod,
-            urls: existingUrls,
+            urls: routesByApp.get(app.guid) ?? [],
             lastUpdated: now,
           };
 
@@ -338,7 +354,7 @@ export async function scanApps(): Promise<void> {
     // Mark apps not seen in scan as deleted (only for successfully scanned regions)
     for (const [spaceGuid, { region, subdomain, spaceName }] of spaceMap) {
       if (!successfulRegions.has(region)) continue;
-      const dir      = join(AOD_DIR, region, subdomain, sanitizeName(spaceName));
+      const dir      = join(APPS_DIR, region, subdomain, sanitizeName(spaceName));
       const existing = existingBySpace.get(spaceGuid) ?? new Set<string>();
       for (const guid of existing) {
         if (!seenAppGuids.has(guid)) {

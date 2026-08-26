@@ -59,7 +59,7 @@ export default router;
 
 // ─── AOD proxy handler (mounted at /aod — no auth) ───────────────────────────
 
-const AOD_DIR = join(config.LOCAL_STORE_DIR, 'aod');
+const AOD_DIR = join(config.LOCAL_STORE_DIR, 'apps');
 
 // In-flight app-start promises keyed by app URL base (prevents concurrent starts)
 const startQueue = new Map<string, Promise<'up' | 'timeout'>>();

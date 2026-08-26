@@ -345,7 +345,7 @@ function resolveLocalPath(flatPath: string): string {
   const slash = flatPath.indexOf('/');
   if (slash === -1) return join(config.LOCAL_STORE_DIR, flatPath);
   const first = flatPath.slice(0, slash);
-  if (first === 'conf' || first === 'dest' || first === 'rcs' || first === 'users' || first === 'aod') {
+  if (first === 'conf' || first === 'dest' || first === 'rcs' || first === 'users' || first === 'apps') {
     return join(config.LOCAL_STORE_DIR, flatPath);
   }
   return join(config.LOCAL_STORE_DIR, 'resp', flatPath);
@@ -420,10 +420,10 @@ async function downloadBatch(
             ? join(config.LOCAL_STORE_DIR, 'users', filename.slice(0, lastSlash))
             : join(config.LOCAL_STORE_DIR, 'users');
           await mkdir(parentDir, { recursive: true });
-        } else if (folder === 'aod') {
-          target = resolvePath(config.LOCAL_STORE_DIR, 'aod', filename);
+        } else if (folder === 'apps') {
+          target = resolvePath(config.LOCAL_STORE_DIR, 'apps', filename);
           if (!target.startsWith(safeBase + '/')) {
-            logger.warn({ name }, 'Skipping ZIP aod entry: path traversal detected');
+            logger.warn({ name }, 'Skipping ZIP apps entry: path traversal detected');
             return;
           }
           const aodParts = filename.split('/');
@@ -432,8 +432,8 @@ async function downloadBatch(
           if (!isConfig && !isLog) return;
           const lastSlash = filename.lastIndexOf('/');
           const parentDir = lastSlash !== -1
-            ? join(config.LOCAL_STORE_DIR, 'aod', filename.slice(0, lastSlash))
-            : join(config.LOCAL_STORE_DIR, 'aod');
+            ? join(config.LOCAL_STORE_DIR, 'apps', filename.slice(0, lastSlash))
+            : join(config.LOCAL_STORE_DIR, 'apps');
           await mkdir(parentDir, { recursive: true });
         } else {
           target = resolvePath(config.LOCAL_STORE_DIR, 'resp', folder, filename);
@@ -695,7 +695,7 @@ async function executeSync(
     if (updatedRootFiles.length > 0) {
       emit('root', { files: updatedRootFiles, ts });
     }
-    if (updatedFolders.has('conf') || updatedFolders.has('aod')) {
+    if (updatedFolders.has('conf') || updatedFolders.has('apps')) {
       emit('config', { ts });
       void refreshLastUpdated(); // re-read file mtimes set by utimes() during sync
     }
