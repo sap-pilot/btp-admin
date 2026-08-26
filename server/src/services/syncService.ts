@@ -10,7 +10,7 @@ import { logger } from '../logger.js';
 import { resolveSyncDuplicates, sanitizeName, formatBrowseT } from './localStoreService.js';
 import type { BrowseFile } from './localStoreService.js';
 import { extractZip } from './zipBuilder.js';
-import { getSyncKey, getAllServices } from './configService.js';
+import { getSyncKey, getAllServices, getSyncExcludes } from './configService.js';
 import { emit } from './liveEvents.js';
 import { refreshLastUpdated } from './lastUpdatedService.js';
 import { invalidateTopAppsCache } from './aodAppsService.js';
@@ -574,9 +574,15 @@ async function executeSync(
     const fp = (folder: string, name: string) => folder ? `${folder}/${name}` : name;
 
     // Build flat list of remote-reported files and their mtimes
+    const syncExcludes = getSyncExcludes();
+    const isExcluded = (folder: string) =>
+      syncExcludes.size > 0 &&
+      [...syncExcludes].some(excl => folder === excl || folder.startsWith(excl + '/'));
     const remoteMtimes = new Map<string, number>();
     const allRemotePaths: string[] = [];
+    let excludedCount = 0;
     for (const [folder, files] of Object.entries(folders)) {
+      if (isExcluded(folder)) { excludedCount += files.length; continue; }
       for (const f of files) {
         const flatPath = fp(folder, f.name);
         remoteMtimes.set(flatPath, f.mtime);
@@ -594,7 +600,7 @@ async function executeSync(
         localMtimes.set(flatPath, info.mtimeMs);
       } catch { /* file absent locally */ }
     }));
-    logger.debug({ remoteFiles: allRemotePaths.length, localFound: localMtimes.size, durationMs: Date.now() - t0Stat }, 'Local stat complete');
+    logger.debug({ remoteFiles: allRemotePaths.length, excluded: excludedCount, localFound: localMtimes.size, durationMs: Date.now() - t0Stat }, 'Local stat complete');
 
     const missing: string[] = [];
     for (const flatPath of allRemotePaths) {
@@ -608,7 +614,7 @@ async function executeSync(
       if (localMtime !== undefined && (!remoteMtime || Math.round(localMtime / 1000) >= Math.round(remoteMtime / 1000))) continue;
       missing.push(flatPath);
     }
-    logger.debug({ remoteFiles: allRemotePaths.length, localFound: localMtimes.size, missing: missing.length }, 'Remote/local comparison complete');
+    logger.debug({ remoteFiles: allRemotePaths.length, excluded: excludedCount, localFound: localMtimes.size, missing: missing.length }, 'Remote/local comparison complete');
 
     logger.info({ total: missing.length }, 'Files to sync from remote');
 

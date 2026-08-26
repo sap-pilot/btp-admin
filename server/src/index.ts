@@ -1,6 +1,6 @@
 import express from 'express';
 import { config } from './config.js';
-import { loadConfig } from './services/configService.js';
+import { loadConfig, getSyncExcludes } from './services/configService.js';
 import { logger } from './logger.js';
 import { startScheduler, stopScheduler } from './services/status/schedulerService.js';
 import { startupSync, startIntervalFallback, stopIntervalFallback } from './services/syncService.js';
@@ -69,6 +69,10 @@ const server = app.listen(config.PORT, () => {
   startHousekeepingScheduler();
   startAppsScheduler();
   if (config.SYNC_REMOTE) {
+    const syncExcludes = getSyncExcludes();
+    if (syncExcludes.size > 0) {
+      logger.info({ folders: [...syncExcludes].join(', ') }, 'Sync exclude list active — these folders will be skipped during remote sync');
+    }
     startupSync();
     startIntervalFallback();
   }

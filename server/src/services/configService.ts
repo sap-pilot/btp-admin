@@ -150,6 +150,16 @@ export function getSyncWhitelistIPs(): string[] {
 }
 
 /**
+ * Returns folders excluded from remote sync downloads.
+ * SYNC_EXCLUDES env var (comma-separated) takes precedence over config.variables entry.
+ * Example: "rcs,users" — remote browse still lists those folders but their files are not downloaded.
+ */
+export function getSyncExcludes(): Set<string> {
+  const raw = process.env.SYNC_EXCLUDES ?? getConfig().variables?.['SYNC_EXCLUDES'] ?? '';
+  return new Set(String(raw).split(',').map(s => s.trim()).filter(Boolean));
+}
+
+/**
  * Global (all-subaccounts) auto-refresh threshold in milliseconds.
  * AUTO_GLOBAL_REFRESH_HRS (new name); old name DESTINATION_AUTO_GLOBAL_REFRESH_HRS still accepted.
  * Fractional values supported (e.g. 1.5 = 90 min). Default: 6 hours.
