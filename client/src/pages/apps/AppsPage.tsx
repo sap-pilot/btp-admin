@@ -113,14 +113,29 @@ function csvIncludes(csv: string, id: string): boolean {
 // ─── SVG Chart ────────────────────────────────────────────────────────────────
 
 function StatsChart({ rows, toSecs }: { rows: StatsRow[]; toSecs: number }) {
-  const W = 900, H = 240;
+  const containerRef              = useRef<HTMLDivElement>(null);
+  const [width, setWidth]         = useState(900);
+
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver(entries => {
+      const w = entries[0]?.contentRect.width;
+      if (w && w > 0) setWidth(Math.floor(w));
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
+  const W   = width;
+  const H   = 240;
   const pad = { t: 24, r: 24, b: 40, l: 72 };
   const cW  = W - pad.l - pad.r;
   const cH  = H - pad.t - pad.b;
 
   if (rows.length === 0) {
     return (
-      <div className="flex items-center justify-center h-40 text-muted-foreground text-sm">
+      <div ref={containerRef} className="flex items-center justify-center h-40 text-muted-foreground text-sm">
         No data for selected period
       </div>
     );
@@ -145,28 +160,30 @@ function StatsChart({ rows, toSecs }: { rows: StatsRow[]; toSecs: number }) {
   });
 
   return (
-    <svg viewBox={`0 0 ${W} ${H}`} className="w-full h-auto" style={{ maxHeight: 280 }}>
-      {yTicks.map((mb, i) => (
-        <line key={i} x1={pad.l} y1={yOf(mb).toFixed(1)} x2={pad.l + cW} y2={yOf(mb).toFixed(1)}
-          stroke="currentColor" strokeOpacity={0.08} strokeWidth={1} />
-      ))}
-      <path d={pathOf(r => r.sumStartedMB)} fill="none" stroke="#3b82f6" strokeWidth={2.5} strokeLinejoin="round" strokeLinecap="round" />
-      <path d={pathOf(r => r.sumStoppedMB)} fill="none" stroke="#f97316" strokeWidth={2.5} strokeLinejoin="round" strokeLinecap="round" />
-      {yTicks.map((mb, i) => (
-        <text key={i} x={pad.l - 8} y={yOf(mb).toFixed(1)} textAnchor="end" dominantBaseline="middle"
-          fontSize={10} fill="currentColor" opacity={0.5}>{fmtMB(mb)}</text>
-      ))}
-      {xTicks.map(({ ts, label }) => (
-        <text key={ts} x={xOf(ts).toFixed(1)} y={H - pad.b + 16} textAnchor="middle"
-          fontSize={10} fill="currentColor" opacity={0.5}>{label}</text>
-      ))}
-      <line x1={pad.l} y1={pad.t} x2={pad.l} y2={pad.t + cH} stroke="currentColor" strokeOpacity={0.15} />
-      <line x1={pad.l} y1={pad.t + cH} x2={pad.l + cW} y2={pad.t + cH} stroke="currentColor" strokeOpacity={0.15} />
-      <circle cx={pad.l + 12} cy={pad.t - 8} r={4} fill="#3b82f6" />
-      <text x={pad.l + 20} y={pad.t - 8} dominantBaseline="middle" fontSize={11} fill="currentColor" opacity={0.7}>Started MB</text>
-      <circle cx={pad.l + 110} cy={pad.t - 8} r={4} fill="#f97316" />
-      <text x={pad.l + 118} y={pad.t - 8} dominantBaseline="middle" fontSize={11} fill="currentColor" opacity={0.7}>Stopped MB</text>
-    </svg>
+    <div ref={containerRef} className="w-full">
+      <svg width={W} height={H}>
+        {yTicks.map((mb, i) => (
+          <line key={i} x1={pad.l} y1={yOf(mb).toFixed(1)} x2={pad.l + cW} y2={yOf(mb).toFixed(1)}
+            stroke="currentColor" strokeOpacity={0.08} strokeWidth={1} />
+        ))}
+        <path d={pathOf(r => r.sumStartedMB)} fill="none" stroke="#3b82f6" strokeWidth={2.5} strokeLinejoin="round" strokeLinecap="round" />
+        <path d={pathOf(r => r.sumStoppedMB)} fill="none" stroke="#f97316" strokeWidth={2.5} strokeLinejoin="round" strokeLinecap="round" />
+        {yTicks.map((mb, i) => (
+          <text key={i} x={pad.l - 8} y={yOf(mb).toFixed(1)} textAnchor="end" dominantBaseline="middle"
+            fontSize={10} fill="currentColor" opacity={0.5}>{fmtMB(mb)}</text>
+        ))}
+        {xTicks.map(({ ts, label }) => (
+          <text key={ts} x={xOf(ts).toFixed(1)} y={H - pad.b + 16} textAnchor="middle"
+            fontSize={10} fill="currentColor" opacity={0.5}>{label}</text>
+        ))}
+        <line x1={pad.l} y1={pad.t} x2={pad.l} y2={pad.t + cH} stroke="currentColor" strokeOpacity={0.15} />
+        <line x1={pad.l} y1={pad.t + cH} x2={pad.l + cW} y2={pad.t + cH} stroke="currentColor" strokeOpacity={0.15} />
+        <circle cx={pad.l + 12} cy={pad.t - 8} r={4} fill="#3b82f6" />
+        <text x={pad.l + 20} y={pad.t - 8} dominantBaseline="middle" fontSize={11} fill="currentColor" opacity={0.7}>Started MB</text>
+        <circle cx={pad.l + 110} cy={pad.t - 8} r={4} fill="#f97316" />
+        <text x={pad.l + 118} y={pad.t - 8} dominantBaseline="middle" fontSize={11} fill="currentColor" opacity={0.7}>Stopped MB</text>
+      </svg>
+    </div>
   );
 }
 
@@ -174,10 +191,10 @@ function StatsChart({ rows, toSecs }: { rows: StatsRow[]; toSecs: number }) {
 
 function InfoBlock({ label, value, sub, accent }: { label: string; value: string; sub?: string; accent?: string }) {
   return (
-    <div className="flex flex-col gap-1 rounded-lg border border-border bg-card px-5 py-4 min-w-0">
-      <span className="text-xs text-muted-foreground font-medium uppercase tracking-wide">{label}</span>
-      <span className={`text-2xl font-semibold tabular-nums truncate ${accent ?? ''}`}>{value}</span>
-      {sub && <span className="text-xs text-muted-foreground">{sub}</span>}
+    <div className="rounded-lg border border-border bg-card text-center px-4 pt-4 pb-3 min-w-0">
+      <div className={`text-base sm:text-2xl font-bold tabular-nums truncate ${accent ?? ''}`}>{value}</div>
+      {sub && <div className="text-xs text-muted-foreground mt-0.5 truncate">{sub}</div>}
+      <div className="text-xs text-muted-foreground mt-1">{label}</div>
     </div>
   );
 }
@@ -566,17 +583,15 @@ export default function AppsPage() {
       <div className="flex-1 overflow-auto min-h-0 p-6 space-y-6">
 
         {/* Info blocks */}
-        <div className={`grid gap-4 ${viewMode === 'aod' ? 'grid-cols-2 md:grid-cols-4' : 'grid-cols-2 md:grid-cols-3'}`}>
+        <div className={`grid gap-3 sm:gap-4 ${viewMode === 'aod' ? 'grid-cols-2 sm:grid-cols-4' : 'grid-cols-2 sm:grid-cols-3'}`}>
           <InfoBlock
-            label="Started Apps"
-            value={latest ? String(latest.startedApps) : '—'}
-            sub={latest ? fmtMB(latest.sumStartedMB) : undefined}
+            label={latest ? `Started Apps: ${latest.startedApps}` : 'Started Apps'}
+            value={latest ? fmtMB(latest.sumStartedMB) : '—'}
             accent="text-blue-500"
           />
           <InfoBlock
-            label="Stopped Apps"
-            value={latest ? String(latest.stoppedApps) : '—'}
-            sub={latest ? fmtMB(latest.sumStoppedMB) : undefined}
+            label={latest ? `Stopped Apps: ${latest.stoppedApps}` : 'Stopped Apps'}
+            value={latest ? fmtMB(latest.sumStoppedMB) : '—'}
             accent="text-orange-500"
           />
           {viewMode === 'aod' && (
