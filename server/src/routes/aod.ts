@@ -1,4 +1,5 @@
 import { appendFile, mkdir, rename, stat } from 'node:fs/promises';
+import { scanApps, getStatsData, getLatestStats, isRefreshRunning } from '../services/aodAppsService.js';
 import { join } from 'node:path';
 import type { Request, Response, NextFunction } from 'express';
 import { Router } from 'express';
@@ -25,6 +26,31 @@ router.post('/config/save', requireAdmin, async (req, res, next) => {
     const body = req.body as Partial<AodConfig>;
     await writeAodConfig(body);
     res.json({ ok: true });
+  } catch (err) { next(err); }
+});
+
+// ─── Apps endpoints (/api/aod/apps) ──────────────────────────────────────────
+
+router.get('/apps/status', requireAdmin, (_req, res) => {
+  res.json({ ok: true, refreshing: isRefreshRunning() });
+});
+
+router.post('/apps/refresh', requireAdmin, (_req, res) => {
+  if (isRefreshRunning()) {
+    res.json({ ok: false, error: 'already running' });
+    return;
+  }
+  void scanApps();
+  res.json({ ok: true, started: true });
+});
+
+router.get('/apps/stats', requireAdmin, async (req, res, next) => {
+  try {
+    const nowSecs  = Math.floor(Date.now() / 1000);
+    const from     = typeof req.query['from'] === 'string' ? Number(req.query['from']) : nowSecs - 86400;
+    const to       = typeof req.query['to']   === 'string' ? Number(req.query['to'])   : nowSecs;
+    const [data, latest] = await Promise.all([getStatsData(from, to), getLatestStats()]);
+    res.json({ ok: true, data, latest });
   } catch (err) { next(err); }
 });
 

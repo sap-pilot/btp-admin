@@ -19,6 +19,7 @@ import rcsRouter from './routes/rcs.js';
 import usersRouter from './routes/users.js';
 import authRouter from './routes/auth.js';
 import aodRouter, { aodProxyHandler } from './routes/aod.js';
+import { startAppsScheduler, stopAppsScheduler } from './services/aodAppsService.js';
 import { requireSessionGlobal } from './middleware/requireAuth.js';
 import { errorHandler } from './middleware/errorHandler.js';
 import { compress } from './middleware/compress.js';
@@ -66,6 +67,7 @@ const server = app.listen(config.PORT, () => {
   void initGeo();
   startScheduler();
   startHousekeepingScheduler();
+  startAppsScheduler();
   if (config.SYNC_REMOTE) {
     startupSync();
     startIntervalFallback();
@@ -76,6 +78,7 @@ function shutdown(signal: string) {
   logger.info({ signal }, 'Shutting down');
   stopScheduler();
   stopHousekeepingScheduler();
+  stopAppsScheduler();
   stopIntervalFallback();
   server.close(() => {
     closeBrowser().finally(() => process.exit(0));

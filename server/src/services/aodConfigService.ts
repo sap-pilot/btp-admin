@@ -14,6 +14,7 @@ export interface AodConfig {
   stopAppsUnusedAfterHours?: number;
   excludeApps?:              string[];
   regionProxyEndpoint?:      Record<string, string>;
+  refreshIntervalHrs?:       number;
 }
 
 function getConfigFileAod(): AodConfig {
@@ -35,7 +36,7 @@ export async function readAodConfig(): Promise<AodConfig> {
 }
 
 export async function writeAodConfig(data: AodConfig): Promise<void> {
-  const { regionProxyEndpoint: _rpe, ...toSave } = data;
+  const { regionProxyEndpoint: _rpe, refreshIntervalHrs: _ri, ...toSave } = data;
   await mkdir(AOD_DIR, { recursive: true });
   await writeFile(AOD_CONFIG_PATH, JSON.stringify(toSave, null, 2), 'utf-8');
   touchLastUpdated();
