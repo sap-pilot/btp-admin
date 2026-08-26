@@ -415,52 +415,50 @@ export default function RoleCollectionsOverview() {
             </span>
           )}
         </div>
-        <div className="ml-auto flex items-center gap-2">
-          {/* Full-text search */}
-          <div className="relative hidden sm:block">
-            {searchLoading
-              ? <Loader2 className="absolute left-2 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground animate-spin pointer-events-none" />
-              : <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground pointer-events-none" />
-            }
-            <input
-              type="text"
-              value={overviewSearch}
-              onChange={e => setOverviewSearch(e.target.value)}
-              onKeyDown={e => { if (e.key === 'Enter') void doSearch(overviewSearch); else if (e.key === 'Escape') clearSearch(); }}
-              placeholder="Search roles/role collections…"
-              className={`h-7 pl-7 ${overviewSearch ? 'pr-6' : 'pr-2'} w-44 text-xs border border-border rounded bg-background text-foreground focus:outline-none focus:ring-1 focus:ring-ring placeholder:text-muted-foreground`}
-            />
-            {overviewSearch && (
-              <button
-                onClick={clearSearch}
-                className="absolute right-1.5 top-1/2 -translate-y-1/2 h-4 w-4 flex items-center justify-center text-muted-foreground hover:text-foreground"
-              >
-                <X className="h-3 w-3" />
-              </button>
-            )}
-          </div>
-          {/* Category filter */}
-          {!isChangeHistory && (
-            <select
-              value={categoryFilter}
-              onChange={e => setCategoryFilter(e.target.value as 'all' | RcCategory)}
-              className="hidden sm:block h-7 text-xs border border-border rounded px-2 bg-background text-foreground focus:outline-none focus:ring-1 focus:ring-ring"
+        {/* Full-text search — fills remaining space */}
+        <div className="relative flex-1 min-w-0 hidden sm:block">
+          {searchLoading
+            ? <Loader2 className="absolute left-2 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground animate-spin pointer-events-none" />
+            : <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground pointer-events-none" />
+          }
+          <input
+            type="text"
+            value={overviewSearch}
+            onChange={e => setOverviewSearch(e.target.value)}
+            onKeyDown={e => { if (e.key === 'Enter') void doSearch(overviewSearch); else if (e.key === 'Escape') clearSearch(); }}
+            placeholder="Search roles/role collections…"
+            className={`h-7 pl-7 ${overviewSearch ? 'pr-6' : 'pr-2'} w-full text-xs border border-border rounded bg-background text-foreground focus:outline-none focus:ring-1 focus:ring-ring placeholder:text-muted-foreground`}
+          />
+          {overviewSearch && (
+            <button
+              onClick={clearSearch}
+              className="absolute right-1.5 top-1/2 -translate-y-1/2 h-4 w-4 flex items-center justify-center text-muted-foreground hover:text-foreground"
             >
-              <option value="all">All Categories</option>
-              <option value="standard">{catOptionLabel('Standard', 'standard')}</option>
-              <option value="custom">{catOptionLabel('Custom', 'custom')}</option>
-              <option value="workzone">{catOptionLabel('Work-Zone', 'workzone')}</option>
-            </select>
+              <X className="h-3 w-3" />
+            </button>
           )}
-          <button
-            onClick={() => isRefreshing ? setShowForceRefreshDialog(true) : setShowRefreshDialog(true)}
-            className={btnOutline}
-            title={isRefreshing ? 'Refreshing… — click to force another refresh' : 'Refresh all role collections'}
-          >
-            <RefreshCw className={`h-3.5 w-3.5 ${isRefreshing ? 'animate-spin' : ''}`} />
-            <span className="hidden sm:inline">{isRefreshing ? 'Refreshing…' : 'Refresh'}</span>
-          </button>
         </div>
+        {/* Category filter */}
+        {!isChangeHistory && (
+          <select
+            value={categoryFilter}
+            onChange={e => setCategoryFilter(e.target.value as 'all' | RcCategory)}
+            className="hidden sm:block h-7 text-xs border border-border rounded px-2 bg-background text-foreground focus:outline-none focus:ring-1 focus:ring-ring shrink-0"
+          >
+            <option value="all">All Categories</option>
+            <option value="standard">{catOptionLabel('Standard', 'standard')}</option>
+            <option value="custom">{catOptionLabel('Custom', 'custom')}</option>
+            <option value="workzone">{catOptionLabel('Work-Zone', 'workzone')}</option>
+          </select>
+        )}
+        <button
+          onClick={() => isRefreshing ? setShowForceRefreshDialog(true) : setShowRefreshDialog(true)}
+          className={`${btnOutline} shrink-0`}
+          title={isRefreshing ? 'Refreshing… — click to force another refresh' : 'Refresh all role collections'}
+        >
+          <RefreshCw className={`h-3.5 w-3.5 ${isRefreshing ? 'animate-spin' : ''}`} />
+          <span className="hidden sm:inline">{isRefreshing ? 'Refreshing…' : 'Refresh'}</span>
+        </button>
       </div>
 
       {/* Progress bar */}

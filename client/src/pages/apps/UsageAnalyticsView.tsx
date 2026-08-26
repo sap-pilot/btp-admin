@@ -1,15 +1,25 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { SubaccountEntry } from '@/components/config/SubaccountsTable';
-import type { TabEntry } from '@/components/config/TabsTable';
+import type { TabEntry, TabSection } from '@/components/config/TabsTable';
 import WorldMap from './WorldMap';
 
+// ─── Types (mirrored from aodAnalyticsService) ────────────────────────────────
+
 interface AnalyticsCity    { city: string; lat: number; lon: number; count: number; }
-interface AnalyticsRequest { ts: number; region: string; alias: string; subdomain: string; userId: string; appName?: string; spaceName?: string; }
-interface SubaccountAccess { region: string; subdomain: string; alias: string; appName: string; spaceName: string; lastAccessTs: number; }
+interface AnalyticsRequest { ts: number; region: string; alias: string; subdomain: string; userId: string; appName?: string; spaceName?: string; appGuid?: string; }
+interface SubaccountAccess { region: string; subdomain: string; alias: string; appName: string; spaceName: string; lastAccessTs: number; appGuid?: string; }
 interface AnalyticsPayload {
   totalRequests: number; uniqueUsers: number; startedAppsGb: number; startedAppsCount: number;
   lastUpdated: number; duration: number;
   cities: AnalyticsCity[]; latestRequests: AnalyticsRequest[]; subaccountAccess: SubaccountAccess[];
+}
+
+// SSE delta from analytics-update event
+interface AnalyticsUpdateMsg {
+  type:              'analytics-update';
+  request:           AnalyticsRequest;
+  city?:             { city: string; lat: number; lon: number };
+  subaccountUpdate?: SubaccountAccess & { lastAccessTs: number };
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -18,14 +28,11 @@ function fmtTime(ts: number): string {
   return new Date(ts * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
 }
 
-function fmtLastUpdate(ms: number): string {
-  return new Date(ms).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
+function csvIncludes(csv: string, id: string): boolean {
+  return !!id && csv.split(',').map(s => s.trim()).includes(id);
 }
 
-function csvIncludes(csv: string, id: string): boolean {
-  if (!id) return false;
-  return csv.split(',').map(s => s.trim()).includes(id);
-}
+const geoKey = (lat: number, lon: number) => `${lat.toFixed(2)},${lon.toFixed(2)}`;
 
 const DURATIONS: { label: string; hours: number }[] = [
   { label: '1 h',  hours: 1   },
@@ -45,12 +52,25 @@ function InfoBlock({ label, value, accent }: { label: string; value: string; acc
   );
 }
 
-function RequestRow({ req }: { req: AnalyticsRequest }) {
+interface RequestRowProps {
+  req: AnalyticsRequest;
+  onOpen: (region: string, subdomain: string, appGuid: string, spaceName?: string, appName?: string) => void;
+}
+
+function RequestRow({ req, onOpen }: RequestRowProps) {
   return (
-    <div className="flex items-center gap-2 py-1.5 border-b border-border/50 last:border-0 text-xs min-w-0">
+    <div className="flex items-baseline gap-2 py-1.5 border-b border-border/50 last:border-0 text-xs min-w-0">
       <span className="text-muted-foreground tabular-nums shrink-0">{fmtTime(req.ts)}</span>
-      <span className="font-medium truncate text-foreground">{req.region}/{req.alias}</span>
-      <span className="text-muted-foreground truncate shrink-0 max-w-[7rem]">{req.userId || '—'}</span>
+      <button
+        onClick={() => onOpen(req.region, req.subdomain, req.appGuid ?? '', req.spaceName, req.appName)}
+        className="font-medium truncate text-foreground hover:text-primary hover:underline text-left min-w-0"
+      >
+        {req.appName ?? req.alias}
+        {req.subdomain && (
+          <span className="text-muted-foreground/60 ml-1 text-[11px]">({req.subdomain})</span>
+        )}
+      </button>
+      <span className="text-muted-foreground truncate shrink-0 max-w-[7rem] ml-auto">{req.userId || '—'}</span>
     </div>
   );
 }
@@ -58,30 +78,33 @@ function RequestRow({ req }: { req: AnalyticsRequest }) {
 // ─── Main component ───────────────────────────────────────────────────────────
 
 interface Props {
-  saList:     SubaccountEntry[];
-  tabs:       TabEntry[];
-  isDarkMap?: boolean;
+  saList:       SubaccountEntry[];
+  tabs:         TabEntry[];
+  isDarkMap?:   boolean;
+  onOpenModal?: (region: string, subdomain: string, appGuid: string, spaceName?: string, appName?: string) => void;
 }
 
-export default function UsageAnalyticsView({ saList, tabs, isDarkMap }: Props) {
+export default function UsageAnalyticsView({ saList, tabs, isDarkMap, onOpenModal }: Props) {
   const [durationHours, setDurationHours] = useState(24);
-  const [data,   setData]   = useState<AnalyticsPayload | null>(null);
+  const [data,    setData]    = useState<AnalyticsPayload | null>(null);
   const [loading, setLoading] = useState(false);
-  const [error,  setError]  = useState<string | null>(null);
+  const [error,   setError]   = useState<string | null>(null);
   const [liveReqs, setLiveReqs] = useState<AnalyticsRequest[]>([]);
+  const [activeTab, setActiveTab] = useState('');
   const esRef = useRef<EventSource | null>(null);
+
+  const handleOpen = useCallback((region: string, subdomain: string, appGuid: string, spaceName?: string, appName?: string) => {
+    onOpenModal?.(region, subdomain, appGuid, spaceName, appName);
+  }, [onOpenModal]);
 
   const fetchAnalytics = useCallback(async (hours: number) => {
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch(`/api/aod/analytics?duration=${hours}`);
+      const res  = await fetch(`/api/aod/analytics?duration=${hours}`);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const json = await res.json() as { ok: boolean; data: AnalyticsPayload };
-      if (json.ok) {
-        setData(json.data);
-        setLiveReqs(json.data.latestRequests);
-      }
+      if (json.ok) { setData(json.data); setLiveReqs(json.data.latestRequests); }
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to load analytics');
     } finally {
@@ -89,76 +112,87 @@ export default function UsageAnalyticsView({ saList, tabs, isDarkMap }: Props) {
     }
   }, []);
 
-  // Fetch on duration change
   useEffect(() => { void fetchAnalytics(durationHours); }, [durationHours, fetchAnalytics]);
 
-  // SSE subscription
+  // ── SSE ───────────────────────────────────────────────────────────────────
+
   useEffect(() => {
     const es = new EventSource('/api/events?aod=1');
     esRef.current = es;
 
-    es.onmessage = (e: MessageEvent) => {
+    es.addEventListener('update', (e: MessageEvent) => {
       try {
         const msg = JSON.parse(e.data as string) as { type?: string } & Record<string, unknown>;
 
-        if (msg.type === 'analytics-request') {
-          const req = msg as unknown as AnalyticsRequest;
-          setLiveReqs(prev => [req, ...prev].slice(0, 15));
-          // Invalidate counts — re-fetch stats block only, not full data
-          setData(d => d ? { ...d, totalRequests: d.totalRequests + 1, lastUpdated: Date.now() } : d);
+        if (msg.type === 'analytics-update') {
+          const upd = msg as unknown as AnalyticsUpdateMsg;
+
+          // Prepend new request to live feed
+          setLiveReqs(prev => [upd.request, ...prev].slice(0, 15));
+
+          // Increment counts + apply city/subaccount delta
+          setData(d => {
+            if (!d) return d;
+
+            // City update
+            let cities = d.cities;
+            if (upd.city) {
+              const k   = geoKey(upd.city.lat, upd.city.lon);
+              const idx = cities.findIndex(c => geoKey(c.lat, c.lon) === k);
+              cities = idx >= 0
+                ? cities.map((c, i) => i === idx ? { ...c, count: c.count + 1 } : c)
+                : [...cities, { ...upd.city!, count: 1 }];
+            }
+
+            // Subaccount last-access update
+            let subaccountAccess = d.subaccountAccess;
+            if (upd.subaccountUpdate) {
+              const su  = upd.subaccountUpdate;
+              const idx = subaccountAccess.findIndex(a => a.region === su.region && a.subdomain === su.subdomain);
+              if (idx >= 0) {
+                subaccountAccess = subaccountAccess.map((a, i) =>
+                  i === idx ? { ...a, appName: su.appName, spaceName: su.spaceName, lastAccessTs: su.lastAccessTs, appGuid: su.appGuid } : a,
+                );
+              } else {
+                subaccountAccess = [...subaccountAccess, su];
+              }
+              subaccountAccess = [...subaccountAccess].sort((a, b) => b.lastAccessTs - a.lastAccessTs);
+            }
+
+            return { ...d, totalRequests: d.totalRequests + 1, lastUpdated: Date.now(), cities, subaccountAccess };
+          });
         } else if (msg.type === 'apps-synced') {
           void fetchAnalytics(durationHours);
         }
       } catch { /* ignore parse errors */ }
-    };
+    });
 
     return () => { es.close(); esRef.current = null; };
   }, [durationHours, fetchAnalytics]);
 
-  // ── Build hierarchy: tab → group → subaccounts ──────────────────────────────
+  // ── Subaccount access lookup map ──────────────────────────────────────────
 
-  interface HierarchyRow { tab: string; group: string; sa: SubaccountEntry; access?: SubaccountAccess; }
-  const hierarchy: HierarchyRow[] = [];
-
-  if (data) {
-    const accessByKey = new Map<string, SubaccountAccess>();
-    for (const acc of data.subaccountAccess) accessByKey.set(`${acc.region}/${acc.subdomain}`, acc);
-
-    for (const te of tabs) {
-      for (const section of te.sections) {
-        if (section.type !== 'subaccountGroup') continue;
-        const groupSas = saList.filter(sa => csvIncludes(sa.groupIds, section.groupId));
-        for (const sa of groupSas) {
-          const access = accessByKey.get(`${sa.region}/${sa.subdomain}`);
-          if (access) hierarchy.push({ tab: te.tab, group: section.title ?? section.groupId, sa, access });
-        }
-      }
-    }
-    // Sort by last access desc within each tab/group
-    hierarchy.sort((a, b) => {
-      const tabDiff = a.tab.localeCompare(b.tab) || a.group.localeCompare(b.group);
-      if (tabDiff !== 0) return tabDiff;
-      return (b.access?.lastAccessTs ?? 0) - (a.access?.lastAccessTs ?? 0);
-    });
+  const accessByKey = new Map<string, SubaccountAccess>();
+  for (const acc of (data?.subaccountAccess ?? [])) {
+    accessByKey.set(`${acc.region}/${acc.subdomain}`, acc);
   }
 
-  // Group by tab
-  const byTab = new Map<string, { group: string; rows: HierarchyRow[] }[]>();
-  for (const row of hierarchy) {
-    let tabGroups = byTab.get(row.tab);
-    if (!tabGroups) { tabGroups = []; byTab.set(row.tab, tabGroups); }
-    let grp = tabGroups.find(g => g.group === row.group);
-    if (!grp) { grp = { group: row.group, rows: [] }; tabGroups.push(grp); }
-    grp.rows.push(row);
-  }
+  // ── Tab/group hierarchy (mirrors all/aod mode structure) ─────────────────
 
-  const [activeHierTab, setActiveHierTab] = useState<string>('');
-  const hierTabs = [...byTab.keys()];
-  const currentHierTab = hierTabs.includes(activeHierTab) ? activeHierTab : (hierTabs[0] ?? '');
+  // Filter tabs to only those that have at least one SA with access data
+  const visibleTabs = tabs.filter(te =>
+    te.sections.some(s =>
+      s.type === 'subaccountGroup' &&
+      saList.some(sa => csvIncludes(sa.groupIds, (s as Extract<TabSection, { type: 'subaccountGroup' }>).groupId) &&
+        accessByKey.has(`${sa.region}/${sa.subdomain}`)),
+    ),
+  );
 
-  // ── Render ──────────────────────────────────────────────────────────────────
+  const tabNames  = visibleTabs.map(te => te.tab);
+  const currTab   = tabNames.includes(activeTab) ? activeTab : (tabNames[0] ?? '');
+  const currEntry = visibleTabs.find(te => te.tab === currTab);
 
-  const cities: AnalyticsCity[] = data?.cities ?? [];
+  // ── Render ────────────────────────────────────────────────────────────────
 
   return (
     <div className="flex flex-col gap-6 p-6">
@@ -202,7 +236,7 @@ export default function UsageAnalyticsView({ saList, tabs, isDarkMap }: Props) {
         />
         <InfoBlock
           label="Last Update"
-          value={data ? fmtLastUpdate(data.lastUpdated) : '—'}
+          value={data ? new Date(data.lastUpdated).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }) : '—'}
         />
       </div>
 
@@ -214,81 +248,95 @@ export default function UsageAnalyticsView({ saList, tabs, isDarkMap }: Props) {
 
       {/* Map + Live feed */}
       <div className="flex gap-4 min-h-0">
-
-        {/* World map (75%) */}
         <div className="flex-[3] min-w-0">
           <div className="text-xs font-medium text-muted-foreground mb-1.5">Requests by Location</div>
-          <WorldMap cities={cities} isDark={isDarkMap} />
-          {cities.length === 0 && !loading && (
-            <div className="text-xs text-muted-foreground text-center mt-2">
-              No geo data for this period
-            </div>
+          <WorldMap cities={data?.cities ?? []} isDark={isDarkMap} />
+          {!loading && (data?.cities ?? []).length === 0 && (
+            <div className="text-xs text-muted-foreground text-center mt-2">No geo data for this period</div>
           )}
         </div>
-
-        {/* Latest requests (25%) */}
         <div className="flex-1 min-w-0 flex flex-col">
           <div className="text-xs font-medium text-muted-foreground mb-1.5">Latest Requests</div>
           <div className="flex-1 rounded-lg border border-border bg-card px-3 py-2 overflow-auto">
             {liveReqs.length === 0
               ? <p className="text-xs text-muted-foreground text-center py-4">No requests yet</p>
-              : liveReqs.map((req, i) => <RequestRow key={`${req.ts}-${i}`} req={req} />)
+              : liveReqs.map((req, i) => <RequestRow key={`${req.ts}-${i}`} req={req} onOpen={handleOpen} />)
             }
           </div>
         </div>
       </div>
 
-      {/* Subaccount hierarchy */}
-      {hierarchy.length > 0 && (
+      {/* Last Access by Subaccount — tabs → groups → SA rows */}
+      {visibleTabs.length > 0 && (
         <div>
           <div className="text-xs font-medium text-muted-foreground mb-1.5">Last Access by Subaccount</div>
           <div className="rounded-lg border border-border bg-card overflow-hidden">
 
             {/* Tab bar */}
-            {hierTabs.length > 1 && (
-              <div className="flex border-b border-border overflow-x-auto">
-                {hierTabs.map(tab => (
+            {visibleTabs.length > 1 && (
+              <div className="flex items-stretch border-b border-border overflow-x-auto">
+                {visibleTabs.map(te => (
                   <button
-                    key={tab}
-                    onClick={() => setActiveHierTab(tab)}
-                    className={`px-4 py-2 text-xs shrink-0 transition-colors border-b-2 ${
-                      tab === currentHierTab
+                    key={te.tab}
+                    onClick={() => setActiveTab(te.tab)}
+                    className={`px-4 py-2 text-sm shrink-0 transition-colors border-b-2 ${
+                      te.tab === currTab
                         ? 'border-primary text-foreground font-medium'
                         : 'border-transparent text-muted-foreground hover:text-foreground'
                     }`}
                   >
-                    {tab}
+                    {te.tab}
                   </button>
                 ))}
               </div>
             )}
 
-            {/* Groups + subaccounts */}
-            {(byTab.get(currentHierTab) ?? []).map(grp => (
-              <div key={grp.group}>
-                <div className="px-4 py-1.5 text-xs font-semibold text-muted-foreground bg-muted/30 border-b border-border">
-                  {grp.group}
-                </div>
-                <div className="divide-y divide-border/50">
-                  {grp.rows.map(row => (
-                    <div key={`${row.sa.region}/${row.sa.subdomain}`} className="flex items-center gap-3 px-4 py-2 text-xs">
-                      <span className="font-medium text-foreground min-w-[8rem]">{row.sa.alias || row.sa.subdomain}</span>
-                      {row.access ? (
-                        <>
-                          <span className="text-muted-foreground truncate flex-1">
-                            {row.access.appName}
-                            {row.access.spaceName && <span className="ml-1 opacity-60">({row.access.spaceName})</span>}
-                          </span>
-                          <span className="text-muted-foreground tabular-nums shrink-0">{fmtTime(row.access.lastAccessTs)}</span>
-                        </>
-                      ) : (
-                        <span className="text-muted-foreground/50">no activity</span>
-                      )}
+            {/* Groups → SA rows */}
+            {currEntry?.sections
+              .filter((s): s is Extract<TabSection, { type: 'subaccountGroup' }> => s.type === 'subaccountGroup')
+              .map(grp => {
+                const grpSas = saList
+                  .filter(sa => csvIncludes(sa.groupIds, grp.groupId) && accessByKey.has(`${sa.region}/${sa.subdomain}`))
+                  .sort((a, b) => {
+                    const ta = accessByKey.get(`${a.region}/${a.subdomain}`)?.lastAccessTs ?? 0;
+                    const tb = accessByKey.get(`${b.region}/${b.subdomain}`)?.lastAccessTs ?? 0;
+                    return tb - ta;
+                  });
+                if (grpSas.length === 0) return null;
+                return (
+                  <div key={grp.groupId}>
+                    <div className="px-4 py-1.5 text-xs font-semibold text-muted-foreground bg-muted/30 border-b border-border">
+                      {grp.title ?? grp.groupId}
                     </div>
-                  ))}
-                </div>
-              </div>
-            ))}
+                    <div className="divide-y divide-border/50">
+                      {grpSas.map(sa => {
+                        const acc = accessByKey.get(`${sa.region}/${sa.subdomain}`);
+                        return (
+                          <div key={sa.subaccountId} className="flex items-center gap-3 px-4 py-2 text-xs hover:bg-muted/20">
+                            <span className="font-medium text-foreground min-w-[8rem] shrink-0">{sa.alias || sa.subdomain}</span>
+                            {acc ? (
+                              <>
+                                <button
+                                  onClick={() => handleOpen(acc.region, acc.subdomain, acc.appGuid ?? '', acc.spaceName, acc.appName)}
+                                  className="truncate flex-1 text-foreground hover:text-primary hover:underline text-left"
+                                >
+                                  {acc.appName || '—'}
+                                  {acc.spaceName && (
+                                    <span className="text-muted-foreground/60 ml-1 text-[11px]">({acc.spaceName})</span>
+                                  )}
+                                </button>
+                                <span className="text-muted-foreground tabular-nums shrink-0">{fmtTime(acc.lastAccessTs)}</span>
+                              </>
+                            ) : (
+                              <span className="text-muted-foreground/50 flex-1">no activity</span>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                );
+              })}
           </div>
         </div>
       )}

@@ -505,27 +505,27 @@ export default function AppsPage() {
         <button onClick={toggle} className="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-accent/50 transition-colors" title="Toggle sidebar">
           <PanelLeft className="h-4 w-4" />
         </button>
-        <span className="text-sm font-semibold">Apps</span>
-        <div className="ml-auto flex items-center gap-2">
+        <span className="text-sm font-semibold shrink-0">Apps</span>
 
-          {/* Search box */}
-          <div className="relative flex items-center">
-            <Search className="absolute left-2 h-3.5 w-3.5 text-muted-foreground pointer-events-none" />
-            <input
-              type="text"
-              value={searchInput}
-              onChange={e => setSearchInput(e.target.value)}
-              onKeyDown={e => { if (e.key === 'Enter') void handleSearch(searchInput); else if (e.key === 'Escape') clearSearch(); }}
-              placeholder="Search apps…"
-              className="h-8 pl-7 pr-7 rounded-md border border-input bg-background text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring w-48"
-            />
-            {(searchInput || committedSearch) && (
-              <button onClick={clearSearch} className="absolute right-1.5 p-0.5 text-muted-foreground hover:text-foreground">
-                <X className="h-3.5 w-3.5" />
-              </button>
-            )}
-          </div>
+        {/* Search box — fills remaining space */}
+        <div className="relative flex-1 min-w-0">
+          <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground pointer-events-none" />
+          <input
+            type="text"
+            value={searchInput}
+            onChange={e => setSearchInput(e.target.value)}
+            onKeyDown={e => { if (e.key === 'Enter') void handleSearch(searchInput); else if (e.key === 'Escape') clearSearch(); }}
+            placeholder="Search apps…"
+            className="h-8 pl-7 pr-7 rounded-md border border-input bg-background text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring w-full"
+          />
+          {(searchInput || committedSearch) && (
+            <button onClick={clearSearch} className="absolute right-1.5 top-1/2 -translate-y-1/2 p-0.5 text-muted-foreground hover:text-foreground">
+              <X className="h-3.5 w-3.5" />
+            </button>
+          )}
+        </div>
 
+        <div className="flex items-center gap-2 shrink-0">
           {/* Refresh button */}
           <button
             onClick={() => void handleRefresh()}
@@ -554,7 +554,7 @@ export default function AppsPage() {
               onClick={() => navigateTo('analytics', duration)}
               className={`px-3 transition-colors border-l border-input ${viewMode === 'analytics' ? 'bg-primary text-primary-foreground' : 'bg-background text-foreground hover:bg-accent hover:text-accent-foreground'}`}
             >
-              Usage Analytics
+              Analytics
             </button>
           </div>
         </div>
@@ -623,7 +623,7 @@ export default function AppsPage() {
       {/* Usage Analytics view */}
       {viewMode === 'analytics' && (
         <div className="flex-1 overflow-auto min-h-0">
-          <UsageAnalyticsView saList={allSas} tabs={tabEntries} isDarkMap />
+          <UsageAnalyticsView saList={allSas} tabs={tabEntries} isDarkMap onOpenModal={openModal} />
         </div>
       )}
 

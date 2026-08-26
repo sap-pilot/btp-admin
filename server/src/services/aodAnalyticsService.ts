@@ -11,8 +11,8 @@ const AOD_APPS_DIR = join(config.LOCAL_STORE_DIR, 'apps');
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 export interface AnalyticsCity    { city: string; lat: number; lon: number; count: number; }
-export interface AnalyticsRequest { ts: number; region: string; alias: string; subdomain: string; userId: string; appName?: string; spaceName?: string; }
-export interface SubaccountAccess { region: string; subdomain: string; alias: string; appName: string; spaceName: string; lastAccessTs: number; }
+export interface AnalyticsRequest { ts: number; region: string; alias: string; subdomain: string; userId: string; appName?: string; spaceName?: string; appGuid?: string; }
+export interface SubaccountAccess { region: string; subdomain: string; alias: string; appName: string; spaceName: string; lastAccessTs: number; appGuid?: string; }
 
 export interface AnalyticsPayload {
   totalRequests:    number;
@@ -185,7 +185,7 @@ export async function getAnalytics(durationHours: number): Promise<AnalyticsPayl
       let am = perSaAppMaps.get(saKey);
       if (!am) { am = await getAppMap(row.region, row.subdomain); perSaAppMaps.set(saKey, am); }
       const meta = am.get(row.appId);
-      return { ts: row.ts, region: row.region, alias: aliasMap.get(saKey) ?? row.subdomain, subdomain: row.subdomain, userId: row.userId, appName: meta?.name, spaceName: meta?.spaceName };
+      return { ts: row.ts, region: row.region, alias: aliasMap.get(saKey) ?? row.subdomain, subdomain: row.subdomain, userId: row.userId, appName: meta?.name, spaceName: meta?.spaceName, appGuid: row.appId };
     }),
   );
 
@@ -196,7 +196,7 @@ export async function getAnalytics(durationHours: number): Promise<AnalyticsPayl
       let am = perSaAppMaps.get(saKey);
       if (!am) { am = await getAppMap(region, subdomain); perSaAppMaps.set(saKey, am); }
       const meta = am.get(appId);
-      return { region, subdomain, alias: aliasMap.get(saKey) ?? subdomain, appName: meta?.name ?? '', spaceName: meta?.spaceName ?? '', lastAccessTs: ts };
+      return { region, subdomain, alias: aliasMap.get(saKey) ?? subdomain, appName: meta?.name ?? '', spaceName: meta?.spaceName ?? '', lastAccessTs: ts, appGuid: appId };
     }),
   );
   subaccountAccess.sort((a, b) => b.lastAccessTs - a.lastAccessTs);
@@ -217,31 +217,65 @@ export async function getAnalytics(durationHours: number): Promise<AnalyticsPayl
   return payload;
 }
 
-// Called from aodProxyHandler after each request — fire and forget
+// Incrementally update all cached analytics payloads with one new request, then emit SSE.
+// Called fire-and-forget from aodProxyHandler after each proxied request.
 export function recordAodRequest(data: {
   region: string; subdomain: string; appId: string; userId: string;
   city: string; lat: number; lon: number; ts: number;
 }): void {
-  invalidateCache();
   void (async () => {
     try {
       const [aliasMap, appMap] = await Promise.all([getAliasMap(), getAppMap(data.region, data.subdomain)]);
-      const saKey   = `${data.region}/${data.subdomain}`;
-      const alias   = aliasMap.get(saKey) ?? data.subdomain;
-      const meta    = appMap.get(data.appId);
-      const event: Record<string, unknown> = {
-        type: 'analytics-request',
+      const saKey  = `${data.region}/${data.subdomain}`;
+      const alias  = aliasMap.get(saKey) ?? data.subdomain;
+      const meta   = appMap.get(data.appId);
+      const hasGeo = data.lat !== 0 || data.lon !== 0;
+      const geoKey = hasGeo ? `${data.lat.toFixed(2)},${data.lon.toFixed(2)}` : null;
+
+      const request: AnalyticsRequest = {
         ts:        data.ts,
         region:    data.region,
         alias,
         subdomain: data.subdomain,
         userId:    data.userId,
-        appName:   meta?.name ?? '',
-        spaceName: meta?.spaceName ?? '',
+        appName:   meta?.name,
+        spaceName: meta?.spaceName,
+        appGuid:   data.appId,
       };
+
+      // Incrementally update every cached payload — the new request is always within any window
+      for (const entry of analyticsCache.values()) {
+        const p = entry.payload;
+        p.totalRequests++;
+        p.lastUpdated = Date.now();
+
+        if (hasGeo && geoKey) {
+          const c = p.cities.find(x => `${x.lat.toFixed(2)},${x.lon.toFixed(2)}` === geoKey);
+          if (c) c.count++;
+          else p.cities.push({ city: data.city || geoKey, lat: data.lat, lon: data.lon, count: 1 });
+        }
+
+        p.latestRequests = [request, ...p.latestRequests].slice(0, 15);
+
+        const sa = p.subaccountAccess.find(a => a.region === data.region && a.subdomain === data.subdomain);
+        if (sa) {
+          sa.lastAccessTs = data.ts;
+          sa.appGuid      = data.appId;
+          if (meta?.name)      sa.appName   = meta.name;
+          if (meta?.spaceName) sa.spaceName = meta.spaceName;
+        } else {
+          p.subaccountAccess.push({ region: data.region, subdomain: data.subdomain, alias, appName: meta?.name ?? '', spaceName: meta?.spaceName ?? '', lastAccessTs: data.ts, appGuid: data.appId });
+          p.subaccountAccess.sort((a, b) => b.lastAccessTs - a.lastAccessTs);
+        }
+      }
+
+      // Emit delta — client applies it to its local state
+      const event: Record<string, unknown> = { type: 'analytics-update', request };
+      if (hasGeo) event['city'] = { city: data.city || geoKey, lat: data.lat, lon: data.lon };
+      event['subaccountUpdate'] = { region: data.region, subdomain: data.subdomain, alias, appName: meta?.name ?? '', spaceName: meta?.spaceName ?? '', lastAccessTs: data.ts, appGuid: data.appId };
       emitImmediate('aod-apps', event);
     } catch (err) {
-      logger.warn({ err }, 'analytics: failed to emit request event');
+      logger.warn({ err }, 'analytics: failed to update cache / emit SSE');
     }
   })();
 }
