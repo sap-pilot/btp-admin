@@ -34,14 +34,24 @@ router.post('/batch', requireSyncAuth, async (req, res, next) => {
           return;
         }
       } else if (parts[0] === 'dest') {
-        // dest paths: root .md files (dest/changelog*.md) or subaccount files (dest/{region}/{subdomain}/{file})
+        // dest paths: root .md (2 segs), subaccount file (4 segs), instance-level file (6 segs)
         if (parts.length === 2) {
           if (!parts[1] || !/^[a-zA-Z0-9][a-zA-Z0-9_.-]*\.md$/.test(parts[1])) {
             rejectBatch(400, `invalid dest root path: ${p}`);
             return;
           }
-        } else if (parts.length !== 4 || !parts[1] || !parts[2] || !parts[3]) {
-          rejectBatch(400, `invalid dest path (expected 2 or 4 segments): ${p}`);
+        } else if (parts.length === 4) {
+          if (!parts[1] || !parts[2] || !parts[3]) {
+            rejectBatch(400, `invalid dest subaccount path: ${p}`);
+            return;
+          }
+        } else if (parts.length === 6) {
+          if (!parts[1] || !parts[2] || !parts[3] || !parts[4] || !parts[5] || !/^[\w][\w.-]*\.json$/.test(parts[5])) {
+            rejectBatch(400, `invalid dest instance path: ${p}`);
+            return;
+          }
+        } else {
+          rejectBatch(400, `invalid dest path (expected 2, 4, or 6 segments): ${p}`);
           return;
         }
       } else if (parts[0] === 'rcs') {

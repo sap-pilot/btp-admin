@@ -321,16 +321,40 @@ function pathToFolderEntry(relPath: string): { folder: string; name: string } | 
     return null;
   }
 
-  if (first === 'dest' || first === 'rcs') {
+  if (first === 'rcs') {
     const s2 = rest.indexOf('/');
-    if (s2 === -1) return rest.endsWith('.md') ? { folder: first, name: rest } : null;
+    if (s2 === -1) return rest.endsWith('.md') ? { folder: 'rcs', name: rest } : null;
     const region = rest.slice(0, s2);
     const after2 = rest.slice(s2 + 1);
     const s3 = after2.indexOf('/');
     if (s3 === -1) return null;
     const sub  = after2.slice(0, s3);
     const name = after2.slice(s3 + 1);
-    return name && !name.includes('/') ? { folder: `${first}/${region}/${sub}`, name } : null;
+    return name && !name.includes('/') ? { folder: `rcs/${region}/${sub}`, name } : null;
+  }
+
+  if (first === 'dest') {
+    const s2 = rest.indexOf('/');
+    if (s2 === -1) return rest.endsWith('.md') ? { folder: 'dest', name: rest } : null;
+    const region = rest.slice(0, s2);
+    const after2 = rest.slice(s2 + 1);
+    const s3 = after2.indexOf('/');
+    if (s3 === -1) return null;
+    const sub    = after2.slice(0, s3);
+    const after3 = after2.slice(s3 + 1);
+    // dest/<region>/<sub>/<file> — flat subaccount file (no further slashes)
+    if (!after3.includes('/')) return after3 ? { folder: `dest/${region}/${sub}`, name: after3 } : null;
+    // dest/<region>/<sub>/<space>/<instance>/<file>.json — instance-level destination
+    const s4       = after3.indexOf('/');
+    const space    = after3.slice(0, s4);
+    const after4   = after3.slice(s4 + 1);
+    const s5       = after4.indexOf('/');
+    if (s5 === -1) return null;
+    const instance = after4.slice(0, s5);
+    const name     = after4.slice(s5 + 1);
+    return name && !name.includes('/') && name.endsWith('.json') && space && instance
+      ? { folder: `dest/${region}/${sub}/${space}/${instance}`, name }
+      : null;
   }
 
   if (first === 'users') {
