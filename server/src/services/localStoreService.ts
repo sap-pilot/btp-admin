@@ -293,6 +293,10 @@ function pathToFolderEntry(relPath: string): { folder: string; name: string } | 
     return rest.includes('/') ? null : { folder: 'conf', name: rest };
   }
 
+  if (first === 'aod') {
+    return rest === 'aod-config.json' ? { folder: 'aod', name: rest } : null;
+  }
+
   if (first === 'dest' || first === 'rcs') {
     const s2 = rest.indexOf('/');
     if (s2 === -1) return rest.endsWith('.md') ? { folder: first, name: rest } : null;
@@ -598,4 +602,10 @@ export async function responseFileSize(folder: string, filename: string): Promis
   } catch {
     return 0;
   }
+}
+
+/** Read a file from LOCAL_STORE_DIR/aod/ — only aod-config.json is permitted. */
+export async function readAodFile(filename: string): Promise<Buffer> {
+  if (filename !== 'aod-config.json') throw new Error('Invalid aod filename');
+  return readFile(join(config.LOCAL_STORE_DIR, 'aod', filename));
 }

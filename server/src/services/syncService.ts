@@ -345,7 +345,7 @@ function resolveLocalPath(flatPath: string): string {
   const slash = flatPath.indexOf('/');
   if (slash === -1) return join(config.LOCAL_STORE_DIR, flatPath);
   const first = flatPath.slice(0, slash);
-  if (first === 'conf' || first === 'dest' || first === 'rcs' || first === 'users') {
+  if (first === 'conf' || first === 'dest' || first === 'rcs' || first === 'users' || first === 'aod') {
     return join(config.LOCAL_STORE_DIR, flatPath);
   }
   return join(config.LOCAL_STORE_DIR, 'resp', flatPath);
@@ -420,6 +420,14 @@ async function downloadBatch(
             ? join(config.LOCAL_STORE_DIR, 'users', filename.slice(0, lastSlash))
             : join(config.LOCAL_STORE_DIR, 'users');
           await mkdir(parentDir, { recursive: true });
+        } else if (folder === 'aod') {
+          if (filename !== 'aod-config.json') return; // only sync aod-config.json
+          target = resolvePath(config.LOCAL_STORE_DIR, 'aod', filename);
+          if (!target.startsWith(safeBase + '/')) {
+            logger.warn({ name }, 'Skipping ZIP aod entry: path traversal detected');
+            return;
+          }
+          await mkdir(join(config.LOCAL_STORE_DIR, 'aod'), { recursive: true });
         } else {
           target = resolvePath(config.LOCAL_STORE_DIR, 'resp', folder, filename);
           if (!target.startsWith(safeBase + '/')) {
@@ -680,7 +688,7 @@ async function executeSync(
     if (updatedRootFiles.length > 0) {
       emit('root', { files: updatedRootFiles, ts });
     }
-    if (updatedFolders.has('conf')) {
+    if (updatedFolders.has('conf') || updatedFolders.has('aod')) {
       emit('config', { ts });
       void refreshLastUpdated(); // re-read file mtimes set by utimes() during sync
     }

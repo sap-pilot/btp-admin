@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { readConfigFile, readDestFile, readRcsFile, readRootFile, readRawResponseFile, readUsersFile, browseResponseFiles, formatBrowseT, parseBrowseT } from '../services/localStoreService.js';
+import { readConfigFile, readDestFile, readRcsFile, readRootFile, readRawResponseFile, readUsersFile, readAodFile, browseResponseFiles, formatBrowseT, parseBrowseT } from '../services/localStoreService.js';
 import { buildZip } from '../services/zipBuilder.js';
 import { handleDownloadTrigger, registerCallback } from '../services/syncService.js';
 import { logger } from '../logger.js';
@@ -97,6 +97,8 @@ router.post('/batch', requireSyncAuth, async (req, res, next) => {
             data = await readRcsFile(rest);
           } else if (folder === 'users') {
             data = await readUsersFile(rest);
+          } else if (folder === 'aod') {
+            data = await readAodFile(rest);
           } else {
             data = await readRawResponseFile(folder, rest);
           }

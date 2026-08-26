@@ -38,7 +38,7 @@ router.post('/subaccounts/refresh', requireAdmin, async (req, res, next) => {
 router.post('/subaccounts/:region/:subdomain/spaces', requireAdmin, async (req, res, next) => {
   try {
     const { region, subdomain } = req.params as { region: string; subdomain: string };
-    const { spaces } = req.body as { spaces?: { spaceId: string; manageDest: boolean }[] };
+    const { spaces } = req.body as { spaces?: { spaceId: string; manageDest: boolean; aod?: boolean }[] };
     if (!Array.isArray(spaces)) return void res.status(400).json({ ok: false, error: 'spaces array required' });
     const data = await saveSpaceSettings(region, subdomain, spaces, reqUser(req));
     res.json({ ok: true, data });

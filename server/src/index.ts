@@ -18,6 +18,7 @@ import destRouter from './routes/destinations.js';
 import rcsRouter from './routes/rcs.js';
 import usersRouter from './routes/users.js';
 import authRouter from './routes/auth.js';
+import aodRouter, { aodProxyHandler } from './routes/aod.js';
 import { requireSessionGlobal } from './middleware/requireAuth.js';
 import { errorHandler } from './middleware/errorHandler.js';
 import { compress } from './middleware/compress.js';
@@ -32,6 +33,8 @@ logger.info({ configFile: config.CONFIG_FILE, services: cfg.services.length }, '
 
 app.use('/health', healthRouter);
 app.use(authRouter);
+// AOD proxy: no auth — must be mounted before requireSessionGlobal
+app.use('/aod', aodProxyHandler);
 // API responses must never be cached — prevents 304s on repeated /api/view requests
 app.use('/api', (_req, res, next) => { res.setHeader('Cache-Control', 'no-store'); next(); });
 // Global session auth: all /api/* require login when XSUAA is bound (exceptions in requireSessionGlobal)
@@ -43,6 +46,7 @@ app.use('/api/destinations', destRouter);
 app.use('/api/role-collections', rcsRouter);
 app.use('/api/users', usersRouter);
 app.use('/api/sync', syncRouter);
+app.use('/api/aod', aodRouter);
 app.use('/api', apiRouter);
 
 try {

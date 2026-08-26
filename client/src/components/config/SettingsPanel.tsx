@@ -17,11 +17,16 @@ export interface SettingsData {
 
 // ─── Nav items ────────────────────────────────────────────────────────────────
 
-type NavItem = 'homepage' | 'menus';
+type NavItem = 'homepage' | 'menus' | 'aod';
 const NAV_ITEMS: { id: NavItem; label: string }[] = [
-  { id: 'homepage', label: 'Homepage' },
-  { id: 'menus',    label: 'Menus'    },
+  { id: 'homepage', label: 'Homepage'                },
+  { id: 'menus',    label: 'Menus'                   },
+  { id: 'aod',      label: 'Application on Demand'   },
 ];
+
+// ─── AOD data ─────────────────────────────────────────────────────────────────
+
+export interface AodData { stopAppsUnusedAfterHours?: number; excludeApps?: string[] }
 
 // ─── Props ────────────────────────────────────────────────────────────────────
 
@@ -34,6 +39,13 @@ interface Props {
   onSave:         () => void;
   saveStatus?:    { message: string; ok: boolean } | null;
   initialSection?: string;
+  aodData?:       AodData | null;
+  onAodChange?:   (d: AodData) => void;
+  isAodDirty?:    boolean;
+  isSavingAod?:   boolean;
+  onAodReset?:    () => void;
+  onAodSave?:     () => void;
+  aodSaveStatus?: { message: string; ok: boolean } | null;
 }
 
 // ─── Shared style tokens ──────────────────────────────────────────────────────
@@ -45,9 +57,9 @@ const inpCls     = 'w-full text-xs bg-transparent border border-border rounded p
 
 // ─── Main component ───────────────────────────────────────────────────────────
 
-export default function SettingsPanel({ data, onChange, isDirty, isSaving, onReset, onSave, saveStatus, initialSection }: Props) {
+export default function SettingsPanel({ data, onChange, isDirty, isSaving, onReset, onSave, saveStatus, initialSection, aodData, onAodChange, isAodDirty, isSavingAod, onAodReset, onAodSave, aodSaveStatus }: Props) {
   const [search, setSearch]     = useState('');
-  const validInitial = (['homepage', 'menus'] as string[]).includes(initialSection ?? '') ? initialSection as NavItem : 'homepage';
+  const validInitial = (['homepage', 'menus', 'aod'] as string[]).includes(initialSection ?? '') ? initialSection as NavItem : 'homepage';
   const [activeNav, setActiveNav] = useState<NavItem>(validInitial);
 
   const q = search.trim().toLowerCase();
@@ -105,25 +117,41 @@ export default function SettingsPanel({ data, onChange, isDirty, isSaving, onRes
         {/* Action bar */}
         <div className="flex items-center gap-2 px-4 py-2 border-b border-border shrink-0">
           <span className="text-sm font-medium flex-1">
-            {activeNav === 'homepage' ? 'Homepage' : 'Menus'}
+            {activeNav === 'homepage' ? 'Homepage' : activeNav === 'menus' ? 'Menus' : 'Application on Demand'}
           </span>
-          <button onClick={onReset} disabled={!isDirty || isSaving} className={btnOutline} title="Reset">
-            <RotateCcw className="h-3.5 w-3.5" /><span className="hidden sm:inline"> Reset</span>
-          </button>
-          <button onClick={onSave} disabled={!isDirty || isSaving} className={btnPrimary} title={isSaving ? 'Saving…' : 'Save'}>
-            <Save className="h-3.5 w-3.5" /><span className="hidden sm:inline"> {isSaving ? 'Saving…' : 'Save'}</span>
-          </button>
+          {activeNav === 'aod' ? (
+            <>
+              <button onClick={onAodReset} disabled={!isAodDirty || isSavingAod} className={btnOutline} title="Reset">
+                <RotateCcw className="h-3.5 w-3.5" /><span className="hidden sm:inline"> Reset</span>
+              </button>
+              <button onClick={onAodSave} disabled={!isAodDirty || isSavingAod} className={btnPrimary} title={isSavingAod ? 'Saving…' : 'Save'}>
+                <Save className="h-3.5 w-3.5" /><span className="hidden sm:inline"> {isSavingAod ? 'Saving…' : 'Save'}</span>
+              </button>
+            </>
+          ) : (
+            <>
+              <button onClick={onReset} disabled={!isDirty || isSaving} className={btnOutline} title="Reset">
+                <RotateCcw className="h-3.5 w-3.5" /><span className="hidden sm:inline"> Reset</span>
+              </button>
+              <button onClick={onSave} disabled={!isDirty || isSaving} className={btnPrimary} title={isSaving ? 'Saving…' : 'Save'}>
+                <Save className="h-3.5 w-3.5" /><span className="hidden sm:inline"> {isSaving ? 'Saving…' : 'Save'}</span>
+              </button>
+            </>
+          )}
         </div>
 
         {/* Save status banner */}
-        {saveStatus && (
-          <div className="shrink-0 relative h-7 border-b border-border overflow-hidden">
-            <div className={`absolute inset-y-0 left-0 w-full ${saveStatus.ok ? 'bg-green-500/50' : 'bg-destructive/50'}`} />
-            <span className={`absolute inset-0 flex items-center justify-center text-[11px] font-medium px-2 truncate ${saveStatus.ok ? 'text-foreground' : 'text-destructive'}`}>
-              {saveStatus.message}
-            </span>
-          </div>
-        )}
+        {(activeNav === 'aod' ? aodSaveStatus : saveStatus) && (() => {
+          const st = activeNav === 'aod' ? aodSaveStatus : saveStatus;
+          return st ? (
+            <div className="shrink-0 relative h-7 border-b border-border overflow-hidden">
+              <div className={`absolute inset-y-0 left-0 w-full ${st.ok ? 'bg-green-500/50' : 'bg-destructive/50'}`} />
+              <span className={`absolute inset-0 flex items-center justify-center text-[11px] font-medium px-2 truncate ${st.ok ? 'text-foreground' : 'text-destructive'}`}>
+                {st.message}
+              </span>
+            </div>
+          ) : null;
+        })()}
 
         <div className="flex-1 overflow-y-auto">
           {activeNav === 'homepage' && (
@@ -131,6 +159,9 @@ export default function SettingsPanel({ data, onChange, isDirty, isSaving, onRes
           )}
           {activeNav === 'menus' && (
             <MenusSection data={data} onChange={onChange} />
+          )}
+          {activeNav === 'aod' && (
+            <AodSection data={aodData ?? {}} onChange={onAodChange ?? (() => {})} />
           )}
         </div>
       </div>
@@ -322,6 +353,82 @@ function MenusSection({ data, onChange }: { data: SettingsData; onChange: (d: Se
           data={data.menus}
           onChange={menus => onChange({ ...data, menus })}
         />
+      </div>
+    </div>
+  );
+}
+
+// ─── AOD section ──────────────────────────────────────────────────────────────
+
+function AodSection({ data, onChange }: { data: AodData; onChange: (d: AodData) => void }) {
+  const patterns = data.excludeApps ?? [];
+
+  function setHours(val: string) {
+    const n = val === '' ? undefined : parseInt(val, 10);
+    onChange({ ...data, stopAppsUnusedAfterHours: Number.isNaN(n) ? undefined : n });
+  }
+
+  function updatePattern(i: number, val: string) {
+    const next = patterns.map((p, j) => j === i ? val : p);
+    onChange({ ...data, excludeApps: next });
+  }
+
+  function deletePattern(i: number) {
+    onChange({ ...data, excludeApps: patterns.filter((_, j) => j !== i) });
+  }
+
+  function addPattern() {
+    onChange({ ...data, excludeApps: [...patterns, ''] });
+  }
+
+  return (
+    <div className="p-4 max-w-xl space-y-6">
+      <div>
+        <label className="block text-xs font-medium text-muted-foreground mb-1">
+          Stop apps unused after (hours)
+        </label>
+        <input
+          type="number"
+          min={0}
+          step={1}
+          value={data.stopAppsUnusedAfterHours ?? ''}
+          onChange={e => setHours(e.target.value)}
+          placeholder="e.g. 8"
+          className={inpCls}
+          style={{ maxWidth: 120 }}
+        />
+        <p className="text-[11px] text-muted-foreground/70 mt-1">
+          Apps idle for this many hours will be stopped. Leave blank to disable auto-stop.
+        </p>
+      </div>
+
+      <div>
+        <div className="flex items-center justify-between mb-2">
+          <span className="text-xs font-medium text-muted-foreground">Exclude Apps (patterns)</span>
+          <button onClick={addPattern} className={btnOutline}>
+            <Plus className="h-3 w-3" /> Add Row
+          </button>
+        </div>
+        {patterns.length === 0 ? (
+          <p className="text-[11px] text-muted-foreground/50">No exclusion patterns — all eligible apps will be managed.</p>
+        ) : (
+          <div className="space-y-1">
+            {patterns.map((pat, i) => (
+              <div key={i} className="flex items-center gap-1">
+                <input
+                  type="text"
+                  value={pat}
+                  onChange={e => updatePattern(i, e.target.value)}
+                  placeholder="app-name-prefix*"
+                  className={`${inpCls} flex-1 font-mono`}
+                />
+                <button onClick={() => deletePattern(i)} className="p-1 text-muted-foreground hover:text-destructive transition-colors">
+                  <X className="h-3.5 w-3.5" />
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
     </div>
   );

@@ -10,7 +10,7 @@ import { useAuth } from '@/hooks/useAuth';
 import SubaccountsTable, { type SubaccountEntry, type RefreshProgress } from '@/components/config/SubaccountsTable';
 import SubaccountDetailModal from '@/components/config/SubaccountDetailModal';
 import TabsTable, { type TabEntry } from '@/components/config/TabsTable';
-import SettingsPanel, { type SettingsData } from '@/components/config/SettingsPanel';
+import SettingsPanel, { type SettingsData, type AodData } from '@/components/config/SettingsPanel';
 import HomePreviewPanel from '@/components/config/HomePreviewPanel';
 import type { CockpitMenuItem } from '@/components/home/HomepageContent';
 
@@ -52,6 +52,14 @@ export default function ConfigPage() {
   const [isSavingSettings,  setIsSavingSettings] = useState(false);
   const [settingsSaveStatus, setSettingsSaveStatus] = useState<{ message: string; ok: boolean } | null>(null);
   const settingsSaveTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+
+  // AOD state
+  const [aodData,        setAodData]       = useState<AodData | null>(null);
+  const [originalAod,    setOriginalAod]   = useState<AodData | null>(null);
+  const [isAodDirty,     setIsAodDirty]    = useState(false);
+  const [isSavingAod,    setIsSavingAod]   = useState(false);
+  const [aodSaveStatus,  setAodSaveStatus] = useState<{ message: string; ok: boolean } | null>(null);
+  const aodSaveTimerRef  = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
   // Changelog state (lazy-loaded)
   const [changelog,            setChangelog]        = useState<string | null>(null);
@@ -130,6 +138,11 @@ export default function ConfigPage() {
       .catch(() => {});
 
     void fetchSettings();
+
+    void fetch('/api/aod/config')
+      .then(r => r.json() as Promise<{ ok: boolean; data: AodData }>)
+      .then(({ data }) => { setAodData(data); setOriginalAod(data); })
+      .catch(() => {});
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const configStateRef = useRef({
@@ -305,7 +318,7 @@ export default function ConfigPage() {
     setIsSettingsDirty(false);
   }
 
-  async function handleSpaceSave(region: string, subdomain: string, spaces: { spaceId: string; manageDest: boolean }[]) {
+  async function handleSpaceSave(region: string, subdomain: string, spaces: { spaceId: string; manageDest: boolean; aod: boolean }[]) {
     const res = await fetch(`/api/config/subaccounts/${encodeURIComponent(region)}/${encodeURIComponent(subdomain)}/spaces`, {
       method:  'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -318,6 +331,40 @@ export default function ConfigPage() {
         sa.region === json.data!.region && sa.subdomain === json.data!.subdomain ? json.data! : sa,
       ));
       setSelectedSa(json.data);
+    }
+  }
+
+  function handleAodChange(d: AodData) {
+    setAodData(d);
+    setIsAodDirty(JSON.stringify(d) !== JSON.stringify(originalAod));
+  }
+
+  function handleAodReset() {
+    setAodData(originalAod);
+    setIsAodDirty(false);
+  }
+
+  async function handleAodSave() {
+    if (!aodData) return;
+    clearTimeout(aodSaveTimerRef.current);
+    setIsSavingAod(true);
+    try {
+      const res  = await fetch('/api/aod/config/save', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify(aodData),
+      });
+      const json = await res.json() as { ok: boolean; error?: string };
+      if (!json.ok) throw new Error(json.error ?? 'Save failed');
+      setOriginalAod(aodData);
+      setIsAodDirty(false);
+      setAodSaveStatus({ message: 'AOD config saved', ok: true });
+      aodSaveTimerRef.current = setTimeout(() => setAodSaveStatus(null), 3000);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Save failed';
+      setAodSaveStatus({ message: `AOD config not saved: ${msg}`, ok: false });
+    } finally {
+      setIsSavingAod(false);
     }
   }
 
@@ -583,6 +630,13 @@ export default function ConfigPage() {
             onSave={() => void handleSettingsSave()}
             saveStatus={settingsSaveStatus}
             initialSection={initialSection}
+            aodData={aodData}
+            onAodChange={handleAodChange}
+            isAodDirty={isAodDirty}
+            isSavingAod={isSavingAod}
+            onAodReset={handleAodReset}
+            onAodSave={() => void handleAodSave()}
+            aodSaveStatus={aodSaveStatus}
           />
         )}
         {activeTab === 'settings' && !settingsData && (
