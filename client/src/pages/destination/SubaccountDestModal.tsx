@@ -1666,14 +1666,6 @@ export default function SubaccountDestModal({ org, allNames, initialName, initia
   const leftPanelWidth = showList ? bodyWidth * splitPct / 100 : 0;
   const showBtnText = leftPanelWidth >= 700;
 
-  // Destination type badges shown in the right panel name bar
-  const destTypeBadge  = editedProps.find(p => p.key === 'Type')?.value ?? '';
-  const proxyTypeBadge = editedProps.find(p => p.key === 'ProxyType')?.value ?? '';
-  const authTypeBadge  = editedProps.find(p => p.key === 'Authentication')?.value ?? '';
-  const authTypeBadgeLabel = authTypeBadge === 'BasicAuthentication' ? 'Basic'
-    : authTypeBadge === 'PrincipalPropagation' ? 'PP'
-    : authTypeBadge;
-
   const exportCount = selectedNames.size;
   const exportTitle = exportCount > 1
     ? `Download ${exportCount} selected destinations as ${org.region}_${org.subdomain}_multi_destinations.json`
@@ -1689,19 +1681,10 @@ export default function SubaccountDestModal({ org, allNames, initialName, initia
     onCompare: () => void;
     deleteCount: number;
     onDelete: () => void;
-    isCreatingMode: boolean;
   }) {
-    const { onExport, exportDisabled, compareCount, onCompare, deleteCount, onDelete, isCreatingMode } = opts;
+    const { onExport, exportDisabled, compareCount, onCompare, deleteCount, onDelete } = opts;
     return (
       <>
-        <button
-          onClick={handleCreateClick}
-          disabled={isCreatingMode}
-          className={btnOutline}
-          title="Create new destination"
-        >
-          <Plus className="h-3.5 w-3.5" />
-        </button>
         <button
           onClick={() => fileInputRef.current?.click()}
           disabled={isImportRunning}
@@ -2272,7 +2255,6 @@ export default function SubaccountDestModal({ org, allNames, initialName, initia
                           setDeleteSummary(null);
                           setDeleteDialogOpen(true);
                         },
-                        isCreatingMode: isCreating,
                       })}
                     </div>
                     <div
@@ -2476,7 +2458,6 @@ export default function SubaccountDestModal({ org, allNames, initialName, initia
                     setDeleteSummary(null);
                     setDeleteDialogOpen(true);
                   },
-                  isCreatingMode: isCreating,
                 })}
               </div>
               <div
@@ -2542,9 +2523,6 @@ export default function SubaccountDestModal({ org, allNames, initialName, initia
                   <>
                     <span className="flex items-center gap-1.5 min-w-0">
                       <span className="truncate shrink min-w-0">{selectedName}</span>
-                      {destTypeBadge  && <span className="shrink-0 px-1.5 py-px rounded text-[10px] font-medium bg-muted/50 text-muted-foreground border border-border" title={`Type: ${destTypeBadge}`}>{destTypeBadge}</span>}
-                      {proxyTypeBadge && <span className="shrink-0 px-1.5 py-px rounded text-[10px] font-medium bg-muted/50 text-muted-foreground border border-border" title={`ProxyType: ${proxyTypeBadge}`}>{proxyTypeBadge}</span>}
-                      {authTypeBadge  && <span className="shrink-0 px-1.5 py-px rounded text-[10px] font-medium bg-muted/50 text-muted-foreground border border-border" title={`Authentication: ${authTypeBadge}`}>{authTypeBadgeLabel}</span>}
                     </span>
                     {activeInstScope && (
                       <span className="text-[10px] font-normal text-muted-foreground truncate">{activeInstScope.spaceName} › {activeInstScope.instanceName}</span>
@@ -2590,6 +2568,14 @@ export default function SubaccountDestModal({ org, allNames, initialName, initia
                       )}
                     </button>
                   )}
+                  <button
+                    onClick={handleCreateClick}
+                    disabled={isCreating}
+                    title="Create new destination"
+                    className={btnOutline}
+                  >
+                    <Plus className="h-3.5 w-3.5" />
+                  </button>
                   <button
                     onClick={handleCopyClick}
                     disabled={!selectedName || isImportRunning}
