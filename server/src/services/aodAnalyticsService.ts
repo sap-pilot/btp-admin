@@ -164,19 +164,22 @@ async function readAccessLogs(durationHours: number): Promise<RawRow[]> {
 // ─── Sync merge ───────────────────────────────────────────────────────────────
 
 // Called after remote sync delivers new accesslog.csv for a subaccount.
-// Merges the updated rows into every cached analytics payload so the UI
-// reflects synced access data without requiring a full analytics re-fetch.
+// Rebuilds the in-memory requestLog entries for that SA from the freshly synced
+// file (replacing any stale entries to avoid duplicates), updates globalLatestTs,
+// and invalidates the analytics cache so the next getAnalytics() call recomputes
+// all stats — including requestedAppsCount and latestRequestTs — from disk.
+// The client re-fetches on the 'apps-synced' SSE that fires alongside this.
 export async function mergeAccessLogFromSync(region: string, subdomain: string): Promise<void> {
-  if (analyticsCache.size === 0) return; // nothing cached yet — skip
-
   const csvPath = join(AOD_APPS_DIR, region, subdomain, 'accesslog.csv');
   let content: string;
   try { content = await readFile(csvPath, 'utf-8'); } catch { return; }
 
-  const lines  = content.split('\n');
-  let parsed   = false;
+  // Parse all rows from the synced CSV
+  const am      = await getAppMap(region, subdomain);
+  const lines   = content.split('\n');
+  let parsed    = false;
   const idx: Record<string, number> = {};
-  const newRows: RawRow[] = [];
+  const newEntries: RequestEntry[] = [];
 
   for (const line of lines) {
     const trimmed = line.trim();
@@ -190,74 +193,28 @@ export async function mergeAccessLogFromSync(region: string, subdomain: string):
     if (fields.length < 2) continue;
     const ts = Number(fields[idx['requestTime'] ?? 0] ?? 0);
     if (!ts) continue;
-    newRows.push({
-      ts,
-      appId:       fields[idx['appId']       ?? 2]  ?? '',
-      country:     fields[idx['country']     ?? 99] ?? '',
-      countryCode: fields[idx['countryCode'] ?? 99] ?? '',
-      city:        fields[idx['city']        ?? 6]  ?? '',
-      lat:         Number(fields[idx['lat']  ?? 7]  ?? 0),
-      lon:         Number(fields[idx['lon']  ?? 8]  ?? 0),
-      userId:      fields[idx['userId']      ?? 9]  ?? '',
-      region,
-      subdomain,
-    });
+    const appId  = fields[idx['appId'] ?? 2] ?? '';
+    const meta   = am.get(appId);
+    const appKey = `${region}/${subdomain}/${meta?.spaceName ?? ''}/${meta?.name ?? appId}`;
+    newEntries.push({ ts, appKey });
   }
 
-  if (newRows.length === 0) return;
+  // Replace this SA's entries in requestLog to avoid duplicates from prior loads
+  const saPrefix = `${region}/${subdomain}/`;
+  requestLog = [
+    ...requestLog.filter(e => !e.appKey.startsWith(saPrefix)),
+    ...newEntries,
+  ];
 
-  // Update global request log
-  const saKey = `${region}/${subdomain}`;
-  const am    = await getAppMap(region, subdomain);
-  for (const row of newRows) {
-    const meta   = am.get(row.appId);
-    const appKey = `${region}/${subdomain}/${meta?.spaceName ?? ''}/${meta?.name ?? row.appId}`;
-    requestLog.push({ ts: row.ts, appKey });
-    if (row.ts > globalLatestTs) globalLatestTs = row.ts;
-  }
+  // Update globalLatestTs from all entries (not just new ones — another SA may hold the max)
+  let newMax = globalLatestTs;
+  for (const e of newEntries) { if (e.ts > newMax) newMax = e.ts; }
+  globalLatestTs = newMax;
 
-  // Merge into each cached payload
-  for (const entry of analyticsCache.values()) {
-    const cutoff = Math.floor(Date.now() / 1000) - entry.payload.duration * 3600;
-    const inWindow = newRows.filter(r => r.ts >= cutoff);
-    if (inWindow.length === 0) continue;
+  // Invalidate cache — next getAnalytics() re-reads disk so all stats are accurate
+  invalidateCache();
 
-    const p = entry.payload;
-    p.latestRequestTs = globalLatestTs;
-    p.lastUpdated     = Date.now();
-
-    for (const row of inWindow) {
-      p.totalRequests++;
-      if (row.userId) {
-        // uniqueUsers is a count — we can only increment; exact dedup requires the full set
-        // which isn't kept in the payload. Increment conservatively.
-        p.uniqueUsers++;
-      }
-      if (row.lat !== 0 || row.lon !== 0) {
-        const gk  = `${row.lat.toFixed(2)},${row.lon.toFixed(2)}`;
-        const c   = p.cities.find(x => `${x.lat.toFixed(2)},${x.lon.toFixed(2)}` === gk);
-        if (c) c.count++;
-        else p.cities.push({ city: row.city || gk, country: row.country, countryCode: row.countryCode, lat: row.lat, lon: row.lon, count: 1 });
-      }
-      const sa = p.subaccountAccess.find(a => a.region === region && a.subdomain === subdomain);
-      if (sa) {
-        if (row.ts > sa.lastAccessTs) {
-          sa.lastAccessTs = row.ts;
-          sa.appGuid = row.appId;
-          const meta = am.get(row.appId);
-          if (meta?.name)      sa.appName   = meta.name;
-          if (meta?.spaceName) sa.spaceName = meta.spaceName;
-        }
-      } else {
-        const meta = am.get(row.appId);
-        p.subaccountAccess.push({ region, subdomain, alias: saKey, appName: meta?.name ?? '', spaceName: meta?.spaceName ?? '', lastAccessTs: row.ts, appGuid: row.appId });
-        p.subaccountAccess.sort((a, b) => b.lastAccessTs - a.lastAccessTs);
-      }
-    }
-  }
-
-  logger.debug({ region, subdomain, rows: newRows.length }, 'analytics: merged synced accesslog into cache');
-  invalidateCache(); // force full re-compute on next fetch so uniqueUsers is accurate
+  logger.debug({ region, subdomain, entries: newEntries.length }, 'analytics: request log refreshed from synced accesslog');
 }
 
 // ─── Public API ───────────────────────────────────────────────────────────────

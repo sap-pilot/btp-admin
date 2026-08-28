@@ -164,7 +164,7 @@ export default function WorldMap({ cities, isDark, selectedCity, onCityClick }: 
   );
 
   return (
-    <div className="relative w-full rounded-lg overflow-hidden" style={{ aspectRatio: '2/1' }}>
+    <div className="relative w-full rounded-lg overflow-hidden" style={{ aspectRatio: '2/1', isolation: 'isolate' }}>
       <MapContainer
         center={[25, 10]}
         zoom={1.5}
