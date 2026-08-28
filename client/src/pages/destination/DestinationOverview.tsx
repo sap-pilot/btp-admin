@@ -31,7 +31,7 @@ interface RefreshProgress {
   errors?:    string[];
 }
 
-interface Buckets { generic: string[]; s4: string[]; cep: string[]; others: string[] }
+interface Buckets { generic: string[]; cep: string[]; others: string[] }
 
 interface ModalState { sa: SubaccountEntry; allNames: string[]; initialName?: string; initialTab?: 'properties' | 'changelog' | 'test'; initialShowList?: boolean; initialSpaceName?: string; initialInstanceName?: string; initialInstanceGuid?: string }
 
@@ -55,13 +55,13 @@ function saOrgId(sa: SubaccountEntry): string {
 
 function categorise(name: string): keyof Buckets {
   if (/^API_(S4|MDG)_(HTTP|RFC)_/i.test(name))  return 'generic';
-  if (/^API_/i.test(name))                       return 's4';
+  if (/^API_/i.test(name))                       return 'others';
   if (/^cep-.*-runtime$/i.test(name))            return 'cep';
   return 'others';
 }
 
 function bucketSa(dests: DestItem[]): Buckets {
-  const b: Buckets = { generic: [], s4: [], cep: [], others: [] };
+  const b: Buckets = { generic: [], cep: [], others: [] };
   for (const d of dests) b[categorise(d.name)].push(d.name);
   return b;
 }
@@ -88,7 +88,6 @@ function Highlight({ text, query }: { text: string; query: string }) {
 
 const CAT_META = {
   generic: { label: 'Generic',      pattern: 'API_[S4|MDG]_[HTTP|RFC]_*' },
-  s4:      { label: 'Specific S/4', pattern: 'other API_*' },
   cep:     { label: 'Workzone',     pattern: 'cep-*-runtime' },
 } as const;
 
@@ -455,8 +454,36 @@ export default function DestinationOverview() {
           )}
         </div>
 
+        {/* Search input — fills remaining space */}
+        <div className="relative flex-1 min-w-0 ml-2">
+          <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground pointer-events-none" />
+          <input
+            type="text"
+            value={filterInput}
+            onChange={e => setFilterInput(e.target.value)}
+            onKeyDown={handleFilterKeyDown}
+            placeholder={totalDestCount != null ? `Search in ${totalDestCount} destinations` : 'Full-text search'}
+            className="h-8 pl-7 pr-[4.5rem] text-xs border border-border rounded bg-background text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring w-full"
+          />
+          <div className="absolute right-1.5 top-1/2 -translate-y-1/2 flex items-center gap-1">
+            {isSearching && <RefreshCw className="h-3 w-3 animate-spin text-muted-foreground shrink-0" />}
+            {pendingSearch && !isSearching && (
+              <span className="text-[10px] text-muted-foreground/50 pointer-events-none whitespace-nowrap">↵</span>
+            )}
+            {(filterInput || activeFilter) && (
+              <button
+                onClick={clearFilter}
+                className="p-0.5 rounded text-muted-foreground/60 hover:text-foreground transition-colors"
+                title="Clear search"
+              >
+                <X className="h-3.5 w-3.5" />
+              </button>
+            )}
+          </div>
+        </div>
+
         {/* Compare button + dropdown */}
-        <div className="relative ml-auto" ref={compareDropdownRef}>
+        <div className="relative shrink-0" ref={compareDropdownRef}>
           <div className="flex items-center border border-border rounded overflow-hidden">
             <button
               onClick={() => { if (selectedDests.length > 0) setShowCompareModal(true); }}
@@ -515,34 +542,6 @@ export default function DestinationOverview() {
               )}
             </div>
           )}
-        </div>
-
-        {/* Search input — Enter to search */}
-        <div className="relative flex items-center">
-          <Search className="absolute left-2 h-3.5 w-3.5 text-muted-foreground pointer-events-none" />
-          <input
-            type="text"
-            value={filterInput}
-            onChange={e => setFilterInput(e.target.value)}
-            onKeyDown={handleFilterKeyDown}
-            placeholder={totalDestCount != null ? `Search in ${totalDestCount} destinations` : 'Full-text search'}
-            className="h-8 pl-7 pr-[4.5rem] text-xs border border-border rounded bg-background text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring w-[140px] sm:w-[240px]"
-          />
-          <div className="absolute right-1.5 flex items-center gap-1">
-            {isSearching && <RefreshCw className="h-3 w-3 animate-spin text-muted-foreground shrink-0" />}
-            {pendingSearch && !isSearching && (
-              <span className="text-[10px] text-muted-foreground/50 pointer-events-none whitespace-nowrap">↵</span>
-            )}
-            {(filterInput || activeFilter) && (
-              <button
-                onClick={clearFilter}
-                className="p-0.5 rounded text-muted-foreground/60 hover:text-foreground transition-colors"
-                title="Clear search"
-              >
-                <X className="h-3.5 w-3.5" />
-              </button>
-            )}
-          </div>
         </div>
 
         <button
@@ -861,10 +860,10 @@ export default function DestinationOverview() {
                           ));
                         })() : (
                           <>
-                            {(['generic', 's4', 'cep'] as const).map(cat => {
+                            {(['generic', 'cep'] as const).map(cat => {
                               const { label, pattern } = CAT_META[cat];
 
-                              if (cat === 's4' || cat === 'generic' || cat === 'cep') {
+                              {
                                 const sortedPerSa = saBuckets.map(b => ({
                                   sa:       b.sa,
                                   names:    [...b.buckets[cat]].sort(),

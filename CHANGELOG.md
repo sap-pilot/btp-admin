@@ -1,5 +1,46 @@
 # Changelog
 
+## [v1.7.0] - 2026-08-27
+
+### Added
+- **Application on Demand (AOD)** — CF apps stopped when idle are automatically started on the first proxied request, saving cloud costs:
+  - `/aod` proxy handler: strips `x-aod-*` headers and forwards the request to the real CF app URL; if the app is stopped, starts it via the CF API (`POST /v3/apps/{guid}/actions/start`), polls until it responds, then forwards; measures startup and total response latency
+  - **AOD destination install/uninstall** — during subaccount destination refresh, `Internet / NoAuthentication` destinations whose URL points to a CF app (`cfapps.*.hana.ondemand.com`) are automatically rewritten to route through `/aod` (original URL moved to `URL.headers.x-aod-app-url`; app GUID from CF routes written to `URL.headers.x-aod-app-id`); toggled per-space via the **AOD** checkbox in Config → Subaccounts → CF Spaces (requires Manage Dest to also be enabled)
+  - **Per-subaccount access log** — `apps/{region}/{subdomain}/accesslog.csv` records every AOD proxy request: timestamp, URL, app GUID, client IP (from `x-forwarded-for`), country, country code, city, lat/lon, user ID (extracted from JWT), startup ms, total response ms; log rotates daily to `accesslog.YYYYMMDD.csv`
+  - **Geo lookup** — client IPs resolved via ip-api.com; `/24`-subnet results cached permanently in-process; concurrent requests for the same subnet deduplicated via a pending-promise cache (avoids the 45 req/min rate limit)
+  - **Auto-stop unused AOD apps** — at the end of each CF app scan, any AOD app in `STARTED` state not accessed within `STOP_APPS_UNUSED_AFTER_HRS` is stopped automatically via CF API; state file updated to `STOPPED`; logged as `stopping unused app {region}/{subdomain}/{spaceName}/{appGuid}.{appName}`
+  - `lastAccessed` field on app state files (`apps/{region}/{subdomain}/{appGuid}.json`) is set to `now()` when an AOD destination is installed and the field is empty, and updated on each proxy request; app state is set to `STARTED` in the JSON file after a successful proxy start
+  - Config variables `REFRESH_APPS_INTERVAL_HRS` (default 6 h) and `STOP_APPS_UNUSED_AFTER_HRS` (default 120 h): read from environment variable → `config.json → variables` → legacy `config.json → aod.*` keys (backward-compatible)
+  - `SYNC_EXCLUDES` config setting: comma-separated list of folder prefixes to skip during remote sync
+
+- **Apps page** — new page surfacing CF apps across all subaccounts:
+  - **CF app scanner** — scans all spaces across all subaccounts via CF API; results cached in `apps/{region}/{subdomain}/{appGuid}.json` (state, memory, instances, routes, AOD flag, last-accessed timestamp); rescans on schedule (`REFRESH_APPS_INTERVAL_HRS`) or manually via the Refresh button
+  - **Memory Usage view** — memory chart (selectable window: 1 h / 6 h / 24 h / 7 d), started-app count, total disk quota; chart stretches full-width on wide screens
+  - **Usage Analytics view** — toggles between Memory Usage and Analytics:
+    - **World map choropleth** — countries shaded dark-green (fewer requests) → light-green (more requests); no-data countries grey at 50% opacity; more-requested at 10% opacity; adapts to light/dark theme (transparent background)
+    - **City labels** — flag emoji + city name + request count shown as always-visible rectangles on the map; clicking a label brings it to the front of overlapping labels and persists z-order in `localStorage` across reloads; clicking also sets the city filter
+    - **City filter** — `{countryCode}-{city}` select dropdown next to the "Latest Requests" title; filters the latest requests list to the selected city; auto-updated when a map label is clicked
+    - **Live request feed** — latest 10 requests per subaccount (timestamp, app alias, user, city, country code), updated live via `analytics-update` SSE event
+    - **Requested apps info block** — count of distinct apps requested in the last N hours, replacing the former "X GB started apps: Y" block; "Latest Request" timestamp block replaces the generic "last update" label
+    - **Subaccount hierarchy** — tabs → groups → subaccount tables (mirrors the Memory Usage layout); empty subaccounts hidden
+  - **SubaccountAppsModal** — per-subaccount app list with tabs/groups table, text search, CF cockpit deep-link dropdown, start/stop actions, URL state sync
+  - Sidebar toggle, animated progress bar during scan
+  - CF routes fetched during each scan to correlate app GUIDs with hostname URLs
+  - URL-driven toggle (memory/analytics) and chart duration state — state survives page reload
+
+- **AOD proxy improvements** — changelog entry written on AOD destination install/uninstall; subaccount app state refreshed after install
+
+### Changed
+- `config.json → aod.refreshAppsIntervalHrs` renamed to `config.json → variables.REFRESH_APPS_INTERVAL_HRS` (old key still accepted for backward compatibility)
+- `config.json → aod.stopAppsUnusedAfterHrs` renamed to `config.json → variables.STOP_APPS_UNUSED_AFTER_HRS` (old key still accepted)
+- App state files moved from `aod/apps/` to `apps/` folder
+
+### Fixed
+- **Sync: `apps/` files included** — `apps/` folder is now part of the initial and delta sync browse/batch; an SSE event is pushed to clients after apps sync completes
+- **Sync: instance-level destination files included** — instance-level destination files (nested under `dest/{region}/{subdomain}/{spaceName}/{guid}_{name}/`) now appear in sync browse and batch payloads
+- **Analytics stats after remote sync** — after a sync that includes `apps/**/accesslog*.csv`, the in-memory request log is fully rebuilt for affected subaccounts (replacing old entries, not appending), and global stats (`totalRequests`, `requestedAppsCount`, `uniqueUsers`, `latestRequestTs`) recomputed correctly; previously these stats were stale even after the cache was invalidated
+- **World map z-index leak** — map container now uses `isolation: isolate` so Leaflet's internal pane z-indexes (200–650) are scoped within the map; modals no longer render below the map
+
 ## [v1.6.0] - 2026-08-16
 
 ### Added

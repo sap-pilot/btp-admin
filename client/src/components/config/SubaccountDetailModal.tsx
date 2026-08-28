@@ -14,7 +14,7 @@ interface Props {
   cockpit?:     { idp: string; host: string };
   cockpitMenu?: CockpitMenuItem | null;
   isAdmin?:     boolean;
-  onSpaceSave?: (region: string, subdomain: string, spaces: { spaceId: string; manageDest: boolean }[]) => Promise<void>;
+  onSpaceSave?: (region: string, subdomain: string, spaces: { spaceId: string; manageDest: boolean; aod: boolean }[]) => Promise<void>;
 }
 
 type ModalTab = 'info' | 'subscriptions' | 'services';
@@ -140,6 +140,8 @@ export default function SubaccountDetailModal({ sa, onClose, cockpit, cockpitMen
   const [svcExpanded, setSvcExpanded]       = useState<Set<string>>(new Set());
   const [spaceDests, setSpaceDests]         = useState<Map<string, boolean>>(new Map());
   const [spaceDestsOrig, setSpaceDestsOrig] = useState<Map<string, boolean>>(new Map());
+  const [spaceAods, setSpaceAods]           = useState<Map<string, boolean>>(new Map());
+  const [spaceAodsOrig, setSpaceAodsOrig]   = useState<Map<string, boolean>>(new Map());
   const [spaceSaving, setSpaceSaving]       = useState(false);
 
   const canManageSpaces = isAdmin || window.location.hostname === 'localhost';
@@ -149,9 +151,12 @@ export default function SubaccountDetailModal({ sa, onClose, cockpit, cockpitMen
     setSvcFilter('');
     setSubFilter('');
     setSvcExpanded(new Set(sa.serviceInstances.map(svc => svc.spaceId ?? '')));
-    const m = new Map((sa.org?.spaces ?? []).map(s => [s.spaceId, s.manageDest ?? false]));
+    const m  = new Map((sa.org?.spaces ?? []).map(s => [s.spaceId, s.manageDest ?? false]));
+    const ma = new Map((sa.org?.spaces ?? []).map(s => [s.spaceId, s.aod ?? false]));
     setSpaceDests(new Map(m));
     setSpaceDestsOrig(new Map(m));
+    setSpaceAods(new Map(ma));
+    setSpaceAodsOrig(new Map(ma));
   }, [sa]);
 
   const tabCls = (t: ModalTab) =>
@@ -161,14 +166,18 @@ export default function SubaccountDetailModal({ sa, onClose, cockpit, cockpitMen
         : 'border-transparent text-muted-foreground hover:text-foreground'
     }`;
 
-  const spaceDestsDirty = [...spaceDests.entries()].some(([id, v]) => spaceDestsOrig.get(id) !== v);
+  const spaceDestsDirty = [...spaceDests.entries()].some(([id, v]) => spaceDestsOrig.get(id) !== v)
+    || [...spaceAods.entries()].some(([id, v]) => spaceAodsOrig.get(id) !== v);
 
   async function handleSpaceSave() {
     if (!sa || !onSpaceSave) return;
     setSpaceSaving(true);
     try {
-      await onSpaceSave(sa.region, sa.subdomain, [...spaceDests.entries()].map(([spaceId, manageDest]) => ({ spaceId, manageDest })));
+      await onSpaceSave(sa.region, sa.subdomain, [...spaceDests.entries()].map(([spaceId, manageDest]) => ({
+        spaceId, manageDest, aod: spaceAods.get(spaceId) ?? false,
+      })));
       setSpaceDestsOrig(new Map(spaceDests));
+      setSpaceAodsOrig(new Map(spaceAods));
     } finally {
       setSpaceSaving(false);
     }
@@ -210,7 +219,7 @@ export default function SubaccountDetailModal({ sa, onClose, cockpit, cockpitMen
                     <button
                       className={btnOutline}
                       disabled={!spaceDestsDirty}
-                      onClick={() => setSpaceDests(new Map(spaceDestsOrig))}
+                      onClick={() => { setSpaceDests(new Map(spaceDestsOrig)); setSpaceAods(new Map(spaceAodsOrig)); }}
                     >
                       <RotateCcw className="h-3 w-3" /> Reset
                     </button>
@@ -318,6 +327,7 @@ export default function SubaccountDetailModal({ sa, onClose, cockpit, cockpitMen
                                 <th className={thCls}>Space Name</th>
                                 <th className={`${thCls} font-mono`}>Space ID</th>
                                 {canManageSpaces && <th className={`${thCls} text-center`}>Manage Dest</th>}
+                                {canManageSpaces && <th className={`${thCls} text-center`}>AOD</th>}
                               </tr>
                             </thead>
                             <tbody>
@@ -339,8 +349,24 @@ export default function SubaccountDetailModal({ sa, onClose, cockpit, cockpitMen
                                         <input
                                           type="checkbox"
                                           checked={spaceDests.get(s.spaceId) ?? false}
-                                          onChange={e => setSpaceDests(prev => new Map(prev).set(s.spaceId, e.target.checked))}
+                                          onChange={e => {
+                                            const checked = e.target.checked;
+                                            setSpaceDests(prev => new Map(prev).set(s.spaceId, checked));
+                                            if (!checked) setSpaceAods(prev => new Map(prev).set(s.spaceId, false));
+                                          }}
                                           className="cursor-pointer"
+                                        />
+                                      </td>
+                                    )}
+                                    {canManageSpaces && (
+                                      <td className={`${tdCls} text-center`}>
+                                        <input
+                                          type="checkbox"
+                                          checked={spaceAods.get(s.spaceId) ?? false}
+                                          disabled={!(spaceDests.get(s.spaceId) ?? false)}
+                                          onChange={e => setSpaceAods(prev => new Map(prev).set(s.spaceId, e.target.checked))}
+                                          className={spaceDests.get(s.spaceId) ? 'cursor-pointer' : 'cursor-not-allowed opacity-40'}
+                                          title={spaceDests.get(s.spaceId) ? undefined : 'Enable Manage Dest first'}
                                         />
                                       </td>
                                     )}

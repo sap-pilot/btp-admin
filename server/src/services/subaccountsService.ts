@@ -21,6 +21,7 @@ export interface SpaceEntry {
   spaceId:    string;
   spaceName:  string;
   manageDest?: boolean;
+  aod?:        boolean;
 }
 
 export interface ServiceInstanceEntry {
@@ -148,7 +149,7 @@ function mergeOrg(
   const existingSpaceIds = new Set(existingOrg.spaces.map(s => s.spaceId));
   const mergedSpaces = existingOrg.spaces.map(s => {
     const fs = freshOrg.spaces.find(f => f.spaceId === s.spaceId);
-    return fs ? { ...s, spaceName: fs.spaceName } : s;
+    return fs ? { ...s, spaceName: fs.spaceName, manageDest: s.manageDest, aod: s.aod } : s;
   });
   for (const fs of freshOrg.spaces) {
     if (!existingSpaceIds.has(fs.spaceId)) mergedSpaces.push(fs);
@@ -383,7 +384,7 @@ export async function saveSubaccounts(data: SubaccountEntry[], user = 'system'):
 export async function saveSpaceSettings(
   region:    string,
   subdomain: string,
-  spaces:    { spaceId: string; manageDest: boolean }[],
+  spaces:    { spaceId: string; manageDest: boolean; aod?: boolean }[],
   user:      string,
 ): Promise<SubaccountEntry> {
   const { subaccounts, globalAccounts } = await readSubaccountsFile();
@@ -395,17 +396,17 @@ export async function saveSpaceSettings(
   const sa = subaccounts[idx]!;
   if (!sa.org) throw Object.assign(new Error('Subaccount has no CF org'), { status: 400 });
 
-  const spaceMap = new Map(spaces.map(s => [s.spaceId, s.manageDest]));
+  const spaceMap = new Map(spaces.map(s => [s.spaceId, { manageDest: s.manageDest, aod: s.manageDest ? (s.aod ?? false) : false }]));
   const updatedSpaces = sa.org.spaces.map(s => {
     const v = spaceMap.get(s.spaceId);
-    return v !== undefined ? { ...s, manageDest: v } : s;
+    return v !== undefined ? { ...s, manageDest: v.manageDest, aod: v.aod } : s;
   });
   const diffLines = updatedSpaces
     .filter(s => {
       const orig = sa.org!.spaces.find(o => o.spaceId === s.spaceId);
-      return orig && orig.manageDest !== s.manageDest;
+      return orig && (orig.manageDest !== s.manageDest || (orig.aod ?? false) !== (s.aod ?? false));
     })
-    .map(s => `  ${s.spaceName} (${s.spaceId}): manageDest=${String(s.manageDest)}`)
+    .map(s => `  ${s.spaceName} (${s.spaceId}): manageDest=${String(s.manageDest)}, aod=${String(s.aod ?? false)}`)
     .join('\n');
 
   const updated: SubaccountEntry = { ...sa, org: { ...sa.org, spaces: updatedSpaces } };

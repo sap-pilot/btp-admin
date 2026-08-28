@@ -293,16 +293,68 @@ function pathToFolderEntry(relPath: string): { folder: string; name: string } | 
     return rest.includes('/') ? null : { folder: 'conf', name: rest };
   }
 
-  if (first === 'dest' || first === 'rcs') {
+  if (first === 'apps') {
+    // apps-root flat files: stats CSV and config
+    if (rest === 'aod-config.json' || rest === 'stats.csv' || rest === 'aod-stats.csv') {
+      return { folder: 'apps', name: rest };
+    }
     const s2 = rest.indexOf('/');
-    if (s2 === -1) return rest.endsWith('.md') ? { folder: first, name: rest } : null;
+    if (s2 === -1) return null;
+    const region = rest.slice(0, s2);
+    const after2 = rest.slice(s2 + 1);
+    const s3 = after2.indexOf('/');
+    if (s3 === -1) return null;
+    const sub    = after2.slice(0, s3);
+    const after3 = after2.slice(s3 + 1);
+    // apps/{region}/{subdomain}/accesslog*.csv
+    if (!after3.includes('/') && /^accesslog(\.\d{8})?\.csv$/.test(after3)) {
+      return { folder: `apps/${region}/${sub}`, name: after3 };
+    }
+    // apps/{region}/{subdomain}/{space}/{guid}.json or {guid}.deleted.json
+    const s4    = after3.indexOf('/');
+    if (s4 === -1) return null;
+    const space = after3.slice(0, s4);
+    const name  = after3.slice(s4 + 1);
+    if (name && !name.includes('/') && /^[\w-]+(?:\.deleted)?\.json$/.test(name)) {
+      return { folder: `apps/${region}/${sub}/${space}`, name };
+    }
+    return null;
+  }
+
+  if (first === 'rcs') {
+    const s2 = rest.indexOf('/');
+    if (s2 === -1) return rest.endsWith('.md') ? { folder: 'rcs', name: rest } : null;
     const region = rest.slice(0, s2);
     const after2 = rest.slice(s2 + 1);
     const s3 = after2.indexOf('/');
     if (s3 === -1) return null;
     const sub  = after2.slice(0, s3);
     const name = after2.slice(s3 + 1);
-    return name && !name.includes('/') ? { folder: `${first}/${region}/${sub}`, name } : null;
+    return name && !name.includes('/') ? { folder: `rcs/${region}/${sub}`, name } : null;
+  }
+
+  if (first === 'dest') {
+    const s2 = rest.indexOf('/');
+    if (s2 === -1) return rest.endsWith('.md') ? { folder: 'dest', name: rest } : null;
+    const region = rest.slice(0, s2);
+    const after2 = rest.slice(s2 + 1);
+    const s3 = after2.indexOf('/');
+    if (s3 === -1) return null;
+    const sub    = after2.slice(0, s3);
+    const after3 = after2.slice(s3 + 1);
+    // dest/<region>/<sub>/<file> — flat subaccount file (no further slashes)
+    if (!after3.includes('/')) return after3 ? { folder: `dest/${region}/${sub}`, name: after3 } : null;
+    // dest/<region>/<sub>/<space>/<instance>/<file>.json — instance-level destination
+    const s4       = after3.indexOf('/');
+    const space    = after3.slice(0, s4);
+    const after4   = after3.slice(s4 + 1);
+    const s5       = after4.indexOf('/');
+    if (s5 === -1) return null;
+    const instance = after4.slice(0, s5);
+    const name     = after4.slice(s5 + 1);
+    return name && !name.includes('/') && name.endsWith('.json') && space && instance
+      ? { folder: `dest/${region}/${sub}/${space}/${instance}`, name }
+      : null;
   }
 
   if (first === 'users') {
@@ -598,4 +650,16 @@ export async function responseFileSize(folder: string, filename: string): Promis
   } catch {
     return 0;
   }
+}
+
+/** Read a file from LOCAL_STORE_DIR/apps/: stats CSVs, aod-config.json, accesslog CSVs, or per-app JSON files. */
+export async function readAodFile(relPath: string): Promise<Buffer> {
+  const parts    = relPath.split('/');
+  const isRoot   = relPath === 'aod-config.json' || relPath === 'stats.csv' || relPath === 'aod-stats.csv';
+  const isLog    = parts.length === 3 && /^accesslog(\.\d{8})?\.csv$/.test(parts[2] ?? '');
+  const isApp    = parts.length === 4 && /^[\w-]+(?:\.deleted)?\.json$/.test(parts[3] ?? '');
+  if ((!isRoot && !isLog && !isApp) || parts.some(p => p === '..' || p === '.' || p === '')) {
+    throw new Error('Invalid apps path');
+  }
+  return readFile(join(config.LOCAL_STORE_DIR, 'apps', relPath));
 }

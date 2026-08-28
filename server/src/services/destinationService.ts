@@ -9,6 +9,8 @@ import { logger } from '../logger.js';
 import { getOrRefreshToken, fetchWithRateLimit } from './cfLoginService.js';
 import { getRestrictedIds, getAutoSubaccountRefreshMs } from './configService.js';
 import { readSubaccounts, type SubaccountEntry } from './subaccountsService.js';
+import { readAodConfig, type AodConfig } from './aodConfigService.js';
+import { updateAppFileAod, initAppLastAccessedIfEmpty } from './appService.js';
 import { notifyCallbacks, registerOnDestChangelogSynced, registerOnDestSynced } from './syncService.js';
 import { emit, emitImmediate } from './liveEvents.js';
 
@@ -926,6 +928,178 @@ async function appendSubaccountGlobalChangelog(
   await writeFile(changelogPath, entry + prev, 'utf-8');
 }
 
+// Writes a per-destination changelog entry and a global changelog entry when AOD
+// proxy is installed, updated (proxy URL changed), or uninstalled for a destination.
+async function appendAodDestChangelog(
+  instanceDir: string,
+  destName:    string,
+  before:      Record<string, unknown>,
+  after:       Record<string, unknown>,
+  action:      'installed' | 'updated' | 'uninstalled',
+  username:    string,
+  inst:        { region: string; subdomain: string; spaceName: string; name: string; guid: string },
+): Promise<void> {
+  const dateStr = new Date().toISOString().replace('T', ' ').slice(0, 19) + ' UTC';
+
+  // Per-destination .changelog.md
+  const changelogPath = join(instanceDir, `${destName}.changelog.md`);
+  const diff  = diffDestination(before, after);
+  const entry = `## AOD ${action} by <${username}> at ${dateStr}\n${diff}\n\n`;
+  const prev  = existsSync(changelogPath) ? await readFile(changelogPath, 'utf-8') : '';
+  await writeFile(changelogPath, entry + prev, 'utf-8');
+
+  // Global dest/changelog.md (with size-based rotation)
+  await mkdir(LOCAL_DEST_DIR, { recursive: true });
+  const globalPath = join(LOCAL_DEST_DIR, 'changelog.md');
+  try {
+    const info = await stat(globalPath);
+    if (info.size > 2 * 1024 * 1024) {
+      const archiveName = `changelog.${formatChangelogTs(new Date())}.md`;
+      await rename(globalPath, join(LOCAL_DEST_DIR, archiveName));
+      logger.info({ archiveName }, 'Rotated global changelog');
+    }
+  } catch { /* may not exist yet */ }
+  const histPath = `/destinations/${encodeURIComponent(inst.region)}/${encodeURIComponent(inst.subdomain)}/${encodeURIComponent(inst.spaceName)}/${encodeURIComponent(inst.name)}/${encodeURIComponent(inst.guid)}/${encodeURIComponent(destName)}/history`;
+  const scopeLabel   = `${inst.region} > ${inst.subdomain} > ${inst.spaceName} > ${inst.name}`;
+  const globalEntry  = `## [Auto] AOD ${action} by <${username}> at ${dateStr}\n\n- ${action}: ${scopeLabel} → ${destName} ([History](${histPath}))\n\n`;
+  const prevGlobal   = existsSync(globalPath) ? await readFile(globalPath, 'utf-8') : '';
+  await writeFile(globalPath, globalEntry + prevGlobal, 'utf-8');
+}
+
+// ─── AOD: routes table + proxy install/uninstall ─────────────────────────────
+
+const CFAPPS_URL_RE = /https?:\/\/[^/]+\.cfapps\.[^/]+\.hana\.ondemand\.com/i;
+
+async function buildRoutesTable(subaccounts: SubaccountEntry[]): Promise<Map<string, string>> {
+  const routesTable = new Map<string, string>();
+
+  // Group AOD spaces by region
+  const byRegion = new Map<string, string[]>();
+  for (const sa of subaccounts) {
+    if (!sa.org) continue;
+    for (const sp of sa.org.spaces) {
+      if (!sp.aod) continue;
+      const arr = byRegion.get(sa.region) ?? [];
+      arr.push(sp.spaceId);
+      byRegion.set(sa.region, arr);
+    }
+  }
+
+  if (byRegion.size === 0) return routesTable;
+
+  for (const [region, spaceGuids] of byRegion) {
+    const guids = spaceGuids.join(',');
+    let path: string | null = `/v3/routes?space_guids=${encodeURIComponent(guids)}&per_page=5000`;
+    while (path) {
+      try {
+        const data = await cfGet(region, path) as {
+          resources?: Array<{ url?: string; destinations?: Array<{ app?: { guid?: string } }> }>;
+          pagination?: { next?: { href?: string } };
+        };
+        for (const r of data.resources ?? []) {
+          const url    = r.url ? `https://${r.url}` : '';
+          const appGuid = r.destinations?.[0]?.app?.guid ?? '';
+          if (url && appGuid) routesTable.set(url, appGuid);
+        }
+        const nextHref = data.pagination?.next?.href;
+        if (!nextHref) break;
+        try { path = new URL(nextHref).pathname + new URL(nextHref).search; } catch { break; }
+      } catch (err) {
+        logger.warn({ region, err }, 'AOD: failed to fetch routes for region');
+        break;
+      }
+    }
+  }
+
+  logger.info({ routes: routesTable.size }, 'AOD routes table built');
+  return routesTable;
+}
+
+async function applyAodToDestination(
+  dest:        Record<string, unknown>,
+  spaceAod:    boolean,
+  region:      string,
+  subdomain:   string,
+  accessToken: string,
+  credential:  DestCredentials,
+  routesTable: Map<string, string>,
+  aodConfig:   AodConfig,
+  label:       string,
+): Promise<Record<string, unknown> | null> {
+  const url  = String(dest['URL'] ?? '');
+  const isCandidate = dest['ProxyType'] === 'Internet' && dest['Authentication'] === 'NoAuthentication' && CFAPPS_URL_RE.test(url);
+  if (!isCandidate) return null;
+
+  const hasProxy = 'URL.headers.x-aod-app-url' in dest;
+
+  if (spaceAod && hasProxy) {
+    // Already installed — check if proxy URL needs updating
+    const proxyUrl = aodConfig.regionProxyEndpoint?.[region];
+    if (!proxyUrl || url === proxyUrl) return null;
+    const updated = { ...dest, URL: proxyUrl };
+    await pushAodDestination(region, credential, accessToken, updated, label);
+    logger.info({ label, from: url, to: proxyUrl }, 'AOD: proxy URL updated');
+    return updated;
+  }
+
+  if (spaceAod && !hasProxy) {
+    // Install proxy
+    const proxyUrl = aodConfig.regionProxyEndpoint?.[region];
+    if (!proxyUrl) {
+      logger.warn({ label, region }, `AOD: no regionProxyEndpoint configured for ${region} — skipping AOD install`);
+      return null;
+    }
+    const appGuid = routesTable.get(url);
+    if (!appGuid) {
+      logger.warn({ label, url }, 'AOD: no app.guid found in routes table for URL — skipping AOD install');
+      return null;
+    }
+    const updated = {
+      ...dest,
+      URL:                            proxyUrl,
+      'URL.headers.x-aod-app-url':   url,
+      'URL.headers.x-aod-app-id':    appGuid,
+      'URL.headers.x-aod-region':    region,
+      'URL.headers.x-aod-subdomain': subdomain,
+    };
+    await pushAodDestination(region, credential, accessToken, updated, label);
+    logger.info({ label, url, proxyUrl }, `AOD: ${label}->${url} has been switched to AOD`);
+    return updated;
+  }
+
+  if (!spaceAod && hasProxy) {
+    // Uninstall proxy — restore original URL
+    const originalUrl = String(dest['URL.headers.x-aod-app-url'] ?? '');
+    if (!originalUrl || originalUrl === url) return null;
+    const updated: Record<string, unknown> = { ...dest, URL: originalUrl };
+    delete updated['URL.headers.x-aod-app-url'];
+    delete updated['URL.headers.x-aod-app-id'];
+    delete updated['URL.headers.x-aod-region'];
+    delete updated['URL.headers.x-aod-subdomain'];
+    await pushAodDestination(region, credential, accessToken, updated, label);
+    logger.info({ label, to: originalUrl }, `AOD: ${label}->${originalUrl} has been reverted (AOD uninstalled)`);
+    return updated;
+  }
+
+  return null;
+}
+
+async function pushAodDestination(region: string, credential: DestCredentials, accessToken: string, dest: Record<string, unknown>, label: string): Promise<void> {
+  const baseUrl = `${credential.uri}/destination-configuration/v1/instanceDestinations`;
+  const headers = { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' };
+  const body    = JSON.stringify(dest);
+  const putRes  = await fetchWithRateLimit(() => fetch(baseUrl, { method: 'PUT', headers, body }), baseUrl);
+  if (putRes.ok) return;
+  if (putRes.status === 404) {
+    const postRes = await fetchWithRateLimit(() => fetch(baseUrl, { method: 'POST', headers, body }), baseUrl);
+    if (postRes.ok) return;
+    const errText = await postRes.text().catch(() => '');
+    throw new Error(`AOD dest push POST failed at ${label}: HTTP ${postRes.status}: ${errText.slice(0, 200)}`);
+  }
+  const errText = await putRes.text().catch(() => '');
+  throw new Error(`AOD dest push PUT failed at ${label}: HTTP ${putRes.status}: ${errText.slice(0, 200)}`);
+}
+
 export async function refreshDestinations(username = 'system', mode: 'auto' | 'manual' = 'auto', force = false): Promise<RefreshResult> {
   if (globalRefreshRunning && !force) {
     logger.info({ username, mode }, 'Global destination refresh skipped — already running');
@@ -957,6 +1131,9 @@ export async function refreshDestinations(username = 'system', mode: 'auto' | 'm
 
   const { orgs: keyStore, planGuids } = await loadKeyStore();
   const tokenStore = await loadTokenStore();
+
+  // Build routes table for AOD proxy install/uninstall across all target subaccounts
+  const routesTable = await buildRoutesTable(targetSas);
 
   // Warnings and errors collected during the run, keyed with location for display
   const issues: string[] = [];
@@ -1047,6 +1224,8 @@ export async function refreshDestinations(username = 'system', mode: 'auto' | 'm
         (_spaceDone, _spacesTotal, instLabel, spaceReceivedSoFar) => {
           emit('refresh-destinations', { type: 'progress', scope: 'global', current: idx + 1, total, name: instLabel, received: received + spaceReceivedSoFar });
         },
+        undefined,
+        routesTable,
       );
       if (spaceResult.errors.length > 0) {
         logger.warn({ location, errors: spaceResult.errors }, 'Some space destination refreshes failed');
@@ -1121,6 +1300,7 @@ export async function refreshSubaccountDestinations(region: string, subdomain: s
   const { orgs: keyStore, planGuids } = await loadKeyStore();
   const tokenStore = await loadTokenStore();
   const cfLoginFailed = new Set<string>();
+  const routesTable = await buildRoutesTable([sa]);
 
   emit('refresh-destinations', { type: 'progress', scope: 'subaccount', region: sa.region, subdomain: sa.subdomain, current: 1, total, name: saLabel, received: 0 });
 
@@ -1213,7 +1393,7 @@ export async function refreshSubaccountDestinations(region: string, subdomain: s
       region: sa.region, subdomain: sa.subdomain,
       current: 1 + instsDone, total: 1 + instsTotal, name: instLabel,
     });
-  });
+  }, routesTable);
   if (spaceResult.errors.length > 0) {
     logger.warn({ errors: spaceResult.errors }, 'Some space destination refreshes failed during subaccount refresh');
   }
@@ -1438,6 +1618,7 @@ interface SpaceServiceInstance {
   spaceName: string;
   subdomain: string;
   region:    string;
+  aod?:      boolean;
 }
 
 export async function refreshSpaceDestinations(
@@ -1446,14 +1627,15 @@ export async function refreshSpaceDestinations(
   mode:           'auto' | 'manual',
   onProgress?:    (current: number, total: number, label: string, received: number) => void,
   onInstProgress?:(current: number, total: number, label: string) => void,
+  routesTable:    Map<string, string> = new Map(),
 ): Promise<{ created: number; updated: number; deleted: number; errors: string[] }> {
   // Collect all (region, subdomain, spaceId, spaceName) tuples with manageDest=true
-  type SpaceTodo = { region: string; subdomain: string; spaceId: string; spaceName: string; orgId: string };
+  type SpaceTodo = { region: string; subdomain: string; spaceId: string; spaceName: string; orgId: string; aod?: boolean };
   const todos: SpaceTodo[] = [];
   for (const sa of subaccounts) {
     if (!sa.org?.orgId) continue;
     for (const sp of sa.org.spaces) {
-      if (sp.manageDest) todos.push({ region: sa.region, subdomain: sa.subdomain, spaceId: sp.spaceId, spaceName: sp.spaceName, orgId: sa.org.orgId });
+      if (sp.manageDest) todos.push({ region: sa.region, subdomain: sa.subdomain, spaceId: sp.spaceId, spaceName: sp.spaceName, orgId: sa.org.orgId, aod: sp.aod });
     }
   }
   if (todos.length === 0) return { created: 0, updated: 0, deleted: 0, errors: [] };
@@ -1510,6 +1692,7 @@ export async function refreshSpaceDestinations(
           spaceName: todo.spaceName,
           subdomain: todo.subdomain,
           region,
+          aod:       todo.aod,
         });
       }
     } catch (err) {
@@ -1585,6 +1768,7 @@ export async function refreshSpaceDestinations(
 
   let spaceReceived = 0;
   const totalInstances = spaceInstances.length;
+  const aodConfig = await readAodConfig();
 
   // Emit initial instance-progress signal so the caller knows the total
   onInstProgress?.(0, totalInstances, 'starting');
@@ -1611,8 +1795,12 @@ export async function refreshSpaceDestinations(
     const instanceDir = join(LOCAL_DEST_DIR, inst.region, inst.subdomain, inst.spaceName, `${inst.guid}_${inst.name}`);
     await mkdir(instanceDir, { recursive: true });
 
-    async function fetchAndPersist(token: string): Promise<boolean> {
-      const url     = `${credential.uri}/destination-configuration/v1/instanceDestinations`;
+    let instanceDests: Record<string, unknown>[] = [];
+    let finalToken      = accessToken;
+    let finalCredential = credential;
+
+    async function fetchAndPersist(token: string, cred: typeof credential): Promise<boolean> {
+      const url     = `${cred.uri}/destination-configuration/v1/instanceDestinations`;
       const headers = { Authorization: `Bearer ${token}` };
       const res     = await fetchWithRateLimit(() => fetch(url, { headers }), url);
       if (!res.ok) {
@@ -1620,12 +1808,14 @@ export async function refreshSpaceDestinations(
         throw new Error(`Instance Destination API → HTTP ${res.status}: ${text.slice(0, 200)}`);
       }
       const dests = await res.json() as unknown[];
+      instanceDests = [];
       const apiNames = new Set<string>();
       for (const dest of dests) {
         const d    = dest as Record<string, unknown>;
         const name = String(d['Name'] ?? d['name'] ?? '');
         if (!name) continue;
         apiNames.add(name);
+        instanceDests.push(d);
         const r = await persistSpaceDestination(instanceDir, name, d, username);
         if (r === 'created') created++;
         else if (r === 'updated') updated++;
@@ -1650,11 +1840,13 @@ export async function refreshSpaceDestinations(
     }
 
     try {
-      await fetchAndPersist(accessToken);
+      await fetchAndPersist(accessToken, credential);
       logger.info({ label, instanceGuid: inst.guid }, 'Space instance destinations refreshed');
     } catch (err) {
       if (!String(err).includes('HTTP 401')) {
         issues.push(`${label}: ${String(err)}`);
+        done++;
+        onInstProgress?.(done, totalInstances, inst.name);
         continue;
       }
       // 401 retry: invalidate cached token/key for this instance and re-acquire
@@ -1662,14 +1854,55 @@ export async function refreshSpaceDestinations(
       if (tokenStore[inst.region]) delete tokenStore[inst.region]![inst.guid];
       if (keyStore[inst.region])   delete keyStore[inst.region]![inst.guid];
       const r2 = await resolveInstanceToken(inst.region, inst.guid, inst.name, keyStore, tokenStore, cfLoginFailed, label);
-      if ('error' in r2) { issues.push(`${label}: ${r2.error}`); continue; }
+      if ('error' in r2) {
+        issues.push(`${label}: ${r2.error}`);
+        done++;
+        onInstProgress?.(done, totalInstances, inst.name);
+        continue;
+      }
+      finalToken      = r2.accessToken;
+      finalCredential = r2.credential;
       try {
-        await fetchAndPersist(r2.accessToken);
+        await fetchAndPersist(r2.accessToken, r2.credential);
         logger.info({ label, instanceGuid: inst.guid }, 'Space instance destinations refreshed (after 401 retry)');
       } catch (err2) {
         issues.push(`${label}: ${String(err2)}`);
       }
     }
+
+    // Apply AOD proxy install/update/uninstall for each fetched destination
+    if (instanceDests.length > 0) {
+      for (const dest of instanceDests) {
+        const destName = String(dest['Name'] ?? dest['name'] ?? '');
+        if (!destName) continue;
+        try {
+          const updated = await applyAodToDestination(
+            dest, inst.aod ?? false, inst.region, inst.subdomain, finalToken, finalCredential,
+            routesTable, aodConfig, `${label}/${destName}`,
+          );
+          if (updated) {
+            await persistSpaceDestination(instanceDir, destName, updated, username);
+            // Update {appGuid}.json->aod and ->urls after AOD install/uninstall
+            const aodInstalled = 'URL.headers.x-aod-app-id' in updated;
+            const appGuid      = String(updated['URL.headers.x-aod-app-id'] ?? dest['URL.headers.x-aod-app-id'] ?? '');
+            const destUrl      = aodInstalled
+              ? String(updated['URL.headers.x-aod-app-url'] ?? '')
+              : String(updated['URL'] ?? '');
+            void updateAppFileAod(appGuid, inst.region, inst.subdomain, destUrl, aodInstalled);
+            // Ensure lastAccessed is set when AOD is newly installed (assume accessed now)
+            if (aodInstalled) void initAppLastAccessedIfEmpty(appGuid, inst.region, inst.subdomain);
+            // Write AOD-specific changelog entries
+            const wasAod    = 'URL.headers.x-aod-app-url' in dest;
+            const isAod     = 'URL.headers.x-aod-app-url' in updated;
+            const aodAction = (!wasAod && isAod) ? 'installed' : (wasAod && !isAod) ? 'uninstalled' : 'updated';
+            void appendAodDestChangelog(instanceDir, destName, dest, updated, aodAction, username, inst);
+          }
+        } catch (aodErr) {
+          logger.warn({ label, destName, err: aodErr }, 'AOD apply failed for destination');
+        }
+      }
+    }
+
     done++;
     onInstProgress?.(done, totalInstances, inst.name);
   } // end for inst of spaceInstances

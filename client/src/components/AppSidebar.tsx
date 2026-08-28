@@ -3,7 +3,7 @@ import { Link, useLocation } from 'react-router';
 import {
   LogIn, Sun, Moon, Activity, Home, Globe, ChevronDown, RefreshCw,
   BookMarked, ShieldCheck, Settings, BookOpenText, LifeBuoy, Star, Wrench, HelpCircle,
-  FileText, ExternalLink, Layers, Package, Users, Zap, Code2, Database, Bell,
+  FileText, ExternalLink, Layers, Package, Users, Zap, Code2, Database, Bell, AppWindow,
 } from 'lucide-react';
 import { useAuth } from '@/hooks/useAuth';
 import { useTheme } from '@/hooks/useTheme';
@@ -35,6 +35,7 @@ interface NavItem {
 const NAV_ITEMS: NavItem[] = [
   { label: 'Home',             href: '/home',          icon: <Home       className="h-4 w-4 shrink-0" /> },
   { label: 'Health Status',    href: '/status',        icon: <Activity   className="h-4 w-4 shrink-0" /> },
+  { label: 'Apps',             href: '/apps',          icon: <AppWindow  className="h-4 w-4 shrink-0" />, wip: true, restricted: true, adminOnly: true },
   { label: 'Destinations',     href: '/destinations',  icon: <Globe      className="h-4 w-4 shrink-0" />, wip: true, restricted: true, adminOnly: true },
   { label: 'Role Collections', href: '/role-collections', icon: <ShieldCheck className="h-4 w-4 shrink-0" />, wip: true, restricted: true, adminOnly: true },
   { label: 'Users',            href: '/users',            icon: <Users      className="h-4 w-4 shrink-0" />, wip: true, restricted: true, adminOnly: true },

@@ -5,6 +5,7 @@ export interface SpaceEntry {
   spaceId:    string;
   spaceName:  string;
   manageDest?: boolean;
+  aod?:        boolean;
 }
 
 export interface ServiceInstanceEntry {
@@ -63,10 +64,10 @@ interface Props {
   onOpenDetail:      (sa: SubaccountEntry) => void;
 }
 
-// col idx:        0    1    2    3    4    5    6    7   8   9   10  11   12   13
-//                grip  rgn  sub  ga   sa   org  grp  al  hm  dt  rol sub  svc s-dst
-const INIT_WIDTHS = [28,  65,  95, 160, 195, 145, 110, 85, 42, 42,  44,  44, 44,  44];
-const MIN_WIDTHS  = [28,  40,  55,  90, 110,  80,  55, 45, 32, 32,  32,  32, 32,  32];
+// col idx:        0    1    2    3    4    5    6    7   8   9   10  11   12   13   14
+//                grip  rgn  sub  ga   sa   org  grp  al  hm  dt  rol sub  svc s-dst s-aod
+const INIT_WIDTHS = [28,  65,  95, 160, 195, 145, 110, 85, 42, 42,  44,  44, 44,  44,  44];
+const MIN_WIDTHS  = [28,  40,  55,  90, 110,  80,  55, 45, 32, 32,  32,  32, 32,  32,  32];
 
 function updateSa(data: SubaccountEntry[], subaccountId: string, patch: Partial<SubaccountEntry>): SubaccountEntry[] {
   return data.map(s => s.subaccountId === subaccountId ? { ...s, ...patch } : s);
@@ -368,6 +369,10 @@ export default function SubaccountsTable({
                 S-Dst
                 <div className={rszHdl} onMouseDown={e => startResize(e, 13)} />
               </th>
+              <th className={`${thCls} text-center`} title="Application on Demand Spaces — number of CF spaces with aod=true">
+                S-AOD
+                <div className={rszHdl} onMouseDown={e => startResize(e, 14)} />
+              </th>
             </tr>
           </thead>
           <tbody>
@@ -477,12 +482,20 @@ export default function SubaccountsTable({
                         : <span className="text-muted-foreground/30">—</span>;
                     })()}
                   </td>
+                  <td className={`${tdCls} text-center`}>
+                    {(() => {
+                      const n = sa.org?.spaces.filter(sp => sp.aod).length ?? 0;
+                      return n > 0
+                        ? <button onClick={() => onOpenDetail(sa)} className="inline-flex items-center justify-center rounded-full bg-primary/10 text-primary text-[10px] font-semibold px-1.5 min-w-[18px] hover:bg-primary/20 transition-colors">{n}</button>
+                        : <span className="text-muted-foreground/30">—</span>;
+                    })()}
+                  </td>
                 </tr>
               );
             })}
             {filtered.length === 0 && (
               <tr>
-                <td colSpan={14} className="px-4 py-8 text-center text-xs text-muted-foreground">
+                <td colSpan={15} className="px-4 py-8 text-center text-xs text-muted-foreground">
                   {isFiltered ? 'No subaccounts match the filter.' : 'No subaccounts. Click Refresh to fetch from BTP.'}
                 </td>
               </tr>

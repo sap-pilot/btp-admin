@@ -9,6 +9,7 @@ const ConfigPage             = lazy(() => import('@/pages/ConfigPage'));
 const DestinationOverview    = lazy(() => import('@/pages/destination/DestinationOverview'));
 const RoleCollectionsOverview = lazy(() => import('@/pages/rcs/RoleCollectionsOverview'));
 const UsersOverview           = lazy(() => import('@/pages/users/UsersOverview'));
+const AppsPage                = lazy(() => import('@/pages/apps/AppsPage'));
 
 
 interface EBState { error: Error | null }
@@ -69,6 +70,8 @@ export default function App() {
               <Route path="/status/:name" element={<StatusHistory />} />
               <Route path="/home" element={<HomePage />} />
               <Route path="/home/:tab" element={<HomePage />} />
+              <Route path="/apps" element={<AppsPage />} />
+              <Route path="/apps/:view" element={<AppsPage />} />
               <Route path="/destinations" element={<DestinationOverview />} />
               <Route path="/destinations/:tab" element={<DestinationOverview />} />
               <Route path="/destinations/:region/:subdomain/:spaceName/:instanceName/:instanceGuid/:name/:destTab" element={<DestinationOverview />} />

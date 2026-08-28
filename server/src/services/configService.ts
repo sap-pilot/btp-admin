@@ -150,6 +150,16 @@ export function getSyncWhitelistIPs(): string[] {
 }
 
 /**
+ * Returns folders excluded from remote sync downloads.
+ * SYNC_EXCLUDES env var (comma-separated) takes precedence over config.variables entry.
+ * Example: "rcs,users" — remote browse still lists those folders but their files are not downloaded.
+ */
+export function getSyncExcludes(): Set<string> {
+  const raw = process.env.SYNC_EXCLUDES ?? getConfig().variables?.['SYNC_EXCLUDES'] ?? '';
+  return new Set(String(raw).split(',').map(s => s.trim()).filter(Boolean));
+}
+
+/**
  * Global (all-subaccounts) auto-refresh threshold in milliseconds.
  * AUTO_GLOBAL_REFRESH_HRS (new name); old name DESTINATION_AUTO_GLOBAL_REFRESH_HRS still accepted.
  * Fractional values supported (e.g. 1.5 = 90 min). Default: 6 hours.
@@ -166,4 +176,41 @@ export function getAutoGlobalRefreshMs(): number {
     return (!isNaN(n) && n > 0) ? n * 3_600_000 : 0;
   }
   return 6 * 3_600_000; // default 6 hours
+}
+
+/**
+ * AOD apps auto-refresh interval in hours.
+ * REFRESH_APPS_INTERVAL_HRS env var takes precedence over config.json->variables entry.
+ * Falls back to config.json->aod.refreshAppsIntervalHrs for backward compat.
+ * Default: 6 hours. Set to 0 to disable.
+ */
+export function getRefreshAppsIntervalHrs(): number {
+  const raw =
+    process.env.REFRESH_APPS_INTERVAL_HRS ??
+    getConfig().variables?.['REFRESH_APPS_INTERVAL_HRS'];
+  if (raw !== undefined && raw !== '') {
+    const n = parseFloat(raw);
+    return (!isNaN(n) && n >= 0) ? n : 0;
+  }
+  // backward compat: config.json->aod.refreshAppsIntervalHrs
+  const legacy = (getConfig() as unknown as { aod?: { refreshAppsIntervalHrs?: number } }).aod?.refreshAppsIntervalHrs;
+  return typeof legacy === 'number' && legacy >= 0 ? legacy : 6;
+}
+
+/**
+ * Automatically stop AOD apps unused for this many hours.
+ * STOP_APPS_UNUSED_AFTER_HRS env var takes precedence over config.json->variables entry.
+ * Falls back to config.json->aod.stopAppsUnusedAfterHrs for backward compat.
+ * Default: 120 hours. Set to 0 to disable auto-stop.
+ */
+export function getStopAppsUnusedAfterHrs(): number {
+  const raw =
+    process.env.STOP_APPS_UNUSED_AFTER_HRS ??
+    getConfig().variables?.['STOP_APPS_UNUSED_AFTER_HRS'];
+  if (raw !== undefined && raw !== '') {
+    const n = parseFloat(raw);
+    return (!isNaN(n) && n >= 0) ? n : 0;
+  }
+  const legacy = (getConfig() as unknown as { aod?: { stopAppsUnusedAfterHrs?: number } }).aod?.stopAppsUnusedAfterHrs;
+  return typeof legacy === 'number' && legacy >= 0 ? legacy : 120;
 }

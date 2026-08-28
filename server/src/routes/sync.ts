@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { readConfigFile, readDestFile, readRcsFile, readRootFile, readRawResponseFile, readUsersFile, browseResponseFiles, formatBrowseT, parseBrowseT } from '../services/localStoreService.js';
+import { readConfigFile, readDestFile, readRcsFile, readRootFile, readRawResponseFile, readUsersFile, readAodFile, browseResponseFiles, formatBrowseT, parseBrowseT } from '../services/localStoreService.js';
 import { buildZip } from '../services/zipBuilder.js';
 import { handleDownloadTrigger, registerCallback } from '../services/syncService.js';
 import { logger } from '../logger.js';
@@ -34,14 +34,24 @@ router.post('/batch', requireSyncAuth, async (req, res, next) => {
           return;
         }
       } else if (parts[0] === 'dest') {
-        // dest paths: root .md files (dest/changelog*.md) or subaccount files (dest/{region}/{subdomain}/{file})
+        // dest paths: root .md (2 segs), subaccount file (4 segs), instance-level file (6 segs)
         if (parts.length === 2) {
           if (!parts[1] || !/^[a-zA-Z0-9][a-zA-Z0-9_.-]*\.md$/.test(parts[1])) {
             rejectBatch(400, `invalid dest root path: ${p}`);
             return;
           }
-        } else if (parts.length !== 4 || !parts[1] || !parts[2] || !parts[3]) {
-          rejectBatch(400, `invalid dest path (expected 2 or 4 segments): ${p}`);
+        } else if (parts.length === 4) {
+          if (!parts[1] || !parts[2] || !parts[3]) {
+            rejectBatch(400, `invalid dest subaccount path: ${p}`);
+            return;
+          }
+        } else if (parts.length === 6) {
+          if (!parts[1] || !parts[2] || !parts[3] || !parts[4] || !parts[5] || !/^[\w][\w.-]*\.json$/.test(parts[5])) {
+            rejectBatch(400, `invalid dest instance path: ${p}`);
+            return;
+          }
+        } else {
+          rejectBatch(400, `invalid dest path (expected 2, 4, or 6 segments): ${p}`);
           return;
         }
       } else if (parts[0] === 'rcs') {
@@ -64,6 +74,27 @@ router.post('/batch', requireSyncAuth, async (req, res, next) => {
           }
         } else if (parts.length !== 5 || !parts[1] || !parts[2] || !parts[3] || !parts[4]) {
           rejectBatch(400, `invalid users path (expected 2 or 5 segments): ${p}`);
+          return;
+        }
+      } else if (parts[0] === 'apps') {
+        // apps paths: stats/config (2 segs), accesslog (4 segs), per-app JSON (5 segs)
+        if (parts.length === 2) {
+          if (!parts[1] || !/^(stats|aod-stats|aod-config)\.(csv|json)$/.test(parts[1])) {
+            rejectBatch(400, `invalid apps root file: ${p}`);
+            return;
+          }
+        } else if (parts.length === 4) {
+          if (!parts[1] || !parts[2] || !parts[3] || !/^accesslog(\.\d{8})?\.csv$/.test(parts[3])) {
+            rejectBatch(400, `invalid apps access log path: ${p}`);
+            return;
+          }
+        } else if (parts.length === 5) {
+          if (!parts[1] || !parts[2] || !parts[3] || !parts[4] || !/^[\w-]+(?:\.deleted)?\.json$/.test(parts[4])) {
+            rejectBatch(400, `invalid apps file path: ${p}`);
+            return;
+          }
+        } else {
+          rejectBatch(400, `invalid apps path (expected 2, 4, or 5 segments): ${p}`);
           return;
         }
       } else if (parts.length !== 2 || !parts[0] || !parts[1]) {
@@ -97,6 +128,8 @@ router.post('/batch', requireSyncAuth, async (req, res, next) => {
             data = await readRcsFile(rest);
           } else if (folder === 'users') {
             data = await readUsersFile(rest);
+          } else if (folder === 'apps') {
+            data = await readAodFile(rest);
           } else {
             data = await readRawResponseFile(folder, rest);
           }

@@ -10,9 +10,10 @@ import { logger } from '../logger.js';
 import { resolveSyncDuplicates, sanitizeName, formatBrowseT } from './localStoreService.js';
 import type { BrowseFile } from './localStoreService.js';
 import { extractZip } from './zipBuilder.js';
-import { getSyncKey, getAllServices } from './configService.js';
+import { getSyncKey, getAllServices, getSyncExcludes } from './configService.js';
 import { emit } from './liveEvents.js';
 import { refreshLastUpdated } from './lastUpdatedService.js';
+import { invalidateTopAppsCache } from './appService.js';
 
 const gunzipAsync = promisify(gunzip);
 const BATCH_MAX_ATTEMPTS   = 3;
@@ -76,6 +77,15 @@ let onUsersChangelogSynced: (() => void) | null = null;
 
 export function registerOnUsersChangelogSynced(fn: () => void): void {
   onUsersChangelogSynced = fn;
+}
+
+// Called when any apps/{region}/{subdomain}/accesslog.csv lands in a sync batch.
+// Receives deduplicated SA keys (e.g. ['us10/my-sub']) so the analytics cache
+// can merge in the new rows without a full reload.
+let onAccessLogSynced: ((saPaths: string[]) => void) | null = null;
+
+export function registerOnAccessLogSynced(fn: (saPaths: string[]) => void): void {
+  onAccessLogSynced = fn;
 }
 
 // Called by executeSync with deduplicated SA keys when any users/{region}/{subdomain}/*
@@ -345,7 +355,7 @@ function resolveLocalPath(flatPath: string): string {
   const slash = flatPath.indexOf('/');
   if (slash === -1) return join(config.LOCAL_STORE_DIR, flatPath);
   const first = flatPath.slice(0, slash);
-  if (first === 'conf' || first === 'dest' || first === 'rcs' || first === 'users') {
+  if (first === 'conf' || first === 'dest' || first === 'rcs' || first === 'users' || first === 'apps') {
     return join(config.LOCAL_STORE_DIR, flatPath);
   }
   return join(config.LOCAL_STORE_DIR, 'resp', flatPath);
@@ -419,6 +429,22 @@ async function downloadBatch(
           const parentDir = lastSlash !== -1
             ? join(config.LOCAL_STORE_DIR, 'users', filename.slice(0, lastSlash))
             : join(config.LOCAL_STORE_DIR, 'users');
+          await mkdir(parentDir, { recursive: true });
+        } else if (folder === 'apps') {
+          target = resolvePath(config.LOCAL_STORE_DIR, 'apps', filename);
+          if (!target.startsWith(safeBase + '/')) {
+            logger.warn({ name }, 'Skipping ZIP apps entry: path traversal detected');
+            return;
+          }
+          const appParts = filename.split('/');
+          const isRoot   = filename === 'aod-config.json' || filename === 'stats.csv' || filename === 'aod-stats.csv';
+          const isLog    = appParts.length === 3 && /^accesslog(\.\d{8})?\.csv$/.test(appParts[2] ?? '');
+          const isApp    = appParts.length === 4 && /^[\w-]+(?:\.deleted)?\.json$/.test(appParts[3] ?? '');
+          if (!isRoot && !isLog && !isApp) return;
+          const lastSlash = filename.lastIndexOf('/');
+          const parentDir = lastSlash !== -1
+            ? join(config.LOCAL_STORE_DIR, 'apps', filename.slice(0, lastSlash))
+            : join(config.LOCAL_STORE_DIR, 'apps');
           await mkdir(parentDir, { recursive: true });
         } else {
           target = resolvePath(config.LOCAL_STORE_DIR, 'resp', folder, filename);
@@ -557,9 +583,15 @@ async function executeSync(
     const fp = (folder: string, name: string) => folder ? `${folder}/${name}` : name;
 
     // Build flat list of remote-reported files and their mtimes
+    const syncExcludes = getSyncExcludes();
+    const isExcluded = (folder: string) =>
+      syncExcludes.size > 0 &&
+      [...syncExcludes].some(excl => folder === excl || folder.startsWith(excl + '/'));
     const remoteMtimes = new Map<string, number>();
     const allRemotePaths: string[] = [];
+    let excludedCount = 0;
     for (const [folder, files] of Object.entries(folders)) {
+      if (isExcluded(folder)) { excludedCount += files.length; continue; }
       for (const f of files) {
         const flatPath = fp(folder, f.name);
         remoteMtimes.set(flatPath, f.mtime);
@@ -577,7 +609,7 @@ async function executeSync(
         localMtimes.set(flatPath, info.mtimeMs);
       } catch { /* file absent locally */ }
     }));
-    logger.debug({ remoteFiles: allRemotePaths.length, localFound: localMtimes.size, durationMs: Date.now() - t0Stat }, 'Local stat complete');
+    logger.debug({ remoteFiles: allRemotePaths.length, excluded: excludedCount, localFound: localMtimes.size, durationMs: Date.now() - t0Stat }, 'Local stat complete');
 
     const missing: string[] = [];
     for (const flatPath of allRemotePaths) {
@@ -591,7 +623,7 @@ async function executeSync(
       if (localMtime !== undefined && (!remoteMtime || Math.round(localMtime / 1000) >= Math.round(remoteMtime / 1000))) continue;
       missing.push(flatPath);
     }
-    logger.debug({ remoteFiles: allRemotePaths.length, localFound: localMtimes.size, missing: missing.length }, 'Remote/local comparison complete');
+    logger.debug({ remoteFiles: allRemotePaths.length, excluded: excludedCount, localFound: localMtimes.size, missing: missing.length }, 'Remote/local comparison complete');
 
     logger.info({ total: missing.length }, 'Files to sync from remote');
 
@@ -680,9 +712,23 @@ async function executeSync(
     if (updatedRootFiles.length > 0) {
       emit('root', { files: updatedRootFiles, ts });
     }
-    if (updatedFolders.has('conf')) {
+    if (updatedFolders.has('conf') || updatedFolders.has('apps')) {
       emit('config', { ts });
       void refreshLastUpdated(); // re-read file mtimes set by utimes() during sync
+    }
+    if (updatedFolders.has('apps')) {
+      invalidateTopAppsCache();
+      emit('aod-apps', { type: 'apps-synced', ts });
+      // Merge any synced accesslog.csv files into the in-memory analytics cache
+      const accessLogSaKeys = [...new Set(
+        missing
+          .filter(p => p.startsWith('apps/') && /\/accesslog(?:\.\d{8})?\.csv$/.test(p))
+          .map(p => { const parts = p.split('/'); return parts.length >= 3 ? `${parts[1]}/${parts[2]}` : ''; })
+          .filter(Boolean),
+      )];
+      if (accessLogSaKeys.length > 0 && onAccessLogSynced) {
+        void (onAccessLogSynced as (s: string[]) => void | Promise<void>)(accessLogSaKeys);
+      }
     }
     if (updatedFolders.has('dest')) {
       emit('dest', { ts });

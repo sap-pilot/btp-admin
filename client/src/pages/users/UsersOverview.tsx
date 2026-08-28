@@ -351,38 +351,36 @@ export default function UsersOverview() {
             </span>
           )}
         </div>
-        <div className="ml-auto flex items-center gap-2">
-          <div className="relative hidden sm:block">
-            {searchLoading
-              ? <Loader2 className="absolute left-2 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground animate-spin pointer-events-none" />
-              : <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground pointer-events-none" />
-            }
-            <input
-              type="text"
-              value={overviewSearch}
-              onChange={e => setOverviewSearch(e.target.value)}
-              onKeyDown={e => { if (e.key === 'Enter') void doSearch(overviewSearch); else if (e.key === 'Escape') clearSearch(); }}
-              placeholder="Search users…"
-              className={`h-7 pl-7 ${overviewSearch ? 'pr-6' : 'pr-2'} w-44 text-xs border border-border rounded bg-background text-foreground focus:outline-none focus:ring-1 focus:ring-ring placeholder:text-muted-foreground`}
-            />
-            {overviewSearch && (
-              <button
-                onClick={clearSearch}
-                className="absolute right-1.5 top-1/2 -translate-y-1/2 h-4 w-4 flex items-center justify-center text-muted-foreground hover:text-foreground"
-              >
-                <X className="h-3 w-3" />
-              </button>
-            )}
-          </div>
-          <button
-            onClick={() => isRefreshing ? setShowForceRefreshDialog(true) : setShowRefreshDialog(true)}
-            className={btnOutline}
-            title={isRefreshing ? 'Refreshing… — click to force another refresh' : 'Refresh all users'}
-          >
-            <RefreshCw className={`h-3.5 w-3.5 ${isRefreshing ? 'animate-spin' : ''}`} />
-            <span className="hidden sm:inline">{isRefreshing ? 'Refreshing…' : 'Refresh'}</span>
-          </button>
+        <div className="relative flex-1 min-w-0 hidden sm:block ml-2">
+          {searchLoading
+            ? <Loader2 className="absolute left-2 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground animate-spin pointer-events-none" />
+            : <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground pointer-events-none" />
+          }
+          <input
+            type="text"
+            value={overviewSearch}
+            onChange={e => setOverviewSearch(e.target.value)}
+            onKeyDown={e => { if (e.key === 'Enter') void doSearch(overviewSearch); else if (e.key === 'Escape') clearSearch(); }}
+            placeholder="Search users…"
+            className={`h-7 pl-7 ${overviewSearch ? 'pr-6' : 'pr-2'} w-full text-xs border border-border rounded bg-background text-foreground focus:outline-none focus:ring-1 focus:ring-ring placeholder:text-muted-foreground`}
+          />
+          {overviewSearch && (
+            <button
+              onClick={clearSearch}
+              className="absolute right-1.5 top-1/2 -translate-y-1/2 h-4 w-4 flex items-center justify-center text-muted-foreground hover:text-foreground"
+            >
+              <X className="h-3 w-3" />
+            </button>
+          )}
         </div>
+        <button
+          onClick={() => isRefreshing ? setShowForceRefreshDialog(true) : setShowRefreshDialog(true)}
+          className={`${btnOutline} shrink-0`}
+          title={isRefreshing ? 'Refreshing… — click to force another refresh' : 'Refresh all users'}
+        >
+          <RefreshCw className={`h-3.5 w-3.5 ${isRefreshing ? 'animate-spin' : ''}`} />
+          <span className="hidden sm:inline">{isRefreshing ? 'Refreshing…' : 'Refresh'}</span>
+        </button>
       </div>
 
       {/* Progress bar */}

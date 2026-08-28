@@ -115,34 +115,32 @@ export default function Home() {
             </span>
           )}
         </div>
-        <div className="ml-auto flex items-center gap-3">
-          {totalY > 0 && (
-            <div className="relative flex items-center">
-              <Search className="absolute left-2 h-3 w-3 text-muted-foreground/60 pointer-events-none" />
-              <input
-                type="text"
-                value={filterQuery}
-                onChange={e => setFilterQuery(e.target.value)}
-                placeholder="Search"
-                className="h-7 pl-6 pr-[4.5rem] text-xs border border-border rounded bg-background text-foreground placeholder:text-muted-foreground/50 focus:outline-none focus:ring-1 focus:ring-ring w-[160px]"
-              />
-              <div className="absolute right-1.5 flex items-center gap-0.5">
-                {filterQuery && (
-                  <button
-                    onClick={() => setFilterQuery('')}
-                    className="p-0.5 rounded hover:bg-accent text-muted-foreground/60 hover:text-foreground transition-colors"
-                    title="Clear filter"
-                  >
-                    <X className="h-3 w-3" />
-                  </button>
-                )}
-                <span className="text-[10px] text-muted-foreground/60 pointer-events-none whitespace-nowrap">
-                  ({matchX}/{totalY})
-                </span>
-              </div>
+        {totalY > 0 && (
+          <div className="relative flex-1 min-w-0 ml-4">
+            <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3 w-3 text-muted-foreground/60 pointer-events-none" />
+            <input
+              type="text"
+              value={filterQuery}
+              onChange={e => setFilterQuery(e.target.value)}
+              placeholder="Search"
+              className="h-7 pl-6 pr-[4.5rem] text-xs border border-border rounded bg-background text-foreground placeholder:text-muted-foreground/50 focus:outline-none focus:ring-1 focus:ring-ring w-full"
+            />
+            <div className="absolute right-1.5 top-1/2 -translate-y-1/2 flex items-center gap-0.5">
+              {filterQuery && (
+                <button
+                  onClick={() => setFilterQuery('')}
+                  className="p-0.5 rounded hover:bg-accent text-muted-foreground/60 hover:text-foreground transition-colors"
+                  title="Clear filter"
+                >
+                  <X className="h-3 w-3" />
+                </button>
+              )}
+              <span className="text-[10px] text-muted-foreground/60 pointer-events-none whitespace-nowrap">
+                ({matchX}/{totalY})
+              </span>
             </div>
-          )}
-        </div>
+          </div>
+        )}
       </div>
 
       <div className="flex-1 overflow-auto">
