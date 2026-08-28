@@ -3,7 +3,7 @@ import { config } from './config.js';
 import { loadConfig, getSyncExcludes } from './services/configService.js';
 import { logger } from './logger.js';
 import { startScheduler, stopScheduler } from './services/status/schedulerService.js';
-import { startupSync, startIntervalFallback, stopIntervalFallback } from './services/syncService.js';
+import { startupSync, startIntervalFallback, stopIntervalFallback, registerOnAccessLogSynced } from './services/syncService.js';
 import { refreshLastUpdated } from './services/lastUpdatedService.js';
 import { startHousekeepingScheduler, stopHousekeepingScheduler } from './services/housekeepingService.js';
 import { initGeo } from './services/geoService.js';
@@ -21,7 +21,7 @@ import authRouter from './routes/auth.js';
 import aodRouter, { aodProxyHandler } from './routes/aod.js';
 import appsRouter from './routes/apps.js';
 import { startAppsScheduler, stopAppsScheduler } from './services/appService.js';
-import { initRequestLog } from './services/aodAnalyticsService.js';
+import { initRequestLog, mergeAccessLogFromSync } from './services/aodAnalyticsService.js';
 import { requireSessionGlobal } from './middleware/requireAuth.js';
 import { errorHandler } from './middleware/errorHandler.js';
 import { compress } from './middleware/compress.js';
@@ -69,6 +69,13 @@ const server = app.listen(config.PORT, () => {
   void refreshLastUpdated();
   void initGeo();
   void initRequestLog();
+  registerOnAccessLogSynced(saPaths => {
+    for (const key of saPaths) {
+      const slash = key.indexOf('/');
+      if (slash === -1) continue;
+      void mergeAccessLogFromSync(key.slice(0, slash), key.slice(slash + 1));
+    }
+  });
   startScheduler();
   startHousekeepingScheduler();
   startAppsScheduler();

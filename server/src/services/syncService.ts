@@ -79,6 +79,15 @@ export function registerOnUsersChangelogSynced(fn: () => void): void {
   onUsersChangelogSynced = fn;
 }
 
+// Called when any apps/{region}/{subdomain}/accesslog.csv lands in a sync batch.
+// Receives deduplicated SA keys (e.g. ['us10/my-sub']) so the analytics cache
+// can merge in the new rows without a full reload.
+let onAccessLogSynced: ((saPaths: string[]) => void) | null = null;
+
+export function registerOnAccessLogSynced(fn: (saPaths: string[]) => void): void {
+  onAccessLogSynced = fn;
+}
+
 // Called by executeSync with deduplicated SA keys when any users/{region}/{subdomain}/*
 // files are included in a sync batch — lets userService refresh per-SA cache and emit.
 let onUsersSynced: ((saPaths: string[]) => void) | null = null;
@@ -710,6 +719,16 @@ async function executeSync(
     if (updatedFolders.has('apps')) {
       invalidateTopAppsCache();
       emit('aod-apps', { type: 'apps-synced', ts });
+      // Merge any synced accesslog.csv files into the in-memory analytics cache
+      const accessLogSaKeys = [...new Set(
+        missing
+          .filter(p => p.startsWith('apps/') && /\/accesslog(?:\.\d{8})?\.csv$/.test(p))
+          .map(p => { const parts = p.split('/'); return parts.length >= 3 ? `${parts[1]}/${parts[2]}` : ''; })
+          .filter(Boolean),
+      )];
+      if (accessLogSaKeys.length > 0 && onAccessLogSynced) {
+        void (onAccessLogSynced as (s: string[]) => void | Promise<void>)(accessLogSaKeys);
+      }
     }
     if (updatedFolders.has('dest')) {
       emit('dest', { ts });

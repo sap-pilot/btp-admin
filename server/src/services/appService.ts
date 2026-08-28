@@ -9,6 +9,7 @@ import { logger } from '../logger.js';
 import { readSubaccounts } from './subaccountsService.js';
 import { getOrRefreshToken } from './cfLoginService.js';
 import { readAodConfig } from './aodConfigService.js';
+import { getRefreshAppsIntervalHrs, getStopAppsUnusedAfterHrs } from './configService.js';
 import { emitImmediate } from './liveEvents.js';
 
 const APPS_DIR = join(config.LOCAL_STORE_DIR, 'apps');
@@ -37,6 +38,20 @@ export async function updateAppFileState(guid: string, region: string, subdomain
     await writeFile(filePath, JSON.stringify(obj, null, 2), 'utf-8');
   } catch (err) {
     logger.warn({ err, guid, region, subdomain }, 'AOD: failed to update app state in JSON');
+  }
+}
+
+// Stop a CF app via the V3 API
+async function stopCfApp(region: string, appGuid: string): Promise<void> {
+  const token = await getOrRefreshToken(region);
+  const url   = `${token.api_url}/v3/apps/${appGuid}/actions/stop`;
+  const res   = await fetch(url, {
+    method:  'POST',
+    headers: { Authorization: `${token.token_type} ${token.access_token}`, 'Content-Type': 'application/json' },
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    throw new Error(`CF stop app failed: HTTP ${res.status}: ${text.slice(0, 200)}`);
   }
 }
 
@@ -366,6 +381,23 @@ export async function updateAppFileAod(
   }
 }
 
+// Set lastAccessed = now in appGuid.json only if the field is currently absent.
+// Called when AOD is installed on a destination to ensure no app starts with empty lastAccessed.
+export async function initAppLastAccessedIfEmpty(appGuid: string, region: string, subdomain: string): Promise<void> {
+  const filePath = await findAppFile(appGuid, region, subdomain);
+  if (!filePath) return;
+  try {
+    const raw = await readFile(filePath, 'utf-8');
+    const obj = JSON.parse(raw) as AppFileData;
+    if (obj.lastAccessed) return; // already set
+    obj.lastAccessed = Math.floor(Date.now() / 1000);
+    await writeFile(filePath, JSON.stringify(obj, null, 2), 'utf-8');
+    topAppsCache = null;
+  } catch (err) {
+    logger.warn({ err, appGuid, region, subdomain }, 'AOD: failed to init lastAccessed');
+  }
+}
+
 // Update lastAccessed timestamp in appGuid.json — called fire-and-forget on each AOD proxy hit.
 export async function touchAppLastAccessed(appGuid: string, region: string, subdomain: string, ts: number): Promise<void> {
   const filePath = await findAppFile(appGuid, region, subdomain);
@@ -479,11 +511,13 @@ export async function scanApps(): Promise<void> {
           const dir = join(APPS_DIR, region, subdomain, sanitizeName(spaceName));
           await mkdir(dir, { recursive: true });
 
-          // Preserve existing aod flag from prior JSON; urls are replaced by CF routes
-          let existingAod = false;
+          // Preserve existing aod flag and lastAccessed from prior JSON; urls are replaced by CF routes
+          let existingAod         = false;
+          let existingLastAccessed: number | undefined;
           try {
-            const existing = JSON.parse(await readFile(join(dir, `${app.guid}.json`), 'utf-8')) as AppFile;
-            existingAod = existing.aod ?? false;
+            const existing      = JSON.parse(await readFile(join(dir, `${app.guid}.json`), 'utf-8')) as AppFile;
+            existingAod         = existing.aod ?? false;
+            existingLastAccessed = (existing as AppFileData).lastAccessed;
           } catch { /* new file */ }
 
           const proc    = processMap.get(app.guid);
@@ -494,9 +528,10 @@ export async function scanApps(): Promise<void> {
               type: proc.type, instances: proc.instances,
               memory_in_mb: proc.memory_in_mb, disk_in_mb: proc.disk_in_mb,
             } : undefined,
-            aod: existingAod,
-            urls: routesByApp.get(app.guid) ?? [],
+            aod:         existingAod,
+            urls:        routesByApp.get(app.guid) ?? [],
             lastUpdated: now,
+            ...(existingLastAccessed !== undefined ? { lastAccessed: existingLastAccessed } : {}),
           };
 
           await writeFile(join(dir, `${app.guid}.json`), JSON.stringify(appFile, null, 2), 'utf-8');
@@ -544,6 +579,7 @@ export async function scanApps(): Promise<void> {
     await Promise.all([appendStatsFile('stats.csv', allRow), appendStatsFile('aod-stats.csv', aodRow)]);
 
     logger.info({ totalStarted, totalStopped, sumStartedMB, sumStoppedMB, aodStarted, aodStopped }, 'AOD apps scan complete');
+    await autoStopUnusedAodApps();
     await doRefreshTopAppsCache();
     emitImmediate('aod-apps', { type: 'refresh-done', ts: Date.now(), allStats: allRow, aodStats: aodRow });
   } catch (err) {
@@ -622,10 +658,12 @@ export async function scanSubaccountApps(region: string, subdomain: string): Pro
     const existing = existingBySpace.get(app.relationships.space.data.guid);
     const isNew = !existing?.has(app.guid);
 
-    let existingAod = false;
+    let existingAod          = false;
+    let existingLastAccessed: number | undefined;
     try {
-      const raw = JSON.parse(await readFile(join(dir, `${app.guid}.json`), 'utf-8')) as AppFile;
-      existingAod = raw.aod ?? false;
+      const raw        = JSON.parse(await readFile(join(dir, `${app.guid}.json`), 'utf-8')) as AppFile;
+      existingAod      = raw.aod ?? false;
+      existingLastAccessed = (raw as AppFileData).lastAccessed;
     } catch { /* new file */ }
 
     const proc = processMap.get(app.guid);
@@ -633,9 +671,10 @@ export async function scanSubaccountApps(region: string, subdomain: string): Pro
       guid: app.guid, name: app.name, state: app.state,
       spaceGuid: app.relationships.space.data.guid, region, subdomain, spaceName,
       process: proc ? { type: proc.type, instances: proc.instances, memory_in_mb: proc.memory_in_mb, disk_in_mb: proc.disk_in_mb } : undefined,
-      aod: existingAod,
-      urls: routesByApp.get(app.guid) ?? [],
+      aod:         existingAod,
+      urls:        routesByApp.get(app.guid) ?? [],
       lastUpdated: now,
+      ...(existingLastAccessed !== undefined ? { lastAccessed: existingLastAccessed } : {}),
     };
 
     await writeFile(join(dir, `${app.guid}.json`), JSON.stringify(appFile, null, 2), 'utf-8');
@@ -659,27 +698,67 @@ export async function scanSubaccountApps(region: string, subdomain: string): Pro
   }
 
   invalidateTopAppsCache();
+  await autoStopUnusedAodApps();
   logger.info({ region, subdomain, updated, created, deleted }, 'AOD: per-subaccount scan complete');
   return { updated, created, deleted };
+}
+
+// ─── Auto-stop unused AOD apps ────────────────────────────────────────────────
+
+export async function autoStopUnusedAodApps(): Promise<void> {
+  const stopAfterHrs = getStopAppsUnusedAfterHrs();
+  if (!stopAfterHrs || stopAfterHrs <= 0) return;
+
+  const now        = Math.floor(Date.now() / 1000);
+  const cutoff     = now - stopAfterHrs * 3600;
+
+  let regions: string[];
+  try { regions = await readdir(APPS_DIR); } catch { return; }
+
+  for (const region of regions) {
+    let subdomains: string[];
+    try { subdomains = await readdir(join(APPS_DIR, region)); } catch { continue; }
+    for (const subdomain of subdomains) {
+      let spaceFolders: string[];
+      try { spaceFolders = await readdir(join(APPS_DIR, region, subdomain)); } catch { continue; }
+      for (const spaceFolder of spaceFolders) {
+        const spaceDir = join(APPS_DIR, region, subdomain, spaceFolder);
+        let files: string[];
+        try { files = await readdir(spaceDir); } catch { continue; }
+        for (const file of files) {
+          if (!file.endsWith('.json') || file.endsWith('.deleted.json')) continue;
+          const filePath = join(spaceDir, file);
+          try {
+            const raw = await readFile(filePath, 'utf-8');
+            const app = JSON.parse(raw) as AppFileData;
+            if (!app.aod || app.state !== 'STARTED') continue;
+            if (!app.lastAccessed || app.lastAccessed > cutoff) continue;
+            logger.info({ region, subdomain, spaceName: app.spaceName, guid: app.guid, name: app.name },
+              `stopping unused app ${region}/${subdomain}/${app.spaceName}/${app.guid}.${app.name}`);
+            try {
+              await stopCfApp(region, app.guid);
+              app.state = 'STOPPED';
+              await writeFile(filePath, JSON.stringify(app, null, 2), 'utf-8');
+            } catch (stopErr) {
+              logger.warn({ err: stopErr, region, subdomain, guid: app.guid }, 'AOD: failed to stop unused app');
+            }
+          } catch { /* skip corrupted file */ }
+        }
+      }
+    }
+  }
 }
 
 // ─── Scheduler ───────────────────────────────────────────────────────────────
 
 export function startAppsScheduler(): void {
   stopAppsScheduler();
-  void (async () => {
-    try {
-      const aodConfig = await readAodConfig();
-      const hrs       = aodConfig.refreshAppsIntervalHrs ?? 0;
-      if (!hrs || hrs <= 0) return;
-      const ms = hrs * 3_600_000;
-      schedulerTimer = setInterval(() => { void scanApps(); }, ms);
-      if (schedulerTimer.unref) schedulerTimer.unref();
-      logger.info({ hrs }, 'AOD apps auto-refresh scheduled');
-    } catch (err) {
-      logger.warn({ err }, 'AOD apps scheduler init failed');
-    }
-  })();
+  const hrs = getRefreshAppsIntervalHrs();
+  if (!hrs || hrs <= 0) return;
+  const ms = hrs * 3_600_000;
+  schedulerTimer = setInterval(() => { void scanApps(); }, ms);
+  if (schedulerTimer.unref) schedulerTimer.unref();
+  logger.info({ hrs }, 'AOD apps auto-refresh scheduled');
 }
 
 export function stopAppsScheduler(): void {

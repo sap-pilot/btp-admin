@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { MapContainer, GeoJSON, Marker } from 'react-leaflet';
 import L from 'leaflet';
 import type { Feature, FeatureCollection, GeoJsonObject, Geometry } from 'geojson';
@@ -99,6 +99,8 @@ function choroplethOpacity(count: number, maxCount: number): number {
   return 0.7 + Math.pow(count / maxCount, 0.4) * 0.2;
 }
 
+const LS_ZORDER_KEY = 'btp-worldmap-zorder';
+
 interface Props {
   cities:         CityPoint[];
   isDark?:        boolean;
@@ -108,6 +110,24 @@ interface Props {
 
 export default function WorldMap({ cities, isDark, selectedCity, onCityClick }: Props) {
   const [world, setWorld] = useState<GeoJsonObject | null>(null);
+
+  // Persist click-to-front ordering across refreshes via localStorage.
+  // Array is front-first: index 0 = highest z-index.
+  const [cityZOrder, setCityZOrder] = useState<string[]>(() => {
+    try {
+      const stored = localStorage.getItem(LS_ZORDER_KEY);
+      return stored ? (JSON.parse(stored) as string[]) : [];
+    } catch { return []; }
+  });
+
+  const handleCityClick = useCallback((key: string) => {
+    setCityZOrder(prev => {
+      const next = [key, ...prev.filter(k => k !== key)];
+      try { localStorage.setItem(LS_ZORDER_KEY, JSON.stringify(next)); } catch { /* storage full / private mode */ }
+      return next;
+    });
+    onCityClick?.(key);
+  }, [onCityClick]);
 
   useEffect(() => { void loadWorld().then(setWorld); }, []);
 
@@ -173,6 +193,10 @@ export default function WorldMap({ cities, isDark, selectedCity, onCityClick }: 
           const cursor    = clickable ? 'pointer' : 'default';
           const reqColor  = active ? '#fff' : '#86efac';
 
+          // z-index: front-of-stack = highest offset; unranked markers sit at 0
+          const zOrderIdx   = cityZOrder.indexOf(key);
+          const zOffset     = zOrderIdx === -1 ? 0 : (cityZOrder.length - zOrderIdx) * 10;
+
           const icon = L.divIcon({
             className: '',
             iconSize:   [0, 0],
@@ -195,7 +219,8 @@ export default function WorldMap({ cities, isDark, selectedCity, onCityClick }: 
               position={[city.lat, city.lon]}
               icon={icon}
               interactive={clickable}
-              eventHandlers={clickable ? { click: () => onCityClick(key) } : undefined}
+              zIndexOffset={zOffset}
+              eventHandlers={clickable ? { click: () => handleCityClick(key) } : undefined}
             />
           );
         })}

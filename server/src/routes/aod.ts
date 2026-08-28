@@ -1,5 +1,5 @@
 import { appendFile, mkdir, rename, stat } from 'node:fs/promises';
-import { touchAppLastAccessed } from '../services/appService.js';
+import { touchAppLastAccessed, updateAppFileState } from '../services/appService.js';
 import { getAnalytics, recordAodRequest } from '../services/aodAnalyticsService.js';
 import { join } from 'node:path';
 import type { Request, Response, NextFunction } from 'express';
@@ -286,6 +286,7 @@ export async function aodProxyHandler(req: Request, res: Response, next: NextFun
         return;
       }
       logger.info({ appUrl, appId, region, subdomain, startupMs }, 'AOD: app was stopped — started and became responsive');
+      void updateAppFileState(appId, region, subdomain, 'STARTED');
     }
 
     // Build proxy headers — strip host and x-aod-* headers

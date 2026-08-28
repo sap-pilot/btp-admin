@@ -177,3 +177,40 @@ export function getAutoGlobalRefreshMs(): number {
   }
   return 6 * 3_600_000; // default 6 hours
 }
+
+/**
+ * AOD apps auto-refresh interval in hours.
+ * REFRESH_APPS_INTERVAL_HRS env var takes precedence over config.json->variables entry.
+ * Falls back to config.json->aod.refreshAppsIntervalHrs for backward compat.
+ * Default: 6 hours. Set to 0 to disable.
+ */
+export function getRefreshAppsIntervalHrs(): number {
+  const raw =
+    process.env.REFRESH_APPS_INTERVAL_HRS ??
+    getConfig().variables?.['REFRESH_APPS_INTERVAL_HRS'];
+  if (raw !== undefined && raw !== '') {
+    const n = parseFloat(raw);
+    return (!isNaN(n) && n >= 0) ? n : 0;
+  }
+  // backward compat: config.json->aod.refreshAppsIntervalHrs
+  const legacy = (getConfig() as unknown as { aod?: { refreshAppsIntervalHrs?: number } }).aod?.refreshAppsIntervalHrs;
+  return typeof legacy === 'number' && legacy >= 0 ? legacy : 6;
+}
+
+/**
+ * Automatically stop AOD apps unused for this many hours.
+ * STOP_APPS_UNUSED_AFTER_HRS env var takes precedence over config.json->variables entry.
+ * Falls back to config.json->aod.stopAppsUnusedAfterHrs for backward compat.
+ * Default: 120 hours. Set to 0 to disable auto-stop.
+ */
+export function getStopAppsUnusedAfterHrs(): number {
+  const raw =
+    process.env.STOP_APPS_UNUSED_AFTER_HRS ??
+    getConfig().variables?.['STOP_APPS_UNUSED_AFTER_HRS'];
+  if (raw !== undefined && raw !== '') {
+    const n = parseFloat(raw);
+    return (!isNaN(n) && n >= 0) ? n : 0;
+  }
+  const legacy = (getConfig() as unknown as { aod?: { stopAppsUnusedAfterHrs?: number } }).aod?.stopAppsUnusedAfterHrs;
+  return typeof legacy === 'number' && legacy >= 0 ? legacy : 120;
+}

@@ -10,7 +10,7 @@ import { getOrRefreshToken, fetchWithRateLimit } from './cfLoginService.js';
 import { getRestrictedIds, getAutoSubaccountRefreshMs } from './configService.js';
 import { readSubaccounts, type SubaccountEntry } from './subaccountsService.js';
 import { readAodConfig, type AodConfig } from './aodConfigService.js';
-import { updateAppFileAod } from './appService.js';
+import { updateAppFileAod, initAppLastAccessedIfEmpty } from './appService.js';
 import { notifyCallbacks, registerOnDestChangelogSynced, registerOnDestSynced } from './syncService.js';
 import { emit, emitImmediate } from './liveEvents.js';
 
@@ -1889,6 +1889,8 @@ export async function refreshSpaceDestinations(
               ? String(updated['URL.headers.x-aod-app-url'] ?? '')
               : String(updated['URL'] ?? '');
             void updateAppFileAod(appGuid, inst.region, inst.subdomain, destUrl, aodInstalled);
+            // Ensure lastAccessed is set when AOD is newly installed (assume accessed now)
+            if (aodInstalled) void initAppLastAccessedIfEmpty(appGuid, inst.region, inst.subdomain);
             // Write AOD-specific changelog entries
             const wasAod    = 'URL.headers.x-aod-app-url' in dest;
             const isAod     = 'URL.headers.x-aod-app-url' in updated;
