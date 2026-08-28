@@ -10,7 +10,7 @@ import { getOrRefreshToken, fetchWithRateLimit } from './cfLoginService.js';
 import { getRestrictedIds, getAutoSubaccountRefreshMs } from './configService.js';
 import { readSubaccounts, type SubaccountEntry } from './subaccountsService.js';
 import { readAodConfig, type AodConfig } from './aodConfigService.js';
-import { updateAppFileAod } from './aodAppsService.js';
+import { updateAppFileAod } from './appService.js';
 import { notifyCallbacks, registerOnDestChangelogSynced, registerOnDestSynced } from './syncService.js';
 import { emit, emitImmediate } from './liveEvents.js';
 

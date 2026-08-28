@@ -194,7 +194,7 @@ export default function SubaccountAppsModal({
   useEffect(() => {
     setSaRefreshResult(null);
     setLoading(true);
-    fetch(`/api/aod/apps/subaccount?region=${encodeURIComponent(region)}&subdomain=${encodeURIComponent(subdomain)}`)
+    fetch(`/api/apps/subaccount?region=${encodeURIComponent(region)}&subdomain=${encodeURIComponent(subdomain)}`)
       .then(r => r.json() as Promise<{ ok: boolean; data: AppFileData[] }>)
       .then(d => {
         if (!d.ok) return;
@@ -219,12 +219,12 @@ export default function SubaccountAppsModal({
     setSaRefreshing(true);
     setSaRefreshResult(null);
     try {
-      const res  = await fetch(`/api/aod/apps/refresh-subaccount?region=${encodeURIComponent(region)}&subdomain=${encodeURIComponent(subdomain)}`, { method: 'POST' });
+      const res  = await fetch(`/api/apps/refresh-subaccount?region=${encodeURIComponent(region)}&subdomain=${encodeURIComponent(subdomain)}`, { method: 'POST' });
       const data = await res.json() as { ok: boolean; updated: number; created: number; deleted: number };
       if (data.ok) {
         setSaRefreshResult({ updated: data.updated, created: data.created, deleted: data.deleted });
         // Reload apps list
-        const appsRes  = await fetch(`/api/aod/apps/subaccount?region=${encodeURIComponent(region)}&subdomain=${encodeURIComponent(subdomain)}`);
+        const appsRes  = await fetch(`/api/apps/subaccount?region=${encodeURIComponent(region)}&subdomain=${encodeURIComponent(subdomain)}`);
         const appsData = await appsRes.json() as { ok: boolean; data: AppFileData[] };
         if (appsData.ok) setApps(appsData.data);
       }
@@ -286,7 +286,7 @@ export default function SubaccountAppsModal({
     setAppActionLoading(action);
     setAppActionError(null);
     try {
-      const res  = await fetch(`/api/aod/apps/${selectedApp.guid}/${action}?region=${encodeURIComponent(region)}&subdomain=${encodeURIComponent(subdomain)}`, { method: 'POST' });
+      const res  = await fetch(`/api/apps/${selectedApp.guid}/${action}?region=${encodeURIComponent(region)}&subdomain=${encodeURIComponent(subdomain)}`, { method: 'POST' });
       const data = await res.json() as { ok: boolean; error?: string };
       if (!data.ok) { setAppActionError(data.error ?? `Failed to ${action} app`); return; }
       // Optimistically update local state

@@ -70,7 +70,7 @@ export default function App() {
               <Route path="/status/:name" element={<StatusHistory />} />
               <Route path="/home" element={<HomePage />} />
               <Route path="/home/:tab" element={<HomePage />} />
-              <Route path="/apps" element={<Navigate to="/apps/all" replace />} />
+              <Route path="/apps" element={<AppsPage />} />
               <Route path="/apps/:view" element={<AppsPage />} />
               <Route path="/destinations" element={<DestinationOverview />} />
               <Route path="/destinations/:tab" element={<DestinationOverview />} />

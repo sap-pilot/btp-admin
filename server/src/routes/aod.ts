@@ -1,5 +1,5 @@
 import { appendFile, mkdir, rename, stat } from 'node:fs/promises';
-import { scanApps, getStatsData, getLatestStats, isRefreshRunning, getTopAppsPerSubaccount, getCachedTopApps, getSubaccountApps, searchApps, updateAppFileState, refreshTopAppsAndNotify, scanSubaccountApps } from '../services/aodAppsService.js';
+import { touchAppLastAccessed } from '../services/appService.js';
 import { getAnalytics, recordAodRequest } from '../services/aodAnalyticsService.js';
 import { join } from 'node:path';
 import type { Request, Response, NextFunction } from 'express';
@@ -30,113 +30,7 @@ router.post('/config/save', requireAdmin, async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-// ─── Apps endpoints (/api/aod/apps) ──────────────────────────────────────────
-
-router.get('/apps/status', requireAdmin, (_req, res) => {
-  res.json({ ok: true, refreshing: isRefreshRunning() });
-});
-
-router.post('/apps/refresh', requireAdmin, (_req, res) => {
-  if (isRefreshRunning()) {
-    res.json({ ok: false, error: 'already running' });
-    return;
-  }
-  void scanApps();
-  res.json({ ok: true, started: true });
-});
-
-router.get('/apps/top', requireAdmin, async (_req, res, next) => {
-  try {
-    const data = getCachedTopApps().length > 0 ? getCachedTopApps() : await getTopAppsPerSubaccount();
-    res.json({ ok: true, data });
-  } catch (err) { next(err); }
-});
-
-router.get('/apps/subaccount', requireAdmin, async (req, res, next) => {
-  try {
-    const region    = typeof req.query['region']    === 'string' ? req.query['region']    : '';
-    const subdomain = typeof req.query['subdomain'] === 'string' ? req.query['subdomain'] : '';
-    if (!region || !subdomain) { res.status(400).json({ ok: false, error: 'region and subdomain required' }); return; }
-    const data = await getSubaccountApps(region, subdomain);
-    res.json({ ok: true, data });
-  } catch (err) { next(err); }
-});
-
-router.post('/apps/refresh-subaccount', requireAdmin, async (req, res, next) => {
-  try {
-    const region    = typeof req.query['region']    === 'string' ? req.query['region']    : '';
-    const subdomain = typeof req.query['subdomain'] === 'string' ? req.query['subdomain'] : '';
-    if (!region || !subdomain) { res.status(400).json({ ok: false, error: 'region and subdomain required' }); return; }
-    const result = await scanSubaccountApps(region, subdomain);
-    res.json({ ok: true, ...result });
-  } catch (err) { next(err); }
-});
-
-router.get('/apps/search', requireAdmin, async (req, res, next) => {
-  try {
-    const q = typeof req.query['q'] === 'string' ? req.query['q'].trim() : '';
-    if (q.length < 2) { res.json({ ok: true, data: [] }); return; }
-    const data = await searchApps(q);
-    res.json({ ok: true, data });
-  } catch (err) { next(err); }
-});
-
-router.get('/apps/stats', requireAdmin, async (req, res, next) => {
-  try {
-    const nowSecs  = Math.floor(Date.now() / 1000);
-    const from     = typeof req.query['from'] === 'string' ? Number(req.query['from']) : nowSecs - 86400;
-    const to       = typeof req.query['to']   === 'string' ? Number(req.query['to'])   : nowSecs;
-    const aodOnly  = req.query['aod'] === '1';
-    const [data, latest] = await Promise.all([getStatsData(from, to, aodOnly), getLatestStats(aodOnly)]);
-    res.json({ ok: true, data, latest });
-  } catch (err) { next(err); }
-});
-
-router.post('/apps/:guid/start', requireAdmin, async (req, res, next) => {
-  try {
-    const guid      = typeof req.params['guid']      === 'string' ? req.params['guid']      : '';
-    const region    = typeof req.query['region']     === 'string' ? req.query['region']     : '';
-    const subdomain = typeof req.query['subdomain']  === 'string' ? req.query['subdomain']  : '';
-    if (!guid || !region) { res.status(400).json({ ok: false, error: 'guid and region required' }); return; }
-    const token  = await getOrRefreshToken(region);
-    const cfRes  = await fetch(`${token.api_url}/v3/apps/${guid}/actions/start`, {
-      method: 'POST',
-      headers: { Authorization: `${token.token_type} ${token.access_token}`, 'Content-Type': 'application/json' },
-    });
-    if (!cfRes.ok) {
-      const text = await cfRes.text().catch(() => '');
-      res.status(502).json({ ok: false, error: `CF ${cfRes.status}: ${text.slice(0, 200)}` });
-      return;
-    }
-    logger.info({ guid, region }, 'AOD: app started via UI');
-    res.json({ ok: true });
-    if (subdomain) void updateAppFileState(guid, region, subdomain, 'STARTED').then(() => refreshTopAppsAndNotify());
-  } catch (err) { next(err); }
-});
-
-router.post('/apps/:guid/stop', requireAdmin, async (req, res, next) => {
-  try {
-    const guid      = typeof req.params['guid']      === 'string' ? req.params['guid']      : '';
-    const region    = typeof req.query['region']     === 'string' ? req.query['region']     : '';
-    const subdomain = typeof req.query['subdomain']  === 'string' ? req.query['subdomain']  : '';
-    if (!guid || !region) { res.status(400).json({ ok: false, error: 'guid and region required' }); return; }
-    const token  = await getOrRefreshToken(region);
-    const cfRes  = await fetch(`${token.api_url}/v3/apps/${guid}/actions/stop`, {
-      method: 'POST',
-      headers: { Authorization: `${token.token_type} ${token.access_token}`, 'Content-Type': 'application/json' },
-    });
-    if (!cfRes.ok) {
-      const text = await cfRes.text().catch(() => '');
-      res.status(502).json({ ok: false, error: `CF ${cfRes.status}: ${text.slice(0, 200)}` });
-      return;
-    }
-    logger.info({ guid, region }, 'AOD: app stopped via UI');
-    res.json({ ok: true });
-    if (subdomain) void updateAppFileState(guid, region, subdomain, 'STOPPED').then(() => refreshTopAppsAndNotify());
-  } catch (err) { next(err); }
-});
-
-// ─── Analytics ───────────────────────────────────────────────────────────────
+// ─── Analytics (/api/aod/analytics) ──────────────────────────────────────────
 
 router.get('/analytics', async (req, res, next) => {
   try {
@@ -365,10 +259,12 @@ export async function aodProxyHandler(req: Request, res: Response, next: NextFun
       startupMs     = Date.now() - t1;
       if (outcome === 'timeout') {
         logger.warn({ appUrl, appId, region, subdomain, startupMs }, 'AOD: app did not become responsive before timeout');
-        const totalMs = Date.now() - t0;
-        const geo     = await geoPromise;
-        void appendCsvLog(region, subdomain, Math.floor(t0 / 1000), appUrl, appId, clientIp, geo.city, geo.lat, geo.lon, userId, startupMs, totalMs);
-        recordAodRequest({ region, subdomain, appId, userId, city: geo.city, lat: geo.lat, lon: geo.lon, ts: Math.floor(t0 / 1000) });
+        const totalMs  = Date.now() - t0;
+        const timeoutTs = Math.floor(t0 / 1000);
+        const geo       = await geoPromise;
+        void appendCsvLog(region, subdomain, timeoutTs, appUrl, appId, clientIp, geo.city, geo.lat, geo.lon, userId, startupMs, totalMs);
+        recordAodRequest({ region, subdomain, appId, userId, city: geo.city, lat: geo.lat, lon: geo.lon, ts: timeoutTs });
+        void touchAppLastAccessed(appId, region, subdomain, timeoutTs);
         res.status(503).json({ ok: false, error: 'App did not start within timeout' });
         return;
       }
@@ -403,9 +299,11 @@ export async function aodProxyHandler(req: Request, res: Response, next: NextFun
     const upBuf = await upstream.arrayBuffer();
     res.end(Buffer.from(upBuf));
 
-    // Write access log + fire analytics event after response is sent (non-blocking)
-    void appendCsvLog(region, subdomain, Math.floor(t0 / 1000), appUrl, appId, clientIp, geo.city, geo.lat, geo.lon, userId, startupMs, totalMs);
-    recordAodRequest({ region, subdomain, appId, userId, city: geo.city, lat: geo.lat, lon: geo.lon, ts: Math.floor(t0 / 1000) });
+    // Write access log + fire analytics event + touch lastAccessed — all non-blocking
+    const reqTs = Math.floor(t0 / 1000);
+    void appendCsvLog(region, subdomain, reqTs, appUrl, appId, clientIp, geo.city, geo.lat, geo.lon, userId, startupMs, totalMs);
+    recordAodRequest({ region, subdomain, appId, userId, city: geo.city, lat: geo.lat, lon: geo.lon, ts: reqTs });
+    void touchAppLastAccessed(appId, region, subdomain, reqTs);
   } catch (err) {
     logger.error({ err, appUrl, targetUrl }, 'AOD proxy error');
     next(err);

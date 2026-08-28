@@ -2,7 +2,7 @@ import { readdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { config } from '../config.js';
 import { readSubaccounts } from './subaccountsService.js';
-import { getLatestStats } from './aodAppsService.js';
+import { getLatestStats } from './appService.js';
 import { emitImmediate } from './liveEvents.js';
 import { logger } from '../logger.js';
 
@@ -15,15 +15,17 @@ export interface AnalyticsRequest { ts: number; region: string; alias: string; s
 export interface SubaccountAccess { region: string; subdomain: string; alias: string; appName: string; spaceName: string; lastAccessTs: number; appGuid?: string; }
 
 export interface AnalyticsPayload {
-  totalRequests:    number;
-  uniqueUsers:      number;
-  startedAppsGb:    number;
-  startedAppsCount: number;
-  lastUpdated:      number;
-  duration:         number;
-  cities:           AnalyticsCity[];
-  latestRequests:   AnalyticsRequest[];
-  subaccountAccess: SubaccountAccess[];
+  totalRequests:      number;
+  uniqueUsers:        number;
+  startedAppsGb:      number;
+  startedAppsCount:   number;
+  requestedAppsCount: number;
+  latestRequestTs:    number;
+  lastUpdated:        number;
+  duration:           number;
+  cities:             AnalyticsCity[];
+  latestRequests:     AnalyticsRequest[];
+  subaccountAccess:   SubaccountAccess[];
 }
 
 // ─── Caches ───────────────────────────────────────────────────────────────────
@@ -36,6 +38,11 @@ const CACHE_TTL  = 30_000;
 let aliasCache: TimedMap<string> | null = null;
 const appMapCache = new Map<string, TimedMap<{ name: string; spaceName: string }>>();
 const analyticsCache = new Map<number, { payload: AnalyticsPayload; ts: number }>();
+
+// In-memory request log — populated at startup from all accesslog.csv files, updated on each AOD request
+interface RequestEntry { ts: number; appKey: string; }
+let requestLog: RequestEntry[] = [];
+let globalLatestTs = 0;
 
 function invalidateCache(): void { analyticsCache.clear(); }
 
@@ -81,14 +88,21 @@ async function getAppMap(region: string, subdomain: string): Promise<Map<string,
   if (cached && Date.now() - cached.ts < APPMAP_TTL) return cached.map;
   const map = new Map<string, { name: string; spaceName: string }>();
   try {
-    const dir   = join(AOD_APPS_DIR, region, subdomain);
-    const files = await readdir(dir);
-    for (const f of files) {
-      if (!f.endsWith('.json') || f.includes('.deleted')) continue;
+    const saDir = join(AOD_APPS_DIR, region, subdomain);
+    // App JSON files are nested: saDir/{spaceName}/{appGuid}.json
+    const spaceFolders = await readdir(saDir);
+    for (const spaceFolder of spaceFolders) {
       try {
-        const d = JSON.parse(await readFile(join(dir, f), 'utf-8')) as { guid?: string; name?: string; spaceName?: string };
-        if (d.guid) map.set(d.guid, { name: d.name ?? '', spaceName: d.spaceName ?? '' });
-      } catch { /* skip */ }
+        const spaceDir = join(saDir, spaceFolder);
+        const files    = await readdir(spaceDir);
+        for (const f of files) {
+          if (!f.endsWith('.json') || f.includes('.deleted')) continue;
+          try {
+            const d = JSON.parse(await readFile(join(spaceDir, f), 'utf-8')) as { guid?: string; name?: string; spaceName?: string };
+            if (d.guid) map.set(d.guid, { name: d.name ?? '', spaceName: d.spaceName ?? '' });
+          } catch { /* skip corrupted */ }
+        }
+      } catch { /* skip non-directory entries */ }
     }
   } catch { /* dir may not exist */ }
   appMapCache.set(key, { map, ts: Date.now() });
@@ -147,6 +161,57 @@ async function readAccessLogs(durationHours: number): Promise<RawRow[]> {
 
 // ─── Public API ───────────────────────────────────────────────────────────────
 
+// Scans all accesslog.csv files at startup to build the in-memory request log.
+// Called once from index.ts; subsequent updates come via recordAodRequest.
+export async function initRequestLog(): Promise<void> {
+  let regions: string[];
+  try { regions = await readdir(AOD_APPS_DIR); } catch { return; }
+
+  const perSaAppMaps = new Map<string, Map<string, { name: string; spaceName: string }>>();
+  const entries: RequestEntry[] = [];
+  let latestTs = 0;
+
+  for (const region of regions) {
+    let subdomains: string[];
+    try { subdomains = await readdir(join(AOD_APPS_DIR, region)); } catch { continue; }
+    for (const subdomain of subdomains) {
+      const csvPath = join(AOD_APPS_DIR, region, subdomain, 'accesslog.csv');
+      let content: string;
+      try { content = await readFile(csvPath, 'utf-8'); } catch { continue; }
+
+      const saKey = `${region}/${subdomain}`;
+      let am = perSaAppMaps.get(saKey);
+      if (!am) { am = await getAppMap(region, subdomain); perSaAppMaps.set(saKey, am); }
+
+      const lines = content.split('\n');
+      let parsed = false;
+      const idx: Record<string, number> = {};
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed) continue;
+        if (!parsed) {
+          parseCsvLine(trimmed).forEach((f, i) => { idx[f] = i; });
+          parsed = true;
+          continue;
+        }
+        const fields = parseCsvLine(trimmed);
+        if (fields.length < 2) continue;
+        const ts = Number(fields[idx['requestTime'] ?? 0] ?? 0);
+        if (!ts) continue;
+        const appId  = fields[idx['appId'] ?? 2] ?? '';
+        const meta   = am.get(appId);
+        const appKey = `${region}/${subdomain}/${meta?.spaceName ?? ''}/${meta?.name ?? appId}`;
+        entries.push({ ts, appKey });
+        if (ts > latestTs) latestTs = ts;
+      }
+    }
+  }
+
+  requestLog      = entries;
+  globalLatestTs  = latestTs;
+  logger.info({ entries: entries.length, latestTs }, 'analytics: request log initialized');
+}
+
 export async function getAnalytics(durationHours: number): Promise<AnalyticsPayload> {
   const hit = analyticsCache.get(durationHours);
   if (hit && Date.now() - hit.ts < CACHE_TTL) return hit.payload;
@@ -201,14 +266,19 @@ export async function getAnalytics(durationHours: number): Promise<AnalyticsPayl
   );
   subaccountAccess.sort((a, b) => b.lastAccessTs - a.lastAccessTs);
 
+  const cutoffSecs = Math.floor(Date.now() / 1000) - durationHours * 3600;
+  const requestedAppsSet = new Set(requestLog.filter(e => e.ts >= cutoffSecs).map(e => e.appKey));
+
   const payload: AnalyticsPayload = {
-    totalRequests:    rows.length,
-    uniqueUsers:      userSet.size,
-    startedAppsGb:    latestStats ? Math.round(latestStats.sumStartedMB / 1024 * 10) / 10 : 0,
-    startedAppsCount: latestStats?.startedApps ?? 0,
-    lastUpdated:      Date.now(),
-    duration:         durationHours,
-    cities:           [...cityMap.values()].sort((a, b) => b.count - a.count),
+    totalRequests:      rows.length,
+    uniqueUsers:        userSet.size,
+    startedAppsGb:      latestStats ? Math.round(latestStats.sumStartedMB / 1024 * 10) / 10 : 0,
+    startedAppsCount:   latestStats?.startedApps ?? 0,
+    requestedAppsCount: requestedAppsSet.size,
+    latestRequestTs:    globalLatestTs,
+    lastUpdated:        Date.now(),
+    duration:           durationHours,
+    cities:             [...cityMap.values()].sort((a, b) => b.count - a.count),
     latestRequests,
     subaccountAccess,
   };
@@ -243,11 +313,17 @@ export function recordAodRequest(data: {
         appGuid:   data.appId,
       };
 
+      // Update in-memory request log
+      const appKey = `${data.region}/${data.subdomain}/${meta?.spaceName ?? ''}/${meta?.name ?? data.appId}`;
+      requestLog.push({ ts: data.ts, appKey });
+      if (data.ts > globalLatestTs) globalLatestTs = data.ts;
+
       // Incrementally update every cached payload — the new request is always within any window
       for (const entry of analyticsCache.values()) {
         const p = entry.payload;
         p.totalRequests++;
-        p.lastUpdated = Date.now();
+        p.lastUpdated    = Date.now();
+        p.latestRequestTs = globalLatestTs;
 
         if (hasGeo && geoKey) {
           const c = p.cities.find(x => `${x.lat.toFixed(2)},${x.lon.toFixed(2)}` === geoKey);

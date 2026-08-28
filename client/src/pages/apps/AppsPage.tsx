@@ -23,7 +23,7 @@ type DurationMode =
   | { mode: 'days'; days: 1 | 2 | 3 | 7 }
   | { mode: 'dateRange'; fromDate: string; untilDate: string };
 
-type ViewMode = 'all' | 'aod' | 'analytics';
+type ViewMode = 'all' | 'analytics';
 
 interface SseMsg {
   type:      string;
@@ -32,14 +32,17 @@ interface SseMsg {
   region?:   string;
   error?:    boolean | string;
   allStats?: StatsRow | null;
-  aodStats?: StatsRow | null;
+  request?:  { region: string; subdomain: string; appGuid?: string; ts: number };
 }
 
 interface AppTopEntry {
-  guid:      string;
-  name:      string;
-  spaceName: string;
-  memoryMB:  number;
+  guid:          string;
+  name:          string;
+  spaceName:     string;
+  memoryMB:      number;
+  state?:        string;
+  aod?:          boolean;
+  lastAccessed?: number;
 }
 
 interface SubaccountTopApps {
@@ -71,7 +74,7 @@ function parseDuration(search: string): DurationMode {
   }
   const d = Number(p.get('days'));
   if (VALID_DAYS.has(d)) return { mode: 'days', days: d as 1 | 2 | 3 | 7 };
-  return { mode: 'days', days: 3 };
+  return { mode: 'days', days: 1 };
 }
 
 function buildSearch(dur: DurationMode): string {
@@ -105,6 +108,12 @@ function durationToRange(dur: DurationMode): { fromSecs: number; toSecs: number 
     fromSecs: Math.floor(new Date(fy!, fm! - 1, fd!, 0, 0, 0).getTime() / 1000),
     toSecs:   Math.floor(new Date(uy!, um! - 1, ud!, 23, 59, 59).getTime() / 1000),
   };
+}
+
+function durationToHours(dur: DurationMode): number {
+  if (dur.mode === 'days') return dur.days * 24;
+  const r = durationToRange(dur);
+  return Math.ceil((r.toSecs - r.fromSecs) / 3600);
 }
 
 function csvIncludes(csv: string, id: string): boolean {
@@ -208,7 +217,7 @@ export default function AppsPage() {
   const location             = useLocation();
   const { toggle }           = useSidebar();
 
-  const viewMode: ViewMode = viewParam === 'aod' ? 'aod' : viewParam === 'analytics' ? 'analytics' : 'all';
+  const viewMode: ViewMode = viewParam === 'analytics' ? 'analytics' : 'all';
   const duration            = parseDuration(location.search);
   const { fromSecs, toSecs } = durationToRange(duration);
 
@@ -235,7 +244,8 @@ export default function AppsPage() {
   // ── Navigation helpers ────────────────────────────────────────────────────
 
   function navigateTo(view: ViewMode, dur: DurationMode) {
-    navigate(`/apps/${view}${buildSearch(dur)}`, { replace: true });
+    const path = view === 'analytics' ? `/apps/analytics${buildSearch(dur)}` : `/apps${buildSearch(dur)}`;
+    navigate(path, { replace: true });
   }
 
   // ── Top apps lookup map ───────────────────────────────────────────────────
@@ -250,17 +260,16 @@ export default function AppsPage() {
 
   const fetchTopApps = useCallback(async () => {
     try {
-      const res  = await fetch('/api/aod/apps/top');
+      const res  = await fetch('/api/apps/top');
       const data = await res.json() as { ok: boolean; data: SubaccountTopApps[] };
       if (data.ok) setTopApps(data.data);
     } catch { /* ignore */ }
   }, []);
 
-  const fetchStats = useCallback(async (from: number, to: number, mode: ViewMode) => {
+  const fetchStats = useCallback(async (from: number, to: number) => {
     setLoadingData(true);
     try {
-      const aodParam = mode === 'aod' ? '&aod=1' : '';
-      const res  = await fetch(`/api/aod/apps/stats?from=${from}&to=${to}${aodParam}`);
+      const res  = await fetch(`/api/apps/stats?from=${from}&to=${to}`);
       const data = await res.json() as { ok: boolean; data: StatsRow[]; latest: StatsRow | null };
       if (data.ok) { setRows(data.data); setLatest(data.latest); }
     } catch { /* ignore */ } finally {
@@ -271,7 +280,7 @@ export default function AppsPage() {
   // ── Initial load ──────────────────────────────────────────────────────────
 
   useEffect(() => {
-    void fetch('/api/aod/apps/status')
+    void fetch('/api/apps/status')
       .then(r => r.json() as Promise<{ ok: boolean; refreshing: boolean }>)
       .then(d => { if (d.ok) setIsRefreshing(d.refreshing); })
       .catch(() => {});
@@ -291,7 +300,7 @@ export default function AppsPage() {
   // ── Re-fetch on duration / viewMode change ────────────────────────────────
 
   useEffect(() => {
-    void fetchStats(fromSecs, toSecs, viewMode);
+    void fetchStats(fromSecs, toSecs);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fromSecs, toSecs, viewMode]);
 
@@ -301,14 +310,14 @@ export default function AppsPage() {
     const es = new EventSource('/api/events?aod=1');
 
     es.addEventListener('connected', () => {
-      void fetch('/api/aod/apps/status')
+      void fetch('/api/apps/status')
         .then(r => r.json() as Promise<{ ok: boolean; refreshing: boolean }>)
         .then(d => {
           if (!d.ok || d.refreshing) return;
           setIsRefreshing(false);
           setProgress(prev => {
             if (prev?.type === 'progress') {
-              void fetchStats(fromSecs, toSecs, viewMode);
+              void fetchStats(fromSecs, toSecs);
               void fetchTopApps();
               return null;
             }
@@ -327,18 +336,27 @@ export default function AppsPage() {
           setProgress({ type: 'progress', current: 0, total: 0 });
         } else if (msg.type === 'refresh-progress') {
           setProgress({ type: 'progress', current: msg.current ?? 0, total: msg.total ?? 1, region: msg.region });
+        } else if (msg.type === 'analytics-update' && msg.request?.appGuid) {
+          const { region, subdomain, appGuid, ts } = msg.request;
+          setTopApps(prev => prev.map(sa => {
+            if (sa.region !== region || sa.subdomain !== subdomain) return sa;
+            const idx = sa.apps.findIndex(a => a.guid === appGuid);
+            if (idx === -1) return sa;
+            const apps = sa.apps.map((a, i) => i === idx ? { ...a, lastAccessed: ts } : a);
+            return { ...sa, apps };
+          }));
         } else if (msg.type === 'app-state-changed') {
           void fetchTopApps();
         } else if (msg.type === 'apps-synced') {
-          void fetchStats(fromSecs, toSecs, viewMode);
+          void fetchStats(fromSecs, toSecs);
           void fetchTopApps();
         } else if (msg.type === 'refresh-done' || msg.type === 'refresh-error') {
           setIsRefreshing(false);
           if (msg.type === 'refresh-done') {
             setProgress(prev => ({ type: 'done', total: prev?.total ?? 0 }));
-            const newLatest = viewMode === 'aod' ? (msg.aodStats ?? null) : (msg.allStats ?? null);
+            const newLatest = msg.allStats ?? null;
             if (newLatest) setLatest(newLatest);
-            void fetchStats(fromSecs, toSecs, viewMode);
+            void fetchStats(fromSecs, toSecs);
             void fetchTopApps();
           } else {
             setProgress({ type: 'error', error: typeof msg.error === 'string' ? msg.error : 'Scan failed' });
@@ -358,7 +376,7 @@ export default function AppsPage() {
     if (isRefreshing) return;
     if (autoHideRef.current) { clearTimeout(autoHideRef.current); autoHideRef.current = null; }
     try {
-      const res  = await fetch('/api/aod/apps/refresh', { method: 'POST' });
+      const res  = await fetch('/api/apps/refresh', { method: 'POST' });
       const data = await res.json() as { ok: boolean; started?: boolean };
       if (data.ok && data.started) { setIsRefreshing(true); setProgress({ type: 'progress', current: 0, total: 0 }); }
     } catch { /* ignore */ }
@@ -372,7 +390,7 @@ export default function AppsPage() {
     setIsSearching(true);
     setCommittedSearch(trimmed);
     try {
-      const res  = await fetch(`/api/aod/apps/search?q=${encodeURIComponent(trimmed)}`);
+      const res  = await fetch(`/api/apps/search?q=${encodeURIComponent(trimmed)}`);
       const data = await res.json() as { ok: boolean; data: SubaccountTopApps[] };
       if (data.ok) setSearchResults(data.data);
     } catch { /* ignore */ } finally {
@@ -430,36 +448,35 @@ export default function AppsPage() {
   const allSas = saData.filter(sa => !sa.restricted);
 
   const isSearchMode   = searchResults !== null;
-  const isAodMode      = viewMode === 'aod';
   const searchMap      = isSearchMode ? makeTopAppsMap(searchResults!) : null;
   const topAppsMap     = makeTopAppsMap(topApps);
 
-  // Map of SA key → set of space names with aod=true (used to filter in AOD mode)
-  const aodSpaceNamesMap = new Map<string, Set<string>>();
-  for (const sa of allSas) {
-    const names = new Set((sa.org?.spaces ?? []).filter(sp => sp.aod).map(sp => sp.spaceName));
-    if (names.size > 0) aodSpaceNamesMap.set(`${sa.region}/${sa.subdomain}`, names);
-  }
-
-  // Returns apps for a SA key, filtered to AOD spaces when in AOD mode
+  // Returns apps for a SA key, filtered/sorted by view mode
   function getApps(key: string): AppTopEntry[] {
     const apps = isSearchMode ? (searchMap!.get(key) ?? []) : (topAppsMap.get(key) ?? []);
-    if (isAodMode) {
-      const aodSpaces = aodSpaceNamesMap.get(key);
-      return aodSpaces ? apps.filter(app => aodSpaces.has(app.spaceName)) : [];
-    }
-    return apps;
+    if (isSearchMode) return apps;
+    // All mode: top 10 started apps by memory
+    return apps.filter(app => app.state === 'STARTED' || app.state === undefined).slice(0, 10);
+  }
+
+  // Analytics mode: top 10 apps sorted by lastAccessed desc
+  function getAnalyticsApps(key: string): AppTopEntry[] {
+    const apps = isSearchMode ? (searchMap!.get(key) ?? []) : (topAppsMap.get(key) ?? []);
+    return [...apps]
+      .filter(app => (app.lastAccessed ?? 0) > 0)
+      .sort((a, b) => (b.lastAccessed ?? 0) - (a.lastAccessed ?? 0))
+      .slice(0, 10);
   }
 
   const visibleTabs = tabEntries.filter(te =>
     te.sections.some(s =>
       s.type === 'subaccountGroup' &&
-      allSas.some(sa => csvIncludes(sa.groupIds, s.groupId) && (!isAodMode || aodSpaceNamesMap.has(`${sa.region}/${sa.subdomain}`))),
+      allSas.some(sa => csvIncludes(sa.groupIds, s.groupId)),
     ),
   );
 
-  // In search mode, only show tabs that have at least one SA with matches (respecting AOD filter)
-  const tabsWithMatches: Set<string> | null = isSearchMode
+  // In search mode, show only tabs that have at least one SA with matching apps
+  const tabsWithContent: Set<string> | null = isSearchMode
     ? new Set(visibleTabs
         .filter(te => te.sections
           .filter((s): s is Extract<TabSection, { type: 'subaccountGroup' }> => s.type === 'subaccountGroup')
@@ -471,9 +488,20 @@ export default function AppsPage() {
         .map(te => te.tab))
     : null;
 
-  const displayedTabs = tabsWithMatches ? visibleTabs.filter(te => tabsWithMatches.has(te.tab)) : visibleTabs;
+  const displayedTabs = tabsWithContent ? visibleTabs.filter(te => tabsWithContent.has(te.tab)) : visibleTabs;
 
   const activeTabEntry = displayedTabs.find(te => te.tab === activeTab) ?? displayedTabs[0];
+
+  // Analytics view: only show tabs/groups/SAs that have at least one app with a lastAccessed timestamp
+  const analyticsDisplayedTabs = visibleTabs.filter(te =>
+    te.sections
+      .filter((s): s is Extract<TabSection, { type: 'subaccountGroup' }> => s.type === 'subaccountGroup')
+      .some(grp => allSas
+        .filter(sa => csvIncludes(sa.groupIds, grp.groupId))
+        .some(sa => getAnalyticsApps(`${sa.region}/${sa.subdomain}`).length > 0),
+      ),
+  );
+  const analyticsActiveTabEntry = analyticsDisplayedTabs.find(te => te.tab === activeTab) ?? analyticsDisplayedTabs[0];
 
   // Keep activeTab in sync when displayed tabs change
   useEffect(() => {
@@ -508,7 +536,7 @@ export default function AppsPage() {
         <span className="text-sm font-semibold shrink-0">Apps</span>
 
         {/* Search box — fills remaining space */}
-        <div className="relative flex-1 min-w-0">
+        <div className="relative flex-1 min-w-0 ml-2">
           <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground pointer-events-none" />
           <input
             type="text"
@@ -526,6 +554,38 @@ export default function AppsPage() {
         </div>
 
         <div className="flex items-center gap-2 shrink-0">
+          {/* Duration select */}
+          <select
+            value={durationSelectValue}
+            onChange={e => handleDurationChange(e.target.value)}
+            className="h-8 rounded-md border border-input bg-background px-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring"
+          >
+            <option value="1">Last 24 Hrs</option>
+            <option value="2">Last 48 Hrs</option>
+            <option value="3">Last 72 Hrs</option>
+            <option value="7">Last 7 Days</option>
+            {duration.mode === 'dateRange'
+              ? <option value="range">{durationLabel}</option>
+              : <option value="range">Custom Range…</option>
+            }
+          </select>
+
+          {/* View mode toggle */}
+          <div className="flex h-8 rounded-md border border-input overflow-hidden text-sm">
+            <button
+              onClick={() => navigateTo('all', duration)}
+              className={`px-3 transition-colors ${viewMode === 'all' ? 'bg-primary text-primary-foreground' : 'bg-background text-foreground hover:bg-accent hover:text-accent-foreground'}`}
+            >
+              Memory Usage
+            </button>
+            <button
+              onClick={() => navigateTo('analytics', duration)}
+              className={`px-3 transition-colors border-l border-input ${viewMode === 'analytics' ? 'bg-primary text-primary-foreground' : 'bg-background text-foreground hover:bg-accent hover:text-accent-foreground'}`}
+            >
+              Analytics
+            </button>
+          </div>
+
           {/* Refresh button */}
           <button
             onClick={() => void handleRefresh()}
@@ -535,28 +595,6 @@ export default function AppsPage() {
             <RefreshCw className={`h-3.5 w-3.5 ${isRefreshing ? 'animate-spin' : ''}`} />
             {isRefreshing ? 'Scanning…' : 'Refresh'}
           </button>
-
-          {/* View mode toggle */}
-          <div className="flex h-8 rounded-md border border-input overflow-hidden text-sm">
-            <button
-              onClick={() => navigateTo('all', duration)}
-              className={`px-3 transition-colors ${viewMode === 'all' ? 'bg-primary text-primary-foreground' : 'bg-background text-foreground hover:bg-accent hover:text-accent-foreground'}`}
-            >
-              Memory Consumption (All)
-            </button>
-            <button
-              onClick={() => navigateTo('aod', duration)}
-              className={`px-3 transition-colors border-l border-input ${viewMode === 'aod' ? 'bg-primary text-primary-foreground' : 'bg-background text-foreground hover:bg-accent hover:text-accent-foreground'}`}
-            >
-              AOD
-            </button>
-            <button
-              onClick={() => navigateTo('analytics', duration)}
-              className={`px-3 transition-colors border-l border-input ${viewMode === 'analytics' ? 'bg-primary text-primary-foreground' : 'bg-background text-foreground hover:bg-accent hover:text-accent-foreground'}`}
-            >
-              Analytics
-            </button>
-          </div>
         </div>
       </div>
 
@@ -623,7 +661,99 @@ export default function AppsPage() {
       {/* Usage Analytics view */}
       {viewMode === 'analytics' && (
         <div className="flex-1 overflow-auto min-h-0">
-          <UsageAnalyticsView saList={allSas} tabs={tabEntries} isDarkMap onOpenModal={openModal} />
+          <UsageAnalyticsView isDarkMap durationHours={durationToHours(duration)} onOpenModal={openModal} />
+
+          {/* Latest Requested Apps — tabs → groups → subaccounts table */}
+          {analyticsDisplayedTabs.length > 0 && <div className="p-6 space-y-6">
+
+            {analyticsDisplayedTabs.length > 1 && (
+              <div className="flex items-stretch border-b border-border overflow-x-auto">
+                {analyticsDisplayedTabs.map(te => (
+                  <button key={te.tab} className={tabCls(te === analyticsActiveTabEntry)} onClick={() => setActiveTab(te.tab)}>
+                    {te.tab}
+                  </button>
+                ))}
+              </div>
+            )}
+
+            {analyticsActiveTabEntry?.sections
+              .filter((s): s is Extract<TabSection, { type: 'subaccountGroup' }> => s.type === 'subaccountGroup')
+              .map(grp => {
+                const grpSas = allSas
+                  .filter(sa => csvIncludes(sa.groupIds, grp.groupId))
+                  .sort((a, b) => a.pos - b.pos);
+
+                // Always skip subaccounts with no lastAccessed apps
+                const displayCols = grpSas.filter(sa => getAnalyticsApps(`${sa.region}/${sa.subdomain}`).length > 0);
+                if (displayCols.length === 0) return null;
+
+                const rowCount = Math.max(...displayCols.map(sa => getAnalyticsApps(`${sa.region}/${sa.subdomain}`).length), 0);
+
+                return (
+                  <div key={grp.groupId} className="space-y-1.5">
+                    <div className="px-1">
+                      <span className="text-xs font-semibold text-foreground">{grp.title ?? grp.groupId}</span>
+                    </div>
+                    <div className="border border-border rounded-md overflow-hidden">
+                      <div className="overflow-x-auto">
+                        <table className="w-full border-collapse text-sm" style={{ tableLayout: 'auto' }}>
+                          <thead>
+                            <tr className="bg-muted/30">
+                              {displayCols.map(sa => (
+                                <th
+                                  key={sa.subaccountId}
+                                  colSpan={2}
+                                  className="text-center text-xs font-medium px-3 py-2 min-w-[260px] border-l border-b border-border first:border-l-0"
+                                >
+                                  <button
+                                    onClick={() => openModal(sa.region, sa.subdomain, '')}
+                                    className="flex flex-col gap-0.5 items-center w-full text-muted-foreground hover:text-primary transition-colors"
+                                  >
+                                    <span>{sa.alias || sa.subaccountName}</span>
+                                    <span className="text-[10px] font-normal font-mono text-muted-foreground/60 leading-tight">{sa.subdomain}</span>
+                                  </button>
+                                </th>
+                              ))}
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {Array.from({ length: rowCount }, (_, i) => (
+                              <tr key={i} className="hover:bg-muted/20">
+                                {displayCols.map(sa => {
+                                  const key  = `${sa.region}/${sa.subdomain}`;
+                                  const apps = getAnalyticsApps(key);
+                                  const app  = apps[i];
+                                  return (
+                                    <Fragment key={sa.subaccountId}>
+                                      <td className="px-3 py-1 text-xs border-b border-border border-l first:border-l-0 max-w-[200px]">
+                                        {app
+                                          ? <button
+                                              className="truncate block w-full text-left hover:text-primary transition-colors"
+                                              title={`${app.name} (${app.spaceName})`}
+                                              onClick={() => openModal(sa.region, sa.subdomain, app.guid, app.spaceName, app.name)}
+                                            >
+                                              {app.name}
+                                              <span className="text-muted-foreground/50 ml-1">({app.spaceName})</span>
+                                            </button>
+                                          : <span className="text-muted-foreground/30">—</span>
+                                        }
+                                      </td>
+                                      <td className="px-2 py-1 text-[11px] border-b border-border text-muted-foreground whitespace-nowrap tabular-nums w-[80px]">
+                                        {app?.lastAccessed ? fmtTime(app.lastAccessed) : ''}
+                                      </td>
+                                    </Fragment>
+                                  );
+                                })}
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+          </div>}
         </div>
       )}
 
@@ -631,7 +761,7 @@ export default function AppsPage() {
       {viewMode !== 'analytics' && <div className="flex-1 overflow-auto min-h-0 p-6 space-y-6">
 
         {/* Info blocks */}
-        <div className={`grid gap-3 sm:gap-4 ${viewMode === 'aod' ? 'grid-cols-2 sm:grid-cols-4' : 'grid-cols-2 sm:grid-cols-3'}`}>
+        <div className="grid gap-3 sm:gap-4 grid-cols-2 sm:grid-cols-4">
           <InfoBlock
             label={latest ? `Started Apps: ${latest.startedApps}` : 'Started Apps'}
             value={latest ? fmtMB(latest.sumStartedMB) : '—'}
@@ -642,15 +772,13 @@ export default function AppsPage() {
             value={latest ? fmtMB(latest.sumStoppedMB) : '—'}
             accent="text-orange-500"
           />
-          {viewMode === 'aod' && (
-            <InfoBlock
-              label={latest ? `Memory Saving: ${fmtMB(latest.sumStoppedMB)}` : 'Memory Saving'}
-              value={`${savingPct}%`}
-              accent="text-emerald-500"
-            />
-          )}
           <InfoBlock
-            label="Last Checked"
+            label={latest ? `Memory Saving: ${fmtMB(latest.sumStoppedMB)}` : 'Memory Saving'}
+            value={`${savingPct}%`}
+            accent="text-emerald-500"
+          />
+          <InfoBlock
+            label="Last Refreshed"
             value={latest ? fmtTime(latest.timestamp) : '—'}
           />
         </div>
@@ -659,28 +787,12 @@ export default function AppsPage() {
         <div className="rounded-lg border border-border bg-card px-5 py-4 min-h-0">
           <div className="flex items-center justify-between mb-3">
             <span className="text-sm font-medium text-foreground">Memory Over Time</span>
-            <div className="flex items-center gap-2">
-              {loadingData && <span className="text-xs text-muted-foreground">Loading…</span>}
-              <select
-                value={durationSelectValue}
-                onChange={e => handleDurationChange(e.target.value)}
-                className="h-7 rounded-md border border-input bg-background px-2 text-xs text-foreground focus:outline-none focus:ring-2 focus:ring-ring"
-              >
-                <option value="1">1 Day</option>
-                <option value="2">2 Days</option>
-                <option value="3">3 Days</option>
-                <option value="7">7 Days</option>
-                {duration.mode === 'dateRange'
-                  ? <option value="range">{durationLabel}</option>
-                  : <option value="range">Custom Range…</option>
-                }
-              </select>
-            </div>
+            {loadingData && <span className="text-xs text-muted-foreground">Loading…</span>}
           </div>
           <StatsChart rows={rows} toSecs={toSecs} />
         </div>
 
-        {/* Tab bar — below the chart, above the groups */}
+        {/* Tab bar + subaccount groups */}
         {displayedTabs.length > 1 && (
           <div className="flex items-stretch border-b border-border overflow-x-auto">
             {displayedTabs.map(te => (
@@ -706,15 +818,13 @@ export default function AppsPage() {
               .sort((a, b) => a.pos - b.pos);
             if (grpSas.length === 0) return null;
 
-            // In search mode, filter columns to SAs with matches (AOD filter applied via getApps); in AOD mode filter to AOD SAs
+            // ── Column table (SAs as columns, apps as rows) ──────────────────
             const displayCols = isSearchMode
               ? grpSas.filter(sa => getApps(`${sa.region}/${sa.subdomain}`).length > 0)
-              : isAodMode
-              ? grpSas.filter(sa => aodSpaceNamesMap.has(`${sa.region}/${sa.subdomain}`))
               : grpSas;
-            if ((isSearchMode || isAodMode) && displayCols.length === 0) return null;
+            if (isSearchMode && displayCols.length === 0) return null;
 
-            const rowCount = (isSearchMode || isAodMode)
+            const rowCount = isSearchMode
               ? Math.max(...displayCols.map(sa => getApps(`${sa.region}/${sa.subdomain}`).length), 0)
               : 10;
 

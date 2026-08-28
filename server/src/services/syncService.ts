@@ -13,7 +13,7 @@ import { extractZip } from './zipBuilder.js';
 import { getSyncKey, getAllServices, getSyncExcludes } from './configService.js';
 import { emit } from './liveEvents.js';
 import { refreshLastUpdated } from './lastUpdatedService.js';
-import { invalidateTopAppsCache } from './aodAppsService.js';
+import { invalidateTopAppsCache } from './appService.js';
 
 const gunzipAsync = promisify(gunzip);
 const BATCH_MAX_ATTEMPTS   = 3;

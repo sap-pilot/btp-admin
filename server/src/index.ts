@@ -19,7 +19,9 @@ import rcsRouter from './routes/rcs.js';
 import usersRouter from './routes/users.js';
 import authRouter from './routes/auth.js';
 import aodRouter, { aodProxyHandler } from './routes/aod.js';
-import { startAppsScheduler, stopAppsScheduler } from './services/aodAppsService.js';
+import appsRouter from './routes/apps.js';
+import { startAppsScheduler, stopAppsScheduler } from './services/appService.js';
+import { initRequestLog } from './services/aodAnalyticsService.js';
 import { requireSessionGlobal } from './middleware/requireAuth.js';
 import { errorHandler } from './middleware/errorHandler.js';
 import { compress } from './middleware/compress.js';
@@ -47,6 +49,7 @@ app.use('/api/destinations', destRouter);
 app.use('/api/role-collections', rcsRouter);
 app.use('/api/users', usersRouter);
 app.use('/api/sync', syncRouter);
+app.use('/api/apps', appsRouter);
 app.use('/api/aod', aodRouter);
 app.use('/api', apiRouter);
 
@@ -65,6 +68,7 @@ const server = app.listen(config.PORT, () => {
   }
   void refreshLastUpdated();
   void initGeo();
+  void initRequestLog();
   startScheduler();
   startHousekeepingScheduler();
   startAppsScheduler();

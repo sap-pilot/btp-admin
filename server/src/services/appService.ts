@@ -95,17 +95,18 @@ interface CfRoute {
 }
 
 export interface AppFileData {
-  guid:        string;
-  name:        string;
-  state:       string;
-  spaceGuid:   string;
-  region:      string;
-  subdomain:   string;
-  spaceName:   string;
-  process?:    { type: string; instances: number; memory_in_mb: number; disk_in_mb: number };
-  aod?:        boolean;
-  urls?:       string[];
-  lastUpdated: number;
+  guid:          string;
+  name:          string;
+  state:         string;
+  spaceGuid:     string;
+  region:        string;
+  subdomain:     string;
+  spaceName:     string;
+  process?:      { type: string; instances: number; memory_in_mb: number; disk_in_mb: number };
+  aod?:          boolean;
+  urls?:         string[];
+  lastUpdated:   number;
+  lastAccessed?: number;
 }
 type AppFile = AppFileData;
 
@@ -193,10 +194,13 @@ export async function getLatestStats(aodOnly = false): Promise<StatsRow | null> 
 // ─── Top apps per subaccount ─────────────────────────────────────────────────
 
 export interface AppTopEntry {
-  guid:      string;
-  name:      string;
-  spaceName: string;
-  memoryMB:  number;
+  guid:         string;
+  name:         string;
+  spaceName:    string;
+  memoryMB:     number;
+  state?:       string;
+  aod?:         boolean;
+  lastAccessed?: number;
 }
 
 export interface SubaccountTopApps {
@@ -227,9 +231,10 @@ async function buildTopApps(): Promise<SubaccountTopApps[]> {
             try {
               const raw = await readFile(join(spaceDir, file), 'utf-8');
               const app = JSON.parse(raw) as AppFile;
-              if (app.state !== 'STARTED') continue;
+              // Include started apps always; include stopped apps only when they have AOD enabled
+              if (app.state !== 'STARTED' && !app.aod) continue;
               const memoryMB = (app.process?.instances ?? 1) * (app.process?.memory_in_mb ?? 0);
-              apps.push({ guid: app.guid, name: app.name, spaceName: app.spaceName, memoryMB });
+              apps.push({ guid: app.guid, name: app.name, spaceName: app.spaceName, memoryMB, state: app.state, aod: app.aod, lastAccessed: (app as AppFileData).lastAccessed });
             } catch { /* skip corrupted file */ }
           }
         } catch { /* skip unreadable space dir */ }
@@ -242,7 +247,7 @@ async function buildTopApps(): Promise<SubaccountTopApps[]> {
       subdomain:      sa.subdomain,
       subaccountName: sa.subaccountName,
       alias:          sa.alias,
-      apps:           apps.slice(0, 10),
+      apps,
     });
   }
 
@@ -309,7 +314,7 @@ export async function searchApps(keyword: string): Promise<SubaccountTopApps[]> 
         byKey.set(key, entry);
       }
       const memoryMB = (app.process?.instances ?? 1) * (app.process?.memory_in_mb ?? 0);
-      entry.apps.push({ guid: app.guid, name: app.name, spaceName: app.spaceName, memoryMB });
+      entry.apps.push({ guid: app.guid, name: app.name, spaceName: app.spaceName, memoryMB, state: app.state, aod: app.aod, lastAccessed: app.lastAccessed });
     } catch { /* skip */ }
   }
 
@@ -358,6 +363,21 @@ export async function updateAppFileAod(
     logger.debug({ appGuid, aodInstalled, destUrl }, 'AOD: app JSON updated');
   } catch (err) {
     logger.warn({ err, appGuid, region, subdomain }, 'AOD: failed to update app JSON');
+  }
+}
+
+// Update lastAccessed timestamp in appGuid.json — called fire-and-forget on each AOD proxy hit.
+export async function touchAppLastAccessed(appGuid: string, region: string, subdomain: string, ts: number): Promise<void> {
+  const filePath = await findAppFile(appGuid, region, subdomain);
+  if (!filePath) return;
+  try {
+    const raw = await readFile(filePath, 'utf-8');
+    const obj = JSON.parse(raw) as AppFileData;
+    obj.lastAccessed = ts;
+    await writeFile(filePath, JSON.stringify(obj, null, 2), 'utf-8');
+    topAppsCache = null; // invalidate so next fetch picks up the new timestamp
+  } catch (err) {
+    logger.warn({ err, appGuid, region, subdomain }, 'AOD: failed to touch lastAccessed');
   }
 }
 

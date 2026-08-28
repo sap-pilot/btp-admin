@@ -416,7 +416,7 @@ export default function RoleCollectionsOverview() {
           )}
         </div>
         {/* Full-text search — fills remaining space */}
-        <div className="relative flex-1 min-w-0 hidden sm:block">
+        <div className="relative flex-1 min-w-0 hidden sm:block ml-2">
           {searchLoading
             ? <Loader2 className="absolute left-2 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground animate-spin pointer-events-none" />
             : <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground pointer-events-none" />
