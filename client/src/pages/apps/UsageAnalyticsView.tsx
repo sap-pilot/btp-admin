@@ -1,9 +1,18 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import WorldMap from './WorldMap';
+import AccessListModal from './AccessListModal';
 
-// ─── Types (mirrored from aodAnalyticsService) ────────────────────────────────
+// ─── Types ────────────────────────────────────────────────────────────────────
 
-interface AnalyticsCity    { city: string; country: string; countryCode: string; lat: number; lon: number; count: number; }
+interface AnalyticsCity { city: string; country: string; countryCode: string; lat: number; lon: number; count: number; }
+
+// Mirrored from aodAnalyticsService RequestItem
+export interface RequestItem {
+  ts: number; region: string; subdomain: string; alias: string;
+  spaceName: string; appName: string; appGuid: string;
+  country: string; countryCode: string; city: string; userId: string;
+}
+
 interface AnalyticsRequest { ts: number; region: string; alias: string; subdomain: string; userId: string; appName?: string; spaceName?: string; appGuid?: string; city?: string; countryCode?: string; }
 interface AnalyticsPayload {
   totalRequests: number; uniqueUsers: number; startedAppsGb: number; startedAppsCount: number;
@@ -11,8 +20,6 @@ interface AnalyticsPayload {
   lastUpdated: number; duration: number;
   cities: AnalyticsCity[]; latestRequests: AnalyticsRequest[];
 }
-
-// SSE delta from analytics-update event
 interface AnalyticsUpdateMsg {
   type:    'analytics-update';
   request: AnalyticsRequest;
@@ -24,14 +31,35 @@ interface AnalyticsUpdateMsg {
 function fmtTime(ts: number): string {
   return new Date(ts * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
 }
-
 function fmtLatestRequest(ts: number): string {
   if (!ts) return '—';
   return new Date(ts * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true });
 }
 
-const geoKey = (lat: number, lon: number) => `${lat.toFixed(2)},${lon.toFixed(2)}`;
+const geoKey  = (lat: number, lon: number) => `${lat.toFixed(2)},${lon.toFixed(2)}`;
 const cityKey = (countryCode: string, city: string) => `${countryCode}-${city}`;
+
+function splitCityKey(key: string): { countryCode: string; city: string } {
+  const dashIdx = key.indexOf('-');
+  if (dashIdx <= 0) return { countryCode: '', city: key };
+  return { countryCode: key.slice(0, dashIdx), city: key.slice(dashIdx + 1) };
+}
+
+function sseToItem(upd: AnalyticsUpdateMsg): RequestItem {
+  return {
+    ts:          upd.request.ts,
+    region:      upd.request.region,
+    subdomain:   upd.request.subdomain,
+    alias:       upd.request.alias,
+    spaceName:   upd.request.spaceName   ?? '',
+    appName:     upd.request.appName     ?? '',
+    appGuid:     upd.request.appGuid     ?? '',
+    country:     upd.city?.country       ?? '',
+    countryCode: upd.request.countryCode ?? upd.city?.countryCode ?? '',
+    city:        upd.request.city        ?? upd.city?.city        ?? '',
+    userId:      upd.request.userId,
+  };
+}
 
 // ─── Sub-components ───────────────────────────────────────────────────────────
 
@@ -45,19 +73,18 @@ function InfoBlock({ label, value, accent }: { label: string; value: string; acc
 }
 
 interface RequestRowProps {
-  req: AnalyticsRequest;
+  req: RequestItem;
   onOpen: (region: string, subdomain: string, appGuid: string, spaceName?: string, appName?: string) => void;
 }
-
 function RequestRow({ req, onOpen }: RequestRowProps) {
   return (
     <div className="flex items-baseline gap-2 py-1.5 border-b border-border/50 last:border-0 text-xs min-w-0">
       <span className="text-muted-foreground tabular-nums shrink-0">{fmtTime(req.ts)}</span>
       <button
-        onClick={() => onOpen(req.region, req.subdomain, req.appGuid ?? '', req.spaceName, req.appName)}
+        onClick={() => onOpen(req.region, req.subdomain, req.appGuid, req.spaceName, req.appName)}
         className="font-medium truncate text-foreground hover:text-primary hover:underline text-left min-w-0"
       >
-        {req.appName ?? req.alias}
+        {req.appName || req.alias}
         {req.subdomain && (
           <span className="text-muted-foreground/60 ml-1 text-[11px]">({req.subdomain})</span>
         )}
@@ -70,22 +97,35 @@ function RequestRow({ req, onOpen }: RequestRowProps) {
 // ─── Main component ───────────────────────────────────────────────────────────
 
 interface Props {
-  isDarkMap?:     boolean;
-  durationHours:  number;
-  onOpenModal?:   (region: string, subdomain: string, appGuid: string, spaceName?: string, appName?: string) => void;
+  isDarkMap?:    boolean;
+  durationHours: number;
+  onOpenModal?:  (region: string, subdomain: string, appGuid: string, spaceName?: string, appName?: string) => void;
 }
 
 export default function UsageAnalyticsView({ isDarkMap, durationHours, onOpenModal }: Props) {
   const [data,         setData]         = useState<AnalyticsPayload | null>(null);
   const [loading,      setLoading]      = useState(false);
   const [error,        setError]        = useState<string | null>(null);
-  const [liveReqs,     setLiveReqs]     = useState<AnalyticsRequest[]>([]);
+  const [reqItems,     setReqItems]     = useState<RequestItem[]>([]);
   const [selectedCity, setSelectedCity] = useState<string>('');
-  const esRef = useRef<EventSource | null>(null);
+  const [showModal,    setShowModal]    = useState(false);
+  const esRef    = useRef<EventSource | null>(null);
+  const mapColRef = useRef<HTMLDivElement>(null);
+  const [mapColH, setMapColH] = useState(0);
+
+  useEffect(() => {
+    const el = mapColRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver(([entry]) => setMapColH(entry?.contentRect.height ?? 0));
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
 
   const handleOpen = useCallback((region: string, subdomain: string, appGuid: string, spaceName?: string, appName?: string) => {
     onOpenModal?.(region, subdomain, appGuid, spaceName, appName);
   }, [onOpenModal]);
+
+  // ── Analytics (map + stats) fetch ─────────────────────────────────────────
 
   const fetchAnalytics = useCallback(async (hours: number) => {
     setLoading(true);
@@ -94,7 +134,7 @@ export default function UsageAnalyticsView({ isDarkMap, durationHours, onOpenMod
       const res  = await fetch(`/api/aod/analytics?duration=${hours}`);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const json = await res.json() as { ok: boolean; data: AnalyticsPayload };
-      if (json.ok) { setData(json.data); setLiveReqs(json.data.latestRequests); }
+      if (json.ok) setData(json.data);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to load analytics');
     } finally {
@@ -102,7 +142,25 @@ export default function UsageAnalyticsView({ isDarkMap, durationHours, onOpenMod
     }
   }, []);
 
+  // ── Requests (inline list) fetch from API ─────────────────────────────────
+
+  const fetchRequests = useCallback(async (cityFilter: string) => {
+    const params = new URLSearchParams({ pageSize: '100', sortBy: 'ts', sortDir: 'desc' });
+    if (cityFilter) {
+      const { countryCode, city } = splitCityKey(cityFilter);
+      if (countryCode) params.set('countryCode', countryCode);
+      if (city)        params.set('city', city);
+    }
+    try {
+      const res  = await fetch(`/api/aod/requests?${params.toString()}`);
+      if (!res.ok) return;
+      const json = await res.json() as { ok: boolean; data: { items: RequestItem[] } };
+      if (json.ok) setReqItems(json.data.items);
+    } catch { /* silently ignore */ }
+  }, []);
+
   useEffect(() => { void fetchAnalytics(durationHours); }, [durationHours, fetchAnalytics]);
+  useEffect(() => { void fetchRequests(selectedCity); }, [selectedCity, fetchRequests]);
 
   // ── SSE ───────────────────────────────────────────────────────────────────
 
@@ -117,10 +175,14 @@ export default function UsageAnalyticsView({ isDarkMap, durationHours, onOpenMod
         if (msg.type === 'analytics-update') {
           const upd = msg as unknown as AnalyticsUpdateMsg;
 
-          // Prepend new request to live feed
-          setLiveReqs(prev => [upd.request, ...prev].slice(0, 15));
+          // Prepend to inline list if no filter or request matches current city filter
+          const item = sseToItem(upd);
+          const matchesFilter = !selectedCity || (item.countryCode && item.city && cityKey(item.countryCode, item.city) === selectedCity);
+          if (matchesFilter) {
+            setReqItems(prev => [item, ...prev].slice(0, 100));
+          }
 
-          // Increment totalRequests + apply city delta
+          // Update city counts and global stats
           setData(d => {
             if (!d) return d;
             let cities = d.cities;
@@ -136,14 +198,15 @@ export default function UsageAnalyticsView({ isDarkMap, durationHours, onOpenMod
           });
         } else if (msg.type === 'apps-synced') {
           void fetchAnalytics(durationHours);
+          void fetchRequests(selectedCity);
         }
       } catch { /* ignore parse errors */ }
     });
 
     return () => { es.close(); esRef.current = null; };
-  }, [durationHours, fetchAnalytics]);
+  }, [durationHours, selectedCity, fetchAnalytics, fetchRequests]);
 
-  // ── City filter options (built from cities data) ──────────────────────────
+  // ── City filter options ───────────────────────────────────────────────────
 
   const cityOptions = useMemo(() => {
     const cities = data?.cities ?? [];
@@ -153,17 +216,13 @@ export default function UsageAnalyticsView({ isDarkMap, durationHours, onOpenMod
       .map(c => ({ key: cityKey(c.countryCode, c.city), label: `${c.countryCode}-${c.city}` }));
   }, [data?.cities]);
 
-  const filteredReqs = useMemo(() => {
-    if (!selectedCity) return liveReqs;
-    return liveReqs.filter(r => r.countryCode && r.city && cityKey(r.countryCode, r.city) === selectedCity);
-  }, [liveReqs, selectedCity]);
-
-  // Reset filter if the selected city is no longer in the options
   useEffect(() => {
     if (selectedCity && !cityOptions.some(o => o.key === selectedCity)) setSelectedCity('');
   }, [cityOptions, selectedCity]);
 
   // ── Render ────────────────────────────────────────────────────────────────
+
+  const durationLabel = durationHours >= 168 ? '7 days' : durationHours >= 48 ? `${durationHours / 24} days` : '24 hrs';
 
   return (
     <div className="flex flex-col gap-6 p-6">
@@ -171,12 +230,12 @@ export default function UsageAnalyticsView({ isDarkMap, durationHours, onOpenMod
       {/* Info blocks */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
         <InfoBlock
-          label={`Requests (last ${durationHours >= 168 ? '7 days' : durationHours >= 48 ? `${durationHours / 24} days` : '24 hrs'})`}
+          label={`Requests (last ${durationLabel})`}
           value={loading ? '…' : (data?.totalRequests.toLocaleString() ?? '—')}
           accent="text-orange-500"
         />
         <InfoBlock
-          label={`Requested Apps (last ${durationHours >= 168 ? '7 days' : durationHours >= 48 ? `${durationHours / 24} days` : '24 hrs'})`}
+          label={`Requested Apps (last ${durationLabel})`}
           value={loading ? '…' : (data?.requestedAppsCount.toLocaleString() ?? '—')}
           accent="text-blue-500"
         />
@@ -198,8 +257,8 @@ export default function UsageAnalyticsView({ isDarkMap, durationHours, onOpenMod
       )}
 
       {/* Map + Live feed */}
-      <div className="flex gap-4 min-h-0">
-        <div className="flex-[3] min-w-0">
+      <div className="flex gap-4 items-start">
+        <div ref={mapColRef} className="flex-[3] min-w-0">
           <div className="text-xs font-medium text-muted-foreground mb-1.5">Requests by Location</div>
           <WorldMap
             cities={data?.cities ?? []}
@@ -211,10 +270,15 @@ export default function UsageAnalyticsView({ isDarkMap, durationHours, onOpenMod
             <div className="text-xs text-muted-foreground text-center mt-2">No geo data for this period</div>
           )}
         </div>
-        <div className="flex-1 min-w-0 flex flex-col">
-          {/* Header row: title + city filter select */}
+        <div className="flex-1 min-w-0 flex flex-col" style={mapColH ? { height: mapColH } : undefined}>
+          {/* Header: "Latest Requests" link + city filter */}
           <div className="flex items-center gap-2 mb-1.5 min-w-0">
-            <span className="text-xs font-medium text-muted-foreground shrink-0">Latest Requests</span>
+            <button
+              onClick={() => setShowModal(true)}
+              className="text-xs font-medium text-muted-foreground hover:text-primary hover:underline shrink-0 text-left"
+            >
+              Latest Requests
+            </button>
             {cityOptions.length > 0 && (
               <select
                 value={selectedCity}
@@ -228,17 +292,23 @@ export default function UsageAnalyticsView({ isDarkMap, durationHours, onOpenMod
               </select>
             )}
           </div>
-          <div className="flex-1 rounded-lg border border-border bg-card px-3 py-2 overflow-auto">
-            {filteredReqs.length === 0
+          {/* Scrollable list — no visible scrollbar */}
+          <div className="flex-1 min-h-0 rounded-lg border border-border bg-card px-3 py-2 overflow-y-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+            {reqItems.length === 0
               ? <p className="text-xs text-muted-foreground text-center py-4">
                   {selectedCity ? `No requests from ${selectedCity}` : 'No requests yet'}
                 </p>
-              : filteredReqs.map((req, i) => <RequestRow key={`${req.ts}-${i}`} req={req} onOpen={handleOpen} />)
+              : reqItems.map((req, i) => <RequestRow key={`${req.ts}-${i}`} req={req} onOpen={handleOpen} />)
             }
           </div>
         </div>
       </div>
 
+      <AccessListModal
+        open={showModal}
+        onClose={() => setShowModal(false)}
+        onOpenApp={onOpenModal}
+      />
     </div>
   );
 }

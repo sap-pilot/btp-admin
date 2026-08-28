@@ -1073,7 +1073,7 @@ export default function SubaccountDestModal({ org, allNames, initialName, initia
   const [lastClickDestKey,  setLastClickDestKey]  = useState<string>('');
 
   // Horizontal split (left panel width as % of total)
-  const [splitPct,  setSplitPct]  = useState(50);
+  const [splitPct,  setSplitPct]  = useState(40);
   // Vertical split within left panel (tree height as % of left panel)
   const [treeSplitPct, setTreeSplitPct] = useState(40);
   const bodyRef              = useRef<HTMLDivElement>(null);

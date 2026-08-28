@@ -84,10 +84,10 @@ function fmtDate(ts: number | string | undefined): string {
 
 function fmtLoginTime(ts: number | undefined): string {
   if (!ts) return '—';
-  return new Date(ts).toLocaleString(undefined, {
-    month: 'short', day: 'numeric', year: 'numeric',
-    hour: '2-digit', minute: '2-digit',
-  });
+  const d = new Date(ts);
+  const date = d.toLocaleDateString([], { month: 'numeric', day: 'numeric', year: 'numeric' });
+  const time = d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', hour12: true }).replace(' ', '');
+  return `${date} ${time}`;
 }
 
 // ─── Cockpit helpers ─────────────────────────────────────────────────────────
@@ -203,17 +203,17 @@ export default function UsersModal({
   const [expanded,     setExpanded]     = useState<Set<string>>(new Set());
   const [subProgress,  setSubProgress]  = useState<SubProgress | null>(null);
   const [leftVisible,  setLeftVisible]  = useState(true);
-  const [sortCol,      setSortCol]      = useState<'userName' | 'email' | 'origin' | 'lastLogonTime'>('lastLogonTime');
+  const [sortCol,      setSortCol]      = useState<'email' | 'origin' | 'lastLogonTime'>('lastLogonTime');
   const [sortDir,      setSortDir]      = useState<'asc' | 'desc'>('desc');
-  const [colWidths,    setColWidths]    = useState<[number, number, number, number]>([12, 20, 12, 20]);
-  const [splitPct, setSplitPct] = useState(50);
+  const [colWidths,    setColWidths]    = useState<[number, number, number]>([30, 18, 25]);
+  const [splitPct, setSplitPct] = useState(40);
   const subProgressTimer  = useRef<ReturnType<typeof setTimeout> | null>(null);
   const tableContainerRef = useRef<HTMLDivElement>(null);
   const bodyRef           = useRef<HTMLDivElement>(null);
   const splitResizeRef    = useRef<{ startX: number; startPct: number; containerW: number } | null>(null);
   const resizeState       = useRef<{
     col: number; startX: number;
-    startWidths: [number, number, number, number]; tableWidth: number;
+    startWidths: [number, number, number]; tableWidth: number;
   } | null>(null);
 
   const { region, subdomain } = sa;
@@ -379,7 +379,7 @@ export default function UsersModal({
     const el = tableContainerRef.current;
     if (!el) return;
     const tableWidth = el.getBoundingClientRect().width;
-    resizeState.current = { col: colIdx, startX: e.clientX, startWidths: [...colWidths] as [number, number, number, number], tableWidth };
+    resizeState.current = { col: colIdx, startX: e.clientX, startWidths: [...colWidths] as [number, number, number], tableWidth };
     document.body.style.cursor = 'col-resize';
     document.body.style.userSelect = 'none';
 
@@ -390,7 +390,7 @@ export default function UsersModal({
       const MIN = 8;
       const a   = Math.max(MIN, r.startWidths[r.col]     + deltaPct);
       const b   = Math.max(MIN, r.startWidths[r.col + 1] - deltaPct);
-      const next = [...r.startWidths] as [number, number, number, number];
+      const next = [...r.startWidths] as [number, number, number];
       next[r.col]     = a;
       next[r.col + 1] = b;
       setColWidths(next);
@@ -593,7 +593,6 @@ export default function UsersModal({
                     <thead className="sticky top-0 bg-background z-10">
                       <tr className="border-b border-border bg-muted/20">
                         {([
-                          ['userName',      'User'],
                           ['email',         'Email'],
                           ['origin',        'Origin'],
                           ['lastLogonTime', 'Last Login'],
@@ -610,7 +609,7 @@ export default function UsersModal({
                                 {sortCol === col ? (sortDir === 'asc' ? ' ↑' : ' ↓') : ' ⇅'}
                               </span>
                             </span>
-                            {i < 3 && (
+                            {i < 2 && (
                               <div
                                 onMouseDown={e => startResize(e, i)}
                                 className="absolute top-0 right-0 h-full w-1.5 hover:bg-primary/25 transition-colors"
@@ -633,7 +632,6 @@ export default function UsersModal({
                               isSelected ? 'bg-accent text-accent-foreground' : 'hover:bg-accent/40'
                             }`}
                           >
-                            <td className="px-2 py-1 overflow-hidden text-ellipsis whitespace-nowrap" title={u.userName}>{u.userName}</td>
                             <td className="px-2 py-1 overflow-hidden text-ellipsis whitespace-nowrap text-muted-foreground" title={email}>{email}</td>
                             <td className="px-2 py-1 overflow-hidden text-ellipsis whitespace-nowrap text-muted-foreground" title={u.origin}>{u.origin}</td>
                             <td className="px-2 py-1 whitespace-nowrap tabular-nums text-muted-foreground">{fmtLoginTime(u.lastLogonTime)}</td>

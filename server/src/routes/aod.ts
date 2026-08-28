@@ -1,6 +1,6 @@
 import { appendFile, mkdir, rename, stat } from 'node:fs/promises';
 import { touchAppLastAccessed, updateAppFileState } from '../services/appService.js';
-import { getAnalytics, recordAodRequest } from '../services/aodAnalyticsService.js';
+import { getAnalytics, getRequests, recordAodRequest } from '../services/aodAnalyticsService.js';
 import { join } from 'node:path';
 import type { Request, Response, NextFunction } from 'express';
 import { Router } from 'express';
@@ -38,6 +38,23 @@ router.get('/analytics', async (req, res, next) => {
     const hours = typeof raw === 'string' ? Math.max(1, Math.min(168, Number(raw) || 24)) : 24;
     const data  = await getAnalytics(hours);
     res.json({ ok: true, data });
+  } catch (err) { next(err); }
+});
+
+router.get('/requests', async (req, res, next) => {
+  try {
+    const page     = Math.max(1, Number(req.query['page'])     || 1);
+    const pageSize = Math.min(500, Math.max(1, Number(req.query['pageSize']) || 50));
+    const sortBy   = typeof req.query['sortBy']  === 'string' ? req.query['sortBy']  : 'ts';
+    const sortDir  = req.query['sortDir'] === 'asc' ? 'asc' as const : 'desc' as const;
+    const str      = (k: string) => typeof req.query[k] === 'string' ? (req.query[k] as string) : '';
+    const result   = await getRequests({
+      page, pageSize, sortBy, sortDir,
+      countryCode: str('countryCode'), city:      str('city'),      country:   str('country'),
+      alias:       str('alias'),       region:    str('region'),    subdomain: str('subdomain'),
+      spaceName:   str('spaceName'),   appName:   str('appName'),   userId:    str('userId'),
+    });
+    res.json({ ok: true, data: result });
   } catch (err) { next(err); }
 });
 
@@ -119,7 +136,7 @@ function extractUserId(req: Request): string {
     const parts = m[1]!.split('.');
     if (parts.length < 2) return '';
     const decoded = JSON.parse(Buffer.from(parts[1]!, 'base64url').toString('utf-8')) as Record<string, unknown>;
-    return String(decoded['user_name'] ?? decoded['email'] ?? decoded['sub'] ?? '');
+    return String(decoded['email'] ?? decoded['user_name'] ?? decoded['sub'] ?? '');
   } catch {
     return '';
   }

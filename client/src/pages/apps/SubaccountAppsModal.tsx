@@ -35,8 +35,9 @@ interface AppFileData {
   spaceName:   string;
   process?:    AppProcess;
   aod?:        boolean;
-  urls?:       string[];
-  lastUpdated: number;
+  urls?:        string[];
+  lastUpdated:  number;
+  lastAccessed?: number;
 }
 
 export interface SubaccountAppsModalProps {
@@ -47,7 +48,7 @@ export interface SubaccountAppsModalProps {
   onClose:          () => void;
 }
 
-type SortCol = 'name' | 'state' | 'instances' | 'memory_in_mb' | 'disk_in_mb';
+type SortCol = 'name' | 'state' | 'memory_in_mb' | 'disk_in_mb';
 
 // ─── Cockpit helpers (mirrors UsersModal / SubaccountDestModal) ───────────────
 
@@ -135,7 +136,7 @@ function buildAppCockpitUrl(sa: SubaccountEntry, app: AppFileData, cockpitHost: 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 function fmtMB(mb: number): string {
-  if (mb >= 1024) return `${(mb / 1024).toFixed(1)} GB`;
+  if (mb >= 1000) return `${(mb / 1024).toFixed(1)} GB`;
   return `${Math.round(mb)} MB`;
 }
 
@@ -146,12 +147,16 @@ function fmtTs(secs: number): string {
   });
 }
 
-function StateBadge({ state }: { state: string }) {
+function fmtShortDate(secs: number): string {
+  return new Date(secs * 1000).toLocaleDateString([], { month: 'numeric', day: 'numeric', year: 'numeric' });
+}
+
+function StateBadge({ state, instances }: { state: string; instances?: number }) {
   const started = state === 'STARTED';
   return (
     <span className={`inline-flex items-center gap-1 text-[10px] font-medium ${started ? 'text-green-600 dark:text-green-400' : 'text-muted-foreground'}`}>
       <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${started ? 'bg-green-500' : 'bg-muted-foreground/40'}`} />
-      {state}
+      {state}{instances !== undefined ? ` ×${instances}` : ''}
     </span>
   );
 }
@@ -179,7 +184,7 @@ export default function SubaccountAppsModal({
   const [sortDir,         setSortDir]         = useState<'asc' | 'desc'>('desc');
   const [maximized,       setMaximized]       = useState(false);
   const [leftVisible,     setLeftVisible]     = useState(true);
-  const [splitPct,        setSplitPct]        = useState(50);
+  const [splitPct,        setSplitPct]        = useState(40);
   const [appActionLoading, setAppActionLoading] = useState<'start' | 'stop' | null>(null);
   const [appActionError,   setAppActionError]   = useState<string | null>(null);
   const [showStopConfirm,  setShowStopConfirm]  = useState(false);
@@ -320,8 +325,7 @@ export default function SubaccountAppsModal({
       let bv: number | string;
       switch (sortCol) {
         case 'state':        av = a.state;                      bv = b.state;                      break;
-        case 'instances':    av = a.process?.instances    ?? 0; bv = b.process?.instances    ?? 0; break;
-        case 'memory_in_mb': av = a.process?.memory_in_mb ?? 0; bv = b.process?.memory_in_mb ?? 0; break;
+        case 'memory_in_mb': av = (a.process?.memory_in_mb ?? 0) * (a.process?.instances ?? 1); bv = (b.process?.memory_in_mb ?? 0) * (b.process?.instances ?? 1); break;
         case 'disk_in_mb':   av = a.process?.disk_in_mb   ?? 0; bv = b.process?.disk_in_mb   ?? 0; break;
         default:             av = a.name.toLowerCase();         bv = b.name.toLowerCase();         break;
       }
@@ -529,19 +533,19 @@ export default function SubaccountAppsModal({
                   {!loading && sortedSpaces.length > 0 && (
                     <table className="w-full border-collapse text-sm" style={{ tableLayout: 'fixed' }}>
                       <colgroup>
-                        <col style={{ width: '36%' }} />
-                        <col style={{ width: '18%' }} />
-                        <col style={{ width: '10%' }} />
-                        <col style={{ width: '18%' }} />
-                        <col style={{ width: '18%' }} />
+                        <col style={{ width: '27%' }} />
+                        <col style={{ width: '20%' }} />
+                        <col style={{ width: '17%' }} />
+                        <col style={{ width: '15%' }} />
+                        <col style={{ width: '21%' }} />
                       </colgroup>
                       <thead className="sticky top-0 z-10 bg-muted/30">
                         <tr>
                           <th className={thCls} onClick={() => handleSort('name')}>Name{sortIndicator('name')}</th>
                           <th className={thCls} onClick={() => handleSort('state')}>State{sortIndicator('state')}</th>
-                          <th className={`${thCls} text-right`} onClick={() => handleSort('instances')}>Inst{sortIndicator('instances')}</th>
-                          <th className={`${thCls} text-right`} onClick={() => handleSort('memory_in_mb')}>Memory{sortIndicator('memory_in_mb')}</th>
+                          <th className={`${thCls} text-right`} onClick={() => handleSort('memory_in_mb')}>Mem{sortIndicator('memory_in_mb')}</th>
                           <th className={`${thCls} text-right`} onClick={() => handleSort('disk_in_mb')}>Disk{sortIndicator('disk_in_mb')}</th>
+                          <th className={thCls}>Last Access</th>
                         </tr>
                       </thead>
                       <tbody>
@@ -575,10 +579,10 @@ export default function SubaccountAppsModal({
                                 onClick={() => { setSelectedId(app.guid); setAppActionError(null); }}
                               >
                                 <td className={`${tdCls} pl-6 truncate`} title={app.name}>{app.name}</td>
-                                <td className={tdCls}><StateBadge state={app.state} /></td>
-                                <td className={`${tdCls} text-right tabular-nums text-muted-foreground`}>{app.process?.instances ?? '—'}</td>
-                                <td className={`${tdCls} text-right tabular-nums text-muted-foreground`}>{app.process ? fmtMB(app.process.memory_in_mb) : '—'}</td>
+                                <td className={tdCls}><StateBadge state={app.state} instances={app.process?.instances} /></td>
+                                <td className={`${tdCls} text-right tabular-nums text-muted-foreground`}>{app.process ? fmtMB(app.process.memory_in_mb * app.process.instances) : '—'}</td>
                                 <td className={`${tdCls} text-right tabular-nums text-muted-foreground`}>{app.process ? fmtMB(app.process.disk_in_mb) : '—'}</td>
+                                <td className={`${tdCls} tabular-nums text-muted-foreground`}>{app.lastAccessed ? fmtShortDate(app.lastAccessed) : '—'}</td>
                               </tr>
                             )) : []),
                           ];
@@ -677,7 +681,7 @@ export default function SubaccountAppsModal({
                         {[
                           ['Type',      selectedApp.process.type],
                           ['Instances', String(selectedApp.process.instances)],
-                          ['Memory',    fmtMB(selectedApp.process.memory_in_mb)],
+                          ['Memory',    fmtMB(selectedApp.process.memory_in_mb * selectedApp.process.instances)],
                           ['Disk',      fmtMB(selectedApp.process.disk_in_mb)],
                         ].map(([label, value]) => (
                           <tr key={`proc-${label}`} className="hover:bg-muted/20">
@@ -701,6 +705,13 @@ export default function SubaccountAppsModal({
                         <td className="py-1.5 pr-3 pl-1 font-medium text-muted-foreground whitespace-nowrap border-b border-border/50">Last Updated</td>
                         <td className="py-1.5 pl-1 border-b border-border/50 font-mono">{fmtTs(selectedApp.lastUpdated)}</td>
                       </tr>
+
+                      {selectedApp.lastAccessed != null && (
+                        <tr className="hover:bg-muted/20">
+                          <td className="py-1.5 pr-3 pl-1 font-medium text-muted-foreground whitespace-nowrap border-b border-border/50">Last Accessed</td>
+                          <td className="py-1.5 pl-1 border-b border-border/50 font-mono">{fmtTs(selectedApp.lastAccessed)}</td>
+                        </tr>
+                      )}
 
                       {(selectedApp.urls?.length ?? 0) > 0 && <>
                         <tr><td colSpan={2} className="py-1.5 pl-1 font-semibold text-muted-foreground border-b border-border/50 pt-3">URLs</td></tr>
