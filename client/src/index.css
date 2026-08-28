@@ -1,6 +1,16 @@
 @import "tailwindcss";
 @config "../tailwind.config.js";
 
+/* Noto Color Emoji (flags-only subset, ~794 KB) — flag emoji for Windows where
+   Segoe UI Emoji has no flag ligature table. No unicode-range: Segoe UI Emoji
+   covers U+1F1E6-FF individually, which would prevent the browser from
+   downloading this font even though it cannot combine them into flags. */
+@font-face {
+  font-family: 'Noto Color Emoji';
+  src: url('/fonts/NotoColorEmoji-flagsonly.woff2') format('woff2');
+  font-display: swap;
+}
+
 @layer base {
   :root {
     --background: oklch(1 0 0);
