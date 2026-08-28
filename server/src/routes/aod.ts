@@ -1,4 +1,5 @@
 import { appendFile, mkdir, rename, stat } from 'node:fs/promises';
+import { Readable } from 'node:stream';
 import { touchAppLastAccessed, updateAppFileState } from '../services/appService.js';
 import { getAnalytics, getRequests, recordAodRequest } from '../services/aodAnalyticsService.js';
 import { join } from 'node:path';
@@ -200,11 +201,15 @@ async function checkAppUp(appUrl: string): Promise<boolean> {
     const res    = await fetch(origin, { signal: ctrl.signal }).finally(() => clearTimeout(id));
     // CF GoRouter returns 502/503 when the app process is down
     if (res.status === 502 || res.status === 503) return false;
-    // CF GoRouter returns 404 with "Requested route ('...') does not exist" when the app is
-    // stopped or scaled to zero and the route is no longer routable
+    // CF GoRouter sets X-Cf-Routererror on any routing failure:
+    //   endpoint_failure → app stopped/crashed (502)
+    //   unknown_route    → route not registered (404)
+    // This is more reliable than body-sniffing and covers both cases.
+    if (res.headers.get('x-cf-routererror')) return false;
+    // Fallback body check for older CF versions that may not set the header
     if (res.status === 404) {
       const body = await res.text();
-      return !body.includes('Requested route (');
+      if (/Requested route \('[^']*'\) does not exist\./i.test(body) || body.includes('CF-RouteNotFound')) return false;
     }
     return true;
   } catch {
@@ -271,8 +276,6 @@ export async function aodProxyHandler(req: Request, res: Response, next: NextFun
   const region     = typeof hRegion    === 'string' ? hRegion    : (extractRegion(appUrl) ?? 'unknown');
   const subdomain  = typeof hSubdomain === 'string' ? hSubdomain : 'unknown';
 
-  logger.debug({ appUrl, appId, region, subdomain, path: req.path, method: req.method }, 'AOD: incoming request');
-
   const userId = extractUserId(req);
 
   // Start geo lookup early so it can run concurrently with the app check / proxy
@@ -306,43 +309,65 @@ export async function aodProxyHandler(req: Request, res: Response, next: NextFun
       void updateAppFileState(appId, region, subdomain, 'STARTED');
     }
 
-    // Build proxy headers — strip host, x-aod-*, and content-length (recalculated below)
+    // Build proxy headers — strip host and x-aod-* only.
+    // content-length is forwarded as-is: express.raw() captured the exact client bytes so the
+    // original value is correct. accept-encoding is forwarded as-is: for 2xx we pipe raw bytes
+    // so the client handles decompression itself; for errors we buffer and strip content-encoding.
     const proxyHeaders: Record<string, string> = {};
     for (const [k, v] of Object.entries(req.headers)) {
-      if (k.toLowerCase() === 'host') continue;
-      if (k.toLowerCase().startsWith('x-aod-')) continue;
-      if (k.toLowerCase() === 'content-length') continue;
+      const lk = k.toLowerCase();
+      if (lk === 'host') continue;
+      if (lk.startsWith('x-aod-')) continue;
       if (typeof v === 'string') proxyHeaders[k] = v;
       else if (Array.isArray(v)) proxyHeaders[k] = v.join(', ');
     }
 
     const hasBody = req.method !== 'GET' && req.method !== 'HEAD';
-    const bodyBuf = hasBody ? JSON.stringify(req.body) : undefined;
-    if (bodyBuf !== undefined) {
-      proxyHeaders['content-length'] = String(Buffer.byteLength(bodyBuf, 'utf-8'));
-    }
+    // req.body is a raw Buffer captured by express.raw() — forward as-is for any content type
+    const rawBody: Buffer | undefined = hasBody && Buffer.isBuffer(req.body) && req.body.length > 0
+      ? req.body
+      : undefined;
 
     // Upstream request and geo lookup run concurrently
     const [upstream, geo] = await Promise.all([
-      fetch(targetUrl, { method: req.method, headers: proxyHeaders, body: bodyBuf }),
+      fetch(targetUrl, { method: req.method, headers: proxyHeaders, body: rawBody as BodyInit | undefined }),
       geoPromise,
     ]);
 
     const totalMs = Date.now() - t0;
 
+    logger.debug({ appUrl, appId, region, subdomain, path: req.path, method: req.method, status: upstream.status, totalMs }, 'AOD: proxy response');
+
     res.status(upstream.status);
-    upstream.headers.forEach((v, k) => {
-      if (k.toLowerCase() === 'transfer-encoding') return;
-      res.setHeader(k, v);
-    });
-    const upBuf = await upstream.arrayBuffer();
-    res.end(Buffer.from(upBuf));
 
     // Write access log + fire analytics event + touch lastAccessed — all non-blocking
     const reqTs = Math.floor(t0 / 1000);
     void appendCsvLog(region, subdomain, reqTs, appUrl, appId, clientIp, geo.country, geo.countryCode, geo.city, geo.lat, geo.lon, userId, startupMs, totalMs);
     recordAodRequest({ region, subdomain, appId, userId, country: geo.country, countryCode: geo.countryCode, city: geo.city, lat: geo.lat, lon: geo.lon, ts: reqTs });
     void touchAppLastAccessed(appId, region, subdomain, reqTs);
+
+    if (upstream.status < 300 && upstream.body) {
+      // Forward headers as-is and pipe raw bytes — accept-encoding was forwarded so the
+      // upstream may compress; we relay those bytes directly and the client decompresses.
+      upstream.headers.forEach((v, k) => {
+        if (k.toLowerCase() === 'transfer-encoding') return;
+        res.setHeader(k, v);
+      });
+      Readable.fromWeb(upstream.body as Parameters<typeof Readable.fromWeb>[0]).pipe(res);
+    } else {
+      // Buffer error responses. undici decompresses transparently, so strip encoding
+      // headers and recalculate content-length from the actual (decoded) buffer.
+      upstream.headers.forEach((v, k) => {
+        const lk = k.toLowerCase();
+        if (lk === 'transfer-encoding') return;
+        if (lk === 'content-encoding') return;
+        if (lk === 'content-length') return;
+        res.setHeader(k, v);
+      });
+      const upBuf = Buffer.from(await upstream.arrayBuffer());
+      res.setHeader('content-length', upBuf.length);
+      res.end(upBuf);
+    }
   } catch (err) {
     logger.error({ err, appUrl, targetUrl }, 'AOD proxy error');
     next(err);

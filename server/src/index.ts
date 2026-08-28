@@ -37,7 +37,9 @@ logger.info({ configFile: config.CONFIG_FILE, services: cfg.services.length }, '
 app.use('/health', healthRouter);
 app.use(authRouter);
 // AOD proxy: no auth — must be mounted before requireSessionGlobal
-app.use('/aod', aodProxyHandler);
+// Raw body parser for the AOD proxy — must run before express.json() consumes the stream.
+// body-parser sets req._body=true so express.json() skips re-parsing afterwards.
+app.use('/aod', express.raw({ type: '*/*', limit: '50mb' }), aodProxyHandler);
 // API responses must never be cached — prevents 304s on repeated /api/view requests
 app.use('/api', (_req, res, next) => { res.setHeader('Cache-Control', 'no-store'); next(); });
 // Global session auth: all /api/* require login when XSUAA is bound (exceptions in requireSessionGlobal)
