@@ -1,162 +1,205 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
+import { MapContainer, GeoJSON, Marker } from 'react-leaflet';
+import L from 'leaflet';
+import type { Feature, FeatureCollection, GeoJsonObject, Geometry } from 'geojson';
+import type { PathOptions } from 'leaflet';
+import 'leaflet/dist/leaflet.css';
 
-// Simplified continent/landmass outlines as [lon, lat][] polygons (equirectangular)
-const LAND: [number, number][][] = [
-  // North America
-  [[-168,71],[-141,61],[-130,54],[-125,49],[-125,38],[-117,32],[-97,26],
-   [-84,10],[-82,9],[-78,8],[-90,15],[-98,20],[-108,23],[-118,29],
-   [-126,35],[-126,49],[-138,59],[-153,60],[-166,68],[-168,71]],
-  // Greenland
-  [[-25,75],[-18,78],[-20,84],[-44,85],[-62,82],[-74,76],[-25,75]],
-  // South America
-  [[-80,10],[-62,12],[-50,2],[-35,-5],[-35,-12],[-40,-30],[-52,-52],
-   [-70,-52],[-74,-44],[-72,-34],[-65,-22],[-76,-10],[-80,2],[-80,10]],
-  // Europe (simplified, blended with western Russia)
-  [[-12,36],[5,36],[15,38],[28,38],[35,43],[40,48],[38,55],[30,68],
-   [18,72],[5,62],[-5,58],[-8,50],[-10,44],[-5,36],[-12,36]],
-  // Scandinavia
-  [[5,58],[8,62],[12,66],[18,70],[28,70],[22,60],[18,56],[10,56],[5,58]],
-  // British Isles
-  [[-8,50],[2,50],[2,52],[0,54],[-5,56],[-8,56],[-8,50]],
-  // Africa
-  [[-18,37],[38,37],[42,12],[52,11],[44,2],[42,-5],[35,-28],[20,-35],
-   [18,-35],[10,-20],[8,-5],[0,5],[-5,5],[-16,8],[-18,15],[-18,37]],
-  // Madagascar
-  [[44,-12],[50,-15],[50,-25],[44,-25],[44,-12]],
-  // Eurasia main (including SE Asia peninsula)
-  [[28,38],[38,38],[42,12],[52,12],[62,22],[68,22],[78,26],[80,28],
-   [90,24],[95,22],[100,10],[104,1],[106,5],[110,22],[116,24],[120,25],
-   [130,35],[130,42],[142,46],[148,52],[168,55],[175,64],[170,72],
-   [145,72],[100,72],[60,72],[38,65],[28,62],[28,38]],
-  // Indian subcontinent
-  [[68,24],[80,28],[80,22],[76,8],[72,8],[68,24]],
-  // Japan (simplified)
-  [[130,31],[132,32],[135,34],[140,38],[142,44],[140,42],[136,35],[130,31]],
-  // Taiwan
-  [[120,22],[122,22],[122,25],[120,25],[120,22]],
-  // Sumatra
-  [[95,5],[105,-2],[108,-5],[106,-6],[95,-5],[95,5]],
-  // Borneo
-  [[108,4],[118,7],[118,0],[108,-4],[108,4]],
-  // Java
-  [[106,-6],[112,-8],[115,-8],[114,-7],[106,-6]],
-  // Australia
-  [[115,-22],[130,-15],[148,-18],[152,-25],[152,-34],[148,-40],
-   [138,-38],[128,-35],[115,-35],[113,-25],[115,-22]],
-  // New Zealand (N Island)
-  [[174,-37],[178,-37],[178,-40],[174,-41],[174,-37]],
-  // New Zealand (S Island)
-  [[168,-44],[172,-44],[172,-46],[170,-47],[168,-46],[168,-44]],
-  // Antarctica
-  [[-180,-68],[0,-70],[180,-68],[180,-90],[-180,-90],[-180,-68]],
-];
+export interface CityPoint { lat: number; lon: number; count: number; city: string; country: string; countryCode: string; }
 
-const W = 1200;
-const H = 600;
-const lonToX = (lon: number) => ((lon + 180) / 360) * W;
-const latToY = (lat: number) => ((90 - lat) / 180) * H;
+// ip-api.com country name → Natural Earth 110m name for choropleth matching
+const COUNTRY_NAME_MAP: Record<string, string> = {
+  'United States':                    'United States of America',
+  'Czech Republic':                   'Czechia',
+  'Bosnia and Herzegovina':           'Bosnia and Herz.',
+  'Central African Republic':         'Central African Rep.',
+  'Democratic Republic of the Congo': 'Dem. Rep. Congo',
+  'Dominican Republic':               'Dominican Rep.',
+  'Ivory Coast':                      "Cote d'Ivoire",
+  'South Korea':                      'South Korea',
+  'North Korea':                      'North Korea',
+  'Republic of the Congo':            'Congo',
+  'Tanzania':                         'United Rep. of Tanzania',
+  'Syria':                            'Syrian Arab Republic',
+  'Laos':                             'Lao PDR',
+  'Moldova':                          'Republic of Moldova',
+  'North Macedonia':                  'North Macedonia',
+  'Palestine':                        'Palestine',
+  'Vatican City':                     'Vatican',
+  'Eswatini':                         'eSwatini',
+  'Myanmar':                          'Myanmar',
+  'Venezuela':                        'Venezuela',
+  'Bolivia':                          'Bolivia',
+  'Russia':                           'Russia',
+  'Iran':                             'Iran',
+  'Vietnam':                          'Vietnam',
+  'Taiwan':                           'Taiwan',
+};
 
-export interface CityPoint { lat: number; lon: number; count: number; city: string; }
+// Convert ISO 3166-1 alpha-2 code to flag emoji (Unicode regional indicators)
+function countryFlag(code: string): string {
+  if (!code || code.length !== 2) return '';
+  const base = 0x1F1E6 - 0x41; // A.charCodeAt(0) = 65
+  return String.fromCodePoint(base + code.toUpperCase().charCodeAt(0), base + code.toUpperCase().charCodeAt(1));
+}
 
-export default function WorldMap({ cities, isDark }: { cities: CityPoint[]; isDark?: boolean }) {
-  const canvasRef  = useRef<HTMLCanvasElement>(null);
-  const [tooltip, setTooltip] = useState<{ x: number; y: number; city: string; count: number } | null>(null);
+// Shift negative longitudes of antimeridian-crossing rings to keep polygons continuous.
+// Leaflet draws a horizontal line across the whole map for any ring that has coordinates
+// on both sides of the +/-180 meridian (Russia, Fiji). Adding 360 to negative coords
+// places the ring in the 180-210 range -- still correct on the repeating mercator tile.
+function fixRing(ring: number[][]): number[][] {
+  const hasEast = ring.some(c => c[0] > 90);
+  const hasWest = ring.some(c => c[0] < -90);
+  if (!hasEast || !hasWest) return ring;
+  return ring.map(([lon, lat, ...r]) => [lon < 0 ? lon + 360 : lon, lat, ...r]);
+}
 
-  useEffect(() => {
-    const canvas = canvasRef.current;
-    const ctx    = canvas?.getContext('2d');
-    if (!canvas || !ctx) return;
+function fixGeom(g: Geometry): Geometry {
+  if (g.type === 'Polygon')      return { ...g, coordinates: g.coordinates.map(fixRing) };
+  if (g.type === 'MultiPolygon') return { ...g, coordinates: g.coordinates.map(p => p.map(fixRing)) };
+  return g;
+}
 
-    // Background
-    ctx.fillStyle = isDark ? '#0c1424' : '#dbeafe';
-    ctx.fillRect(0, 0, W, H);
+let worldCache: GeoJsonObject | null = null;
+async function loadWorld(): Promise<GeoJsonObject> {
+  if (worldCache) return worldCache;
+  const res  = await fetch('/world.geojson');
+  const raw  = await res.json() as FeatureCollection;
+  const features: Feature[] = raw.features
+    .filter(f => {
+      const g = f.geometry;
+      if (!g || (g.type !== 'Polygon' && g.type !== 'MultiPolygon')) return true;
+      const flat = g.type === 'Polygon' ? g.coordinates.flat() : g.coordinates.flat(2);
+      return flat.some(c => c[1] > -55); // drop Antarctica
+    })
+    .map(f => f.geometry ? { ...f, geometry: fixGeom(f.geometry) } : f);
+  worldCache = { type: 'FeatureCollection', features } as GeoJsonObject;
+  return worldCache;
+}
 
-    // Graticule (every 30°)
-    ctx.strokeStyle = isDark ? '#1e3a5f' : '#bfdbfe';
-    ctx.lineWidth   = 0.5;
-    for (let lon = -180; lon <= 180; lon += 30) {
-      const x = lonToX(lon);
-      ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke();
+function choroplethColor(count: number, maxCount: number, isDark: boolean): string {
+  if (count === 0) return isDark ? '#1f2937' : '#d1d5db';
+  const t = Math.pow(count / maxCount, 0.4);
+  if (isDark) {
+    const r = Math.round(0x14 + t * (0x4a - 0x14));
+    const g = Math.round(0x53 + t * (0xde - 0x53));
+    const b = Math.round(0x2d + t * (0x80 - 0x2d));
+    return `rgb(${r},${g},${b})`;
+  } else {
+    const r = Math.round(0x16 + t * (0x86 - 0x16));
+    const g = Math.round(0x65 + t * (0xef - 0x65));
+    const b = Math.round(0x34 + t * (0xac - 0x34));
+    return `rgb(${r},${g},${b})`;
+  }
+}
+
+// No data: 50% opaque; fewer requests: 70% opaque; more requests: 90% opaque
+function choroplethOpacity(count: number, maxCount: number): number {
+  if (count === 0) return 0.5;
+  return 0.7 + Math.pow(count / maxCount, 0.4) * 0.2;
+}
+
+interface Props {
+  cities:         CityPoint[];
+  isDark?:        boolean;
+  selectedCity?:  string;
+  onCityClick?:   (cityKey: string) => void;
+}
+
+export default function WorldMap({ cities, isDark, selectedCity, onCityClick }: Props) {
+  const [world, setWorld] = useState<GeoJsonObject | null>(null);
+
+  useEffect(() => { void loadWorld().then(setWorld); }, []);
+
+  const countByNEName = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const c of cities) {
+      const neName = COUNTRY_NAME_MAP[c.country] ?? c.country;
+      m.set(neName, (m.get(neName) ?? 0) + c.count);
     }
-    for (let lat = -90; lat <= 90; lat += 30) {
-      const y = latToY(lat);
-      ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke();
-    }
+    return m;
+  }, [cities]);
 
-    // Land polygons
-    ctx.fillStyle   = isDark ? '#1e3d6e' : '#93c5fd';
-    ctx.strokeStyle = isDark ? '#2563ab' : '#60a5fa';
-    ctx.lineWidth   = 0.8;
-    for (const poly of LAND) {
-      if (poly.length < 2) continue;
-      ctx.beginPath();
-      ctx.moveTo(lonToX(poly[0]![0]), latToY(poly[0]![1]));
-      for (let i = 1; i < poly.length; i++) ctx.lineTo(lonToX(poly[i]![0]), latToY(poly[i]![1]));
-      ctx.closePath();
-      ctx.fill();
-      ctx.stroke();
-    }
+  const countryMaxCount = useMemo(() => {
+    let max = 1;
+    countByNEName.forEach(v => { if (v > max) max = v; });
+    return max;
+  }, [countByNEName]);
 
-    // City dots
-    if (cities.length > 0) {
-      const maxCount = Math.max(...cities.map(c => c.count));
-      for (const city of cities) {
-        const x = lonToX(city.lon);
-        const y = latToY(city.lat);
-        const r = 3 + (Math.log(city.count + 1) / Math.log(maxCount + 1)) * 14;
-
-        // Glow
-        const grd = ctx.createRadialGradient(x, y, 0, x, y, r * 2.5);
-        grd.addColorStop(0, 'rgba(251,146,60,0.35)');
-        grd.addColorStop(1, 'rgba(251,146,60,0)');
-        ctx.fillStyle = grd;
-        ctx.beginPath(); ctx.arc(x, y, r * 2.5, 0, Math.PI * 2); ctx.fill();
-
-        // Core dot
-        ctx.fillStyle = '#f97316';
-        ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.fill();
-      }
-    }
-  }, [cities, isDark]);
-
-  const handleMouseMove = (e: React.MouseEvent<HTMLCanvasElement>) => {
-    const canvas = canvasRef.current;
-    if (!canvas || cities.length === 0) return;
-    const rect = canvas.getBoundingClientRect();
-    const mx   = (e.clientX - rect.left) * (W / rect.width);
-    const my   = (e.clientY - rect.top)  * (H / rect.height);
-    const max  = Math.max(...cities.map(c => c.count));
-    for (const city of cities) {
-      const cx = lonToX(city.lon);
-      const cy = latToY(city.lat);
-      const r  = 3 + (Math.log(city.count + 1) / Math.log(max + 1)) * 14;
-      if (Math.hypot(mx - cx, my - cy) <= r + 4) {
-        setTooltip({ x: e.clientX - rect.left, y: e.clientY - rect.top, city: city.city, count: city.count });
-        return;
-      }
-    }
-    setTooltip(null);
+  const countryStyle = (feature?: Feature): PathOptions => {
+    const name  = (feature?.properties as Record<string, string> | undefined)?.['name'] ?? '';
+    const count = countByNEName.get(name) ?? 0;
+    return {
+      fillColor:   choroplethColor(count, countryMaxCount, isDark ?? false),
+      fillOpacity: choroplethOpacity(count, countryMaxCount),
+      color:       isDark ? '#374151' : '#9ca3af',
+      weight:      0.5,
+    };
   };
+
+  // Key includes selectedCity so label highlight re-renders when selection changes
+  const geoJsonKey = useMemo(
+    () => cities.map(c => `${c.lat},${c.lon},${c.count}`).join('|') + (isDark ? 'd' : 'l'),
+    [cities, isDark],
+  );
 
   return (
     <div className="relative w-full rounded-lg overflow-hidden" style={{ aspectRatio: '2/1' }}>
-      <canvas
-        ref={canvasRef}
-        width={W}
-        height={H}
-        className="w-full h-full"
-        onMouseMove={handleMouseMove}
-        onMouseLeave={() => setTooltip(null)}
-      />
-      {tooltip && (
-        <div
-          className="absolute pointer-events-none bg-popover border border-border rounded px-2 py-1 text-xs shadow-md whitespace-nowrap"
-          style={{ left: tooltip.x + 10, top: tooltip.y - 24 }}
-        >
-          <span className="font-medium">{tooltip.city}</span>
-          <span className="text-muted-foreground ml-1">· {tooltip.count} req</span>
-        </div>
-      )}
+      <MapContainer
+        center={[25, 10]}
+        zoom={1.5}
+        minZoom={1}
+        maxZoom={6}
+        style={{ height: '100%', width: '100%', background: 'transparent' }}
+        attributionControl={false}
+        zoomControl={false}
+      >
+        {world && (
+          <GeoJSON
+            key={geoJsonKey}
+            data={world}
+            style={countryStyle}
+          />
+        )}
+
+        {cities.map((city, i) => {
+          const flag      = countryFlag(city.countryCode);
+          const key       = `${city.countryCode}-${city.city}`;
+          const active    = selectedCity === key;
+          const clickable = !!onCityClick;
+          const bg        = active ? 'rgba(16,185,129,0.9)' : 'rgba(0,0,0,0.72)';
+          const outline   = active ? '2px solid #10b981' : 'none';
+          const ptrEvt    = clickable ? 'auto' : 'none';
+          const cursor    = clickable ? 'pointer' : 'default';
+          const reqColor  = active ? '#fff' : '#86efac';
+
+          const icon = L.divIcon({
+            className: '',
+            iconSize:   [0, 0],
+            iconAnchor: [0, 0],
+            html: [
+              `<div style="position:absolute;transform:translate(-50%,-50%);`,
+              `background:${bg};outline:${outline};color:#fff;`,
+              `font-size:10px;line-height:1.45;padding:2px 6px;border-radius:3px;`,
+              `white-space:nowrap;pointer-events:${ptrEvt};cursor:${cursor};`,
+              `display:flex;flex-direction:column;align-items:center;">`,
+              `<span>${flag ? flag + ' ' : ''}${city.city}</span>`,
+              `<span style="color:${reqColor}">Req: ${city.count.toLocaleString()}</span>`,
+              `</div>`,
+            ].join(''),
+          });
+
+          return (
+            <Marker
+              key={`${key}-${i}-${active ? 'a' : 'i'}`}
+              position={[city.lat, city.lon]}
+              icon={icon}
+              interactive={clickable}
+              eventHandlers={clickable ? { click: () => onCityClick(key) } : undefined}
+            />
+          );
+        })}
+      </MapContainer>
     </div>
   );
 }

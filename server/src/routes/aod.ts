@@ -51,7 +51,7 @@ const AOD_DIR = join(config.LOCAL_STORE_DIR, 'apps');
 const startQueue = new Map<string, Promise<'up' | 'timeout'>>();
 
 // Geo cache keyed by IPv4 /24 subnet or full IPv6 address
-const geoCache = new Map<string, { city: string; lat: number; lon: number }>();
+const geoCache = new Map<string, { country: string; countryCode: string; city: string; lat: number; lon: number }>();
 
 const REGION_RE   = /\.cfapps\.([\w-]+)\.hana\.ondemand\.com/i;
 const PRIVATE_IP  = /^(10\.|172\.(1[6-9]|2\d|3[01])\.|192\.168\.|127\.|::1$)/;
@@ -64,9 +64,9 @@ function extractRegion(url: string): string | null {
 
 // ─── Geo lookup ───────────────────────────────────────────────────────────────
 
-async function lookupGeo(rawIp: string): Promise<{ city: string; lat: number; lon: number }> {
+async function lookupGeo(rawIp: string): Promise<{ country: string; countryCode: string; city: string; lat: number; lon: number }> {
   const ip    = rawIp.startsWith('::ffff:') ? rawIp.slice(7) : rawIp;
-  const empty = { city: '', lat: 0, lon: 0 };
+  const empty = { country: '', countryCode: '', city: '', lat: 0, lon: 0 };
   if (!ip || PRIVATE_IP.test(ip)) return empty;
 
   // Cache key: /24 subnet for IPv4, full address for IPv6
@@ -79,12 +79,12 @@ async function lookupGeo(rawIp: string): Promise<{ city: string; lat: number; lo
   try {
     const ctrl = new AbortController();
     const id   = setTimeout(() => ctrl.abort(), 3000);
-    const res  = await fetch(`http://ip-api.com/json/${ip}?fields=status,city,lat,lon`, { signal: ctrl.signal })
+    const res  = await fetch(`http://ip-api.com/json/${ip}?fields=status,country,countryCode,city,lat,lon`, { signal: ctrl.signal })
       .finally(() => clearTimeout(id));
     if (res.ok) {
-      const data = await res.json() as { status?: string; city?: string; lat?: number; lon?: number };
+      const data = await res.json() as { status?: string; country?: string; countryCode?: string; city?: string; lat?: number; lon?: number };
       if (data.status === 'success') {
-        const geo = { city: data.city ?? '', lat: data.lat ?? 0, lon: data.lon ?? 0 };
+        const geo = { country: data.country ?? '', countryCode: data.countryCode ?? '', city: data.city ?? '', lat: data.lat ?? 0, lon: data.lon ?? 0 };
         geoCache.set(cacheKey, geo);
         return geo;
       }
@@ -113,16 +113,18 @@ function extractUserId(req: Request): string {
 
 // ─── Access log CSV ───────────────────────────────────────────────────────────
 
-const CSV_HEADER = '"requestTime","url","appId","clientIp","city","lat","lon","userId","startupMs","totalResponseMs"\n';
+const CSV_HEADER = '"requestTime","url","appId","clientIp","country","countryCode","city","lat","lon","userId","startupMs","totalResponseMs"\n';
 
 async function appendCsvLog(
-  region:    string,
-  subdomain: string,
+  region:      string,
+  subdomain:   string,
   requestTime: number,   // unix seconds
-  appUrl:    string,
-  appId:     string,
-  clientIp:  string,
-  city:      string,
+  appUrl:      string,
+  appId:       string,
+  clientIp:    string,
+  country:     string,
+  countryCode: string,
+  city:        string,
   lat:       number,
   lon:       number,
   userId:    string,
@@ -148,7 +150,7 @@ async function appendCsvLog(
     try { await stat(csvPath); } catch { needsHeader = true; }
 
     const esc  = (v: string | number) => `"${String(v).replace(/"/g, '""')}"`;
-    const row  = [requestTime, appUrl, appId, clientIp, city, lat, lon, userId, startupMs, totalMs].map(esc).join(',') + '\n';
+    const row  = [requestTime, appUrl, appId, clientIp, country, countryCode, city, lat, lon, userId, startupMs, totalMs].map(esc).join(',') + '\n';
     await appendFile(csvPath, needsHeader ? CSV_HEADER + row : row, 'utf-8');
   } catch (err) {
     logger.warn({ err, region, subdomain }, 'AOD: failed to write access log');
@@ -222,8 +224,9 @@ export async function aodProxyHandler(req: Request, res: Response, next: NextFun
   const t0       = Date.now();
   const appUrl   = req.headers['x-aod-app-url'];
   const appId    = req.headers['x-aod-app-id'];
-  const rawFwd   = req.headers['x-forwarded-for'] ?? req.ip ?? '';
-  const fwdStr   = Array.isArray(rawFwd) ? (rawFwd[0] ?? '') : rawFwd;
+  // x-forwarded-for is a CSV of IPs added by each proxy; take the first (original client)
+  const fwdRaw   = req.headers['x-forwarded-for'] ?? req.headers['x_forwarded_for'] ?? req.ip ?? '';
+  const fwdStr   = Array.isArray(fwdRaw) ? (fwdRaw[0] ?? '') : fwdRaw;
   const clientIp = fwdStr.split(',')[0]?.trim() ?? '';
 
   if (!appUrl || typeof appUrl !== 'string' || !appId || typeof appId !== 'string') {
@@ -262,8 +265,8 @@ export async function aodProxyHandler(req: Request, res: Response, next: NextFun
         const totalMs  = Date.now() - t0;
         const timeoutTs = Math.floor(t0 / 1000);
         const geo       = await geoPromise;
-        void appendCsvLog(region, subdomain, timeoutTs, appUrl, appId, clientIp, geo.city, geo.lat, geo.lon, userId, startupMs, totalMs);
-        recordAodRequest({ region, subdomain, appId, userId, city: geo.city, lat: geo.lat, lon: geo.lon, ts: timeoutTs });
+        void appendCsvLog(region, subdomain, timeoutTs, appUrl, appId, clientIp, geo.country, geo.countryCode, geo.city, geo.lat, geo.lon, userId, startupMs, totalMs);
+        recordAodRequest({ region, subdomain, appId, userId, country: geo.country, countryCode: geo.countryCode, city: geo.city, lat: geo.lat, lon: geo.lon, ts: timeoutTs });
         void touchAppLastAccessed(appId, region, subdomain, timeoutTs);
         res.status(503).json({ ok: false, error: 'App did not start within timeout' });
         return;
@@ -301,8 +304,8 @@ export async function aodProxyHandler(req: Request, res: Response, next: NextFun
 
     // Write access log + fire analytics event + touch lastAccessed — all non-blocking
     const reqTs = Math.floor(t0 / 1000);
-    void appendCsvLog(region, subdomain, reqTs, appUrl, appId, clientIp, geo.city, geo.lat, geo.lon, userId, startupMs, totalMs);
-    recordAodRequest({ region, subdomain, appId, userId, city: geo.city, lat: geo.lat, lon: geo.lon, ts: reqTs });
+    void appendCsvLog(region, subdomain, reqTs, appUrl, appId, clientIp, geo.country, geo.countryCode, geo.city, geo.lat, geo.lon, userId, startupMs, totalMs);
+    recordAodRequest({ region, subdomain, appId, userId, country: geo.country, countryCode: geo.countryCode, city: geo.city, lat: geo.lat, lon: geo.lon, ts: reqTs });
     void touchAppLastAccessed(appId, region, subdomain, reqTs);
   } catch (err) {
     logger.error({ err, appUrl, targetUrl }, 'AOD proxy error');

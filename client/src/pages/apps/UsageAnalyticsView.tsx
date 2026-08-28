@@ -1,10 +1,10 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import WorldMap from './WorldMap';
 
 // ─── Types (mirrored from aodAnalyticsService) ────────────────────────────────
 
-interface AnalyticsCity    { city: string; lat: number; lon: number; count: number; }
-interface AnalyticsRequest { ts: number; region: string; alias: string; subdomain: string; userId: string; appName?: string; spaceName?: string; appGuid?: string; }
+interface AnalyticsCity    { city: string; country: string; countryCode: string; lat: number; lon: number; count: number; }
+interface AnalyticsRequest { ts: number; region: string; alias: string; subdomain: string; userId: string; appName?: string; spaceName?: string; appGuid?: string; city?: string; countryCode?: string; }
 interface AnalyticsPayload {
   totalRequests: number; uniqueUsers: number; startedAppsGb: number; startedAppsCount: number;
   requestedAppsCount: number; latestRequestTs: number;
@@ -16,7 +16,7 @@ interface AnalyticsPayload {
 interface AnalyticsUpdateMsg {
   type:    'analytics-update';
   request: AnalyticsRequest;
-  city?:   { city: string; lat: number; lon: number };
+  city?:   { city: string; country: string; countryCode: string; lat: number; lon: number };
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -31,6 +31,7 @@ function fmtLatestRequest(ts: number): string {
 }
 
 const geoKey = (lat: number, lon: number) => `${lat.toFixed(2)},${lon.toFixed(2)}`;
+const cityKey = (countryCode: string, city: string) => `${countryCode}-${city}`;
 
 // ─── Sub-components ───────────────────────────────────────────────────────────
 
@@ -75,10 +76,11 @@ interface Props {
 }
 
 export default function UsageAnalyticsView({ isDarkMap, durationHours, onOpenModal }: Props) {
-  const [data,    setData]    = useState<AnalyticsPayload | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [error,   setError]   = useState<string | null>(null);
-  const [liveReqs, setLiveReqs] = useState<AnalyticsRequest[]>([]);
+  const [data,         setData]         = useState<AnalyticsPayload | null>(null);
+  const [loading,      setLoading]      = useState(false);
+  const [error,        setError]        = useState<string | null>(null);
+  const [liveReqs,     setLiveReqs]     = useState<AnalyticsRequest[]>([]);
+  const [selectedCity, setSelectedCity] = useState<string>('');
   const esRef = useRef<EventSource | null>(null);
 
   const handleOpen = useCallback((region: string, subdomain: string, appGuid: string, spaceName?: string, appName?: string) => {
@@ -141,6 +143,26 @@ export default function UsageAnalyticsView({ isDarkMap, durationHours, onOpenMod
     return () => { es.close(); esRef.current = null; };
   }, [durationHours, fetchAnalytics]);
 
+  // ── City filter options (built from cities data) ──────────────────────────
+
+  const cityOptions = useMemo(() => {
+    const cities = data?.cities ?? [];
+    return [...cities]
+      .filter(c => c.countryCode && c.city)
+      .sort((a, b) => b.count - a.count)
+      .map(c => ({ key: cityKey(c.countryCode, c.city), label: `${c.countryCode}-${c.city}` }));
+  }, [data?.cities]);
+
+  const filteredReqs = useMemo(() => {
+    if (!selectedCity) return liveReqs;
+    return liveReqs.filter(r => r.countryCode && r.city && cityKey(r.countryCode, r.city) === selectedCity);
+  }, [liveReqs, selectedCity]);
+
+  // Reset filter if the selected city is no longer in the options
+  useEffect(() => {
+    if (selectedCity && !cityOptions.some(o => o.key === selectedCity)) setSelectedCity('');
+  }, [cityOptions, selectedCity]);
+
   // ── Render ────────────────────────────────────────────────────────────────
 
   return (
@@ -179,17 +201,39 @@ export default function UsageAnalyticsView({ isDarkMap, durationHours, onOpenMod
       <div className="flex gap-4 min-h-0">
         <div className="flex-[3] min-w-0">
           <div className="text-xs font-medium text-muted-foreground mb-1.5">Requests by Location</div>
-          <WorldMap cities={data?.cities ?? []} isDark={isDarkMap} />
+          <WorldMap
+            cities={data?.cities ?? []}
+            isDark={isDarkMap}
+            selectedCity={selectedCity}
+            onCityClick={key => setSelectedCity(prev => prev === key ? '' : key)}
+          />
           {!loading && (data?.cities ?? []).length === 0 && (
             <div className="text-xs text-muted-foreground text-center mt-2">No geo data for this period</div>
           )}
         </div>
         <div className="flex-1 min-w-0 flex flex-col">
-          <div className="text-xs font-medium text-muted-foreground mb-1.5">Latest Requests</div>
+          {/* Header row: title + city filter select */}
+          <div className="flex items-center gap-2 mb-1.5 min-w-0">
+            <span className="text-xs font-medium text-muted-foreground shrink-0">Latest Requests</span>
+            {cityOptions.length > 0 && (
+              <select
+                value={selectedCity}
+                onChange={e => setSelectedCity(e.target.value)}
+                className="ml-auto text-[11px] rounded border border-border bg-background text-foreground px-1.5 py-0.5 min-w-0 max-w-[9rem] truncate focus:outline-none focus:ring-1 focus:ring-ring"
+              >
+                <option value="">All cities</option>
+                {cityOptions.map(o => (
+                  <option key={o.key} value={o.key}>{o.label}</option>
+                ))}
+              </select>
+            )}
+          </div>
           <div className="flex-1 rounded-lg border border-border bg-card px-3 py-2 overflow-auto">
-            {liveReqs.length === 0
-              ? <p className="text-xs text-muted-foreground text-center py-4">No requests yet</p>
-              : liveReqs.map((req, i) => <RequestRow key={`${req.ts}-${i}`} req={req} onOpen={handleOpen} />)
+            {filteredReqs.length === 0
+              ? <p className="text-xs text-muted-foreground text-center py-4">
+                  {selectedCity ? `No requests from ${selectedCity}` : 'No requests yet'}
+                </p>
+              : filteredReqs.map((req, i) => <RequestRow key={`${req.ts}-${i}`} req={req} onOpen={handleOpen} />)
             }
           </div>
         </div>

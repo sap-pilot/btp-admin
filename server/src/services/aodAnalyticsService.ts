@@ -10,8 +10,8 @@ const AOD_APPS_DIR = join(config.LOCAL_STORE_DIR, 'apps');
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
-export interface AnalyticsCity    { city: string; lat: number; lon: number; count: number; }
-export interface AnalyticsRequest { ts: number; region: string; alias: string; subdomain: string; userId: string; appName?: string; spaceName?: string; appGuid?: string; }
+export interface AnalyticsCity    { city: string; country: string; countryCode: string; lat: number; lon: number; count: number; }
+export interface AnalyticsRequest { ts: number; region: string; alias: string; subdomain: string; userId: string; appName?: string; spaceName?: string; appGuid?: string; city?: string; countryCode?: string; }
 export interface SubaccountAccess { region: string; subdomain: string; alias: string; appName: string; spaceName: string; lastAccessTs: number; appGuid?: string; }
 
 export interface AnalyticsPayload {
@@ -111,7 +111,7 @@ async function getAppMap(region: string, subdomain: string): Promise<Map<string,
 
 // ─── CSV reader ───────────────────────────────────────────────────────────────
 
-interface RawRow { ts: number; appId: string; city: string; lat: number; lon: number; userId: string; region: string; subdomain: string; }
+interface RawRow { ts: number; appId: string; country: string; countryCode: string; city: string; lat: number; lon: number; userId: string; region: string; subdomain: string; }
 
 async function readAccessLogs(durationHours: number): Promise<RawRow[]> {
   const cutoff = Math.floor(Date.now() / 1000) - durationHours * 3600;
@@ -145,11 +145,13 @@ async function readAccessLogs(durationHours: number): Promise<RawRow[]> {
         if (!ts || ts < cutoff) continue;
         rows.push({
           ts,
-          appId:     fields[idx['appId']  ?? 2] ?? '',
-          city:      fields[idx['city']   ?? 4] ?? '',
-          lat:       Number(fields[idx['lat']    ?? 5] ?? 0),
-          lon:       Number(fields[idx['lon']    ?? 6] ?? 0),
-          userId:    fields[idx['userId'] ?? 7] ?? '',
+          appId:       fields[idx['appId']       ?? 2]  ?? '',
+          country:     fields[idx['country']     ?? 99] ?? '',
+          countryCode: fields[idx['countryCode'] ?? 99] ?? '',
+          city:        fields[idx['city']        ?? 6]  ?? '',
+          lat:         Number(fields[idx['lat']  ?? 7]  ?? 0),
+          lon:         Number(fields[idx['lon']  ?? 8]  ?? 0),
+          userId:      fields[idx['userId']      ?? 9]  ?? '',
           region,
           subdomain,
         });
@@ -233,7 +235,7 @@ export async function getAnalytics(durationHours: number): Promise<AnalyticsPayl
       const key = `${row.lat.toFixed(2)},${row.lon.toFixed(2)}`;
       const existing = cityMap.get(key);
       if (existing) existing.count++;
-      else cityMap.set(key, { city: row.city || key, lat: row.lat, lon: row.lon, count: 1 });
+      else cityMap.set(key, { city: row.city || key, country: row.country, countryCode: row.countryCode, lat: row.lat, lon: row.lon, count: 1 });
     }
 
     const saKey = `${row.region}/${row.subdomain}`;
@@ -250,7 +252,7 @@ export async function getAnalytics(durationHours: number): Promise<AnalyticsPayl
       let am = perSaAppMaps.get(saKey);
       if (!am) { am = await getAppMap(row.region, row.subdomain); perSaAppMaps.set(saKey, am); }
       const meta = am.get(row.appId);
-      return { ts: row.ts, region: row.region, alias: aliasMap.get(saKey) ?? row.subdomain, subdomain: row.subdomain, userId: row.userId, appName: meta?.name, spaceName: meta?.spaceName, appGuid: row.appId };
+      return { ts: row.ts, region: row.region, alias: aliasMap.get(saKey) ?? row.subdomain, subdomain: row.subdomain, userId: row.userId, appName: meta?.name, spaceName: meta?.spaceName, appGuid: row.appId, city: row.city || undefined, countryCode: row.countryCode || undefined };
     }),
   );
 
@@ -291,7 +293,7 @@ export async function getAnalytics(durationHours: number): Promise<AnalyticsPayl
 // Called fire-and-forget from aodProxyHandler after each proxied request.
 export function recordAodRequest(data: {
   region: string; subdomain: string; appId: string; userId: string;
-  city: string; lat: number; lon: number; ts: number;
+  country: string; countryCode: string; city: string; lat: number; lon: number; ts: number;
 }): void {
   void (async () => {
     try {
@@ -303,14 +305,16 @@ export function recordAodRequest(data: {
       const geoKey = hasGeo ? `${data.lat.toFixed(2)},${data.lon.toFixed(2)}` : null;
 
       const request: AnalyticsRequest = {
-        ts:        data.ts,
-        region:    data.region,
+        ts:          data.ts,
+        region:      data.region,
         alias,
-        subdomain: data.subdomain,
-        userId:    data.userId,
-        appName:   meta?.name,
-        spaceName: meta?.spaceName,
-        appGuid:   data.appId,
+        subdomain:   data.subdomain,
+        userId:      data.userId,
+        appName:     meta?.name,
+        spaceName:   meta?.spaceName,
+        appGuid:     data.appId,
+        city:        data.city  || undefined,
+        countryCode: data.countryCode || undefined,
       };
 
       // Update in-memory request log
@@ -328,7 +332,7 @@ export function recordAodRequest(data: {
         if (hasGeo && geoKey) {
           const c = p.cities.find(x => `${x.lat.toFixed(2)},${x.lon.toFixed(2)}` === geoKey);
           if (c) c.count++;
-          else p.cities.push({ city: data.city || geoKey, lat: data.lat, lon: data.lon, count: 1 });
+          else p.cities.push({ city: data.city || geoKey, country: data.country, countryCode: data.countryCode, lat: data.lat, lon: data.lon, count: 1 });
         }
 
         p.latestRequests = [request, ...p.latestRequests].slice(0, 15);
@@ -347,7 +351,7 @@ export function recordAodRequest(data: {
 
       // Emit delta — client applies it to its local state
       const event: Record<string, unknown> = { type: 'analytics-update', request };
-      if (hasGeo) event['city'] = { city: data.city || geoKey, lat: data.lat, lon: data.lon };
+      if (hasGeo) event['city'] = { city: data.city || geoKey, country: data.country, countryCode: data.countryCode, lat: data.lat, lon: data.lon };
       event['subaccountUpdate'] = { region: data.region, subdomain: data.subdomain, alias, appName: meta?.name ?? '', spaceName: meta?.spaceName ?? '', lastAccessTs: data.ts, appGuid: data.appId };
       emitImmediate('aod-apps', event);
     } catch (err) {
