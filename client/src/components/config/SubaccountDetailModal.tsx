@@ -1,5 +1,5 @@
-import { useState, useEffect } from 'react';
-import { ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown, Filter, RotateCcw, Save, ShieldBan, X } from 'lucide-react';
+import { useState, useEffect, useRef } from 'react';
+import { ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown, Filter, Pencil, RotateCcw, Save, ShieldBan, X } from 'lucide-react';
 import * as DialogPrimitive from '@radix-ui/react-dialog';
 import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator,
@@ -7,17 +7,21 @@ import {
 } from '@/components/ui/dropdown-menu';
 import type { SubaccountEntry, SpaceEntry } from './SubaccountsTable';
 import type { CockpitMenuItem } from '@/components/home/HomepageContent';
+import type { TabEntry } from './TabsTable';
 
 interface Props {
-  sa:           SubaccountEntry | null;
-  onClose:      () => void;
-  cockpit?:     { idp: string; host: string };
-  cockpitMenu?: CockpitMenuItem | null;
-  isAdmin?:     boolean;
-  onSpaceSave?: (region: string, subdomain: string, spaces: { spaceId: string; manageDest: boolean; aod: boolean }[]) => Promise<void>;
+  sa:                   SubaccountEntry | null;
+  onClose:              () => void;
+  cockpit?:             { idp: string; host: string };
+  cockpitMenu?:         CockpitMenuItem | null;
+  isAdmin?:             boolean;
+  onSpaceSave?:         (region: string, subdomain: string, spaces: { spaceId: string; manageDest: boolean; aod: boolean }[]) => Promise<void>;
+  subaccounts?:         SubaccountEntry[];
+  onSelectSubaccount?:  (sa: SubaccountEntry) => void;
+  tabs?:                TabEntry[];
 }
 
-type ModalTab = 'info' | 'subscriptions' | 'services';
+type ModalTab = 'info' | 'services';
 
 // ─── Cockpit URL helpers ──────────────────────────────────────────────────────
 
@@ -53,7 +57,6 @@ function deriveCockpitRegion(region: string): string {
 function ensureHttps(host: string): string {
   return /^https?:\/\//i.test(host) ? host : `https://${host}`;
 }
-
 function stripProtocol(host: string): string {
   return host.replace(/^https?:\/\//i, '');
 }
@@ -133,16 +136,24 @@ function Field({ label, value, mono }: { label: string; value: string; mono?: bo
 const thCls = 'text-left px-2 py-1.5 text-[10px] font-medium text-muted-foreground border-b border-border';
 const tdCls = 'px-2 py-1.5 border-b border-border text-xs';
 
-export default function SubaccountDetailModal({ sa, onClose, cockpit, cockpitMenu, isAdmin, onSpaceSave }: Props) {
+export default function SubaccountDetailModal({ sa, onClose, cockpit, cockpitMenu, isAdmin, onSpaceSave, subaccounts, onSelectSubaccount, tabs }: Props) {
   const [activeTab, setActiveTab]           = useState<ModalTab>('info');
   const [svcFilter, setSvcFilter]           = useState('');
   const [subFilter, setSubFilter]           = useState('');
+  const [saFilter, setSaFilter]             = useState('');
   const [svcExpanded, setSvcExpanded]       = useState<Set<string>>(new Set());
   const [spaceDests, setSpaceDests]         = useState<Map<string, boolean>>(new Map());
   const [spaceDestsOrig, setSpaceDestsOrig] = useState<Map<string, boolean>>(new Map());
   const [spaceAods, setSpaceAods]           = useState<Map<string, boolean>>(new Map());
   const [spaceAodsOrig, setSpaceAodsOrig]   = useState<Map<string, boolean>>(new Map());
   const [spaceSaving, setSpaceSaving]       = useState(false);
+  const [spaceEditing, setSpaceEditing]     = useState(false);
+  const [overviewSplit, setOverviewSplit]   = useState(40);
+  const [servicesSplit, setServicesSplit]   = useState(40);
+
+  const overviewRef = useRef<HTMLDivElement>(null);
+  const servicesRef = useRef<HTMLDivElement>(null);
+  const dragging    = useRef<{ set: (v: number) => void; left: number; width: number } | null>(null);
 
   const canManageSpaces = isAdmin || window.location.hostname === 'localhost';
 
@@ -150,6 +161,7 @@ export default function SubaccountDetailModal({ sa, onClose, cockpit, cockpitMen
     if (!sa) return;
     setSvcFilter('');
     setSubFilter('');
+    setSpaceEditing(false);
     setSvcExpanded(new Set(sa.serviceInstances.map(svc => svc.spaceId ?? '')));
     const m  = new Map((sa.org?.spaces ?? []).map(s => [s.spaceId, s.manageDest ?? false]));
     const ma = new Map((sa.org?.spaces ?? []).map(s => [s.spaceId, s.aod ?? false]));
@@ -158,6 +170,25 @@ export default function SubaccountDetailModal({ sa, onClose, cockpit, cockpitMen
     setSpaceAods(new Map(ma));
     setSpaceAodsOrig(new Map(ma));
   }, [sa]);
+
+  useEffect(() => {
+    function onMove(e: MouseEvent) {
+      if (!dragging.current) return;
+      const { set, left, width } = dragging.current;
+      set(Math.min(75, Math.max(25, ((e.clientX - left) / width) * 100)));
+    }
+    function onUp() { dragging.current = null; }
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+    return () => { document.removeEventListener('mousemove', onMove); document.removeEventListener('mouseup', onUp); };
+  }, []);
+
+  function startDrag(e: React.MouseEvent, set: (v: number) => void, container: HTMLDivElement | null) {
+    if (!container) return;
+    const rect = container.getBoundingClientRect();
+    e.preventDefault();
+    dragging.current = { set, left: rect.left, width: rect.width };
+  }
 
   const tabCls = (t: ModalTab) =>
     `px-3 py-2 text-xs font-medium transition-colors border-b-2 -mb-px ${
@@ -178,12 +209,141 @@ export default function SubaccountDetailModal({ sa, onClose, cockpit, cockpitMen
       })));
       setSpaceDestsOrig(new Map(spaceDests));
       setSpaceAodsOrig(new Map(spaceAods));
+      setSpaceEditing(false);
     } finally {
       setSpaceSaving(false);
     }
   }
 
   const btnOutline = 'inline-flex items-center gap-1 px-2 py-1 rounded text-xs font-medium border border-border hover:bg-accent hover:text-accent-foreground transition-colors disabled:opacity-50 disabled:cursor-not-allowed';
+
+  // ── Subaccount switcher dropdown ──────────────────────────────────────────
+  const switcherList = subaccounts ?? [];
+  const showSwitcher = switcherList.length > 1 && !!onSelectSubaccount;
+
+  function renderSwitcherDropdown() {
+    if (!sa || !showSwitcher) return null;
+    const q = saFilter.toLowerCase().trim();
+
+    function saMatches(s: SubaccountEntry): boolean {
+      if (!q) return true;
+      return (s.alias || s.subaccountName).toLowerCase().includes(q) ||
+        s.subdomain.toLowerCase().includes(q) ||
+        s.region.toLowerCase().includes(q) ||
+        s.groupIds.toLowerCase().includes(q);
+    }
+
+    // csvIncludes: checks if a groupId appears in a CSV groupIds string
+    function csvIncludes(csv: string, val: string): boolean {
+      return csv.split(',').map(v => v.trim()).includes(val);
+    }
+
+    // Build tab → group hierarchy from tabs prop (respects ordering from tabs.json)
+    // Falls back to a flat alphabetical list by region when tabs are not provided.
+    type GroupNode = { groupId: string; title?: string; items: SubaccountEntry[] };
+    type TabNode   = { tabName: string; groups: GroupNode[] };
+
+    const placed = new Set<string>(); // track subaccountIds already placed
+
+    const tabNodes: TabNode[] = (tabs ?? []).flatMap(tab => {
+      const groups: GroupNode[] = tab.sections
+        .filter(sec => sec.type === 'subaccountGroup')
+        .flatMap(sec => {
+          if (sec.type !== 'subaccountGroup') return [];
+          const items = switcherList
+            .filter(s => csvIncludes(s.groupIds, sec.groupId) && saMatches(s))
+            .sort((a, b) => a.pos - b.pos);
+          if (items.length === 0) return [];
+          items.forEach(s => placed.add(s.subaccountId));
+          return [{ groupId: sec.groupId, title: sec.title, items }];
+        });
+      if (groups.length === 0) return [];
+      return [{ tabName: tab.tab, groups }];
+    });
+
+    // Subaccounts not covered by any tab section (no groupIds match, or no tabs prop)
+    const ungrouped = switcherList
+      .filter(s => !placed.has(s.subaccountId) && saMatches(s))
+      .sort((a, b) => a.pos - b.pos);
+
+    const hasAnyResults = tabNodes.some(t => t.groups.length > 0) || ungrouped.length > 0;
+
+    function SaItem({ s }: { s: SubaccountEntry }) {
+      const isCurrent = s.subaccountId === sa!.subaccountId;
+      return (
+        <DropdownMenuItem
+          key={s.subaccountId}
+          className={`text-xs cursor-pointer py-1.5 px-3 overflow-hidden ${isCurrent ? 'font-medium bg-accent/40' : ''}`}
+          onSelect={() => onSelectSubaccount!(s)}
+        >
+          <span className="truncate">
+            {s.alias || s.subaccountName}
+            <span className="text-muted-foreground font-mono text-[10px] ml-1">({s.subdomain})</span>
+          </span>
+        </DropdownMenuItem>
+      );
+    }
+
+    return (
+      <DropdownMenu onOpenChange={open => { if (!open) setSaFilter(''); }}>
+        <DropdownMenuTrigger asChild>
+          <button className="shrink-0 p-0.5 rounded hover:bg-accent text-muted-foreground hover:text-foreground transition-colors" title="Switch subaccount">
+            <ChevronDown className="h-3.5 w-3.5" />
+          </button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="start" className="w-[28rem] p-0 flex flex-col max-h-[min(80vh,600px)] overflow-hidden">
+          <div className="shrink-0 p-2 border-b border-border">
+            <div className="relative">
+              <Filter className="absolute left-2 top-1/2 -translate-y-1/2 h-3 w-3 text-muted-foreground/50 pointer-events-none" />
+              <input
+                type="text"
+                placeholder="Filter subaccounts…"
+                value={saFilter}
+                onChange={e => setSaFilter(e.target.value)}
+                onKeyDown={e => { if (e.key !== 'Escape') e.stopPropagation(); }}
+                autoFocus
+                className="w-full h-7 pl-7 pr-2 text-xs bg-transparent border border-border rounded outline-none focus:border-primary placeholder:text-muted-foreground/50"
+              />
+            </div>
+          </div>
+          <div className="overflow-y-auto overflow-x-hidden flex-1">
+            {!hasAnyResults ? (
+              <p className="text-xs text-muted-foreground px-3 py-4 text-center">No results.</p>
+            ) : (
+              <>
+                {tabNodes.map(tab => (
+                  <div key={tab.tabName}>
+                    <div className="px-2 py-1 text-[10px] font-semibold text-muted-foreground uppercase tracking-wider bg-muted/30 sticky top-0 z-10">
+                      {tab.tabName}
+                    </div>
+                    {tab.groups.map(group => (
+                      <div key={group.groupId}>
+                        <div className="px-3 py-0.5 text-[10px] text-muted-foreground/70 font-medium italic">
+                          {group.title || group.groupId}
+                        </div>
+                        {group.items.map(s => <SaItem key={s.subaccountId} s={s} />)}
+                      </div>
+                    ))}
+                  </div>
+                ))}
+                {ungrouped.length > 0 && (
+                  <div>
+                    {tabNodes.length > 0 && <DropdownMenuSeparator />}
+                    <div className="px-2 py-1 text-[10px] font-semibold text-muted-foreground uppercase tracking-wider bg-muted/30 sticky top-0 z-10">
+                      Other
+                    </div>
+                    {ungrouped.map(s => <SaItem key={s.subaccountId} s={s} />)}
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+        </DropdownMenuContent>
+      </DropdownMenu>
+    );
+  }
+
+  const tabLabel = activeTab === 'info' ? 'Overview' : 'Services';
 
   return (
     <DialogPrimitive.Root open={sa !== null} onOpenChange={v => { if (!v) onClose(); }}>
@@ -199,39 +359,24 @@ export default function SubaccountDetailModal({ sa, onClose, cockpit, cockpitMen
             <>
               {/* Header */}
               <div className="flex items-center gap-2 px-4 py-3 border-b border-border shrink-0">
-                <div className="flex items-center gap-2 min-w-0 flex-1">
-                  <DialogPrimitive.Title className="text-sm font-semibold min-w-0 truncate">
-                    {sa.subaccountName}
+                {/* Breadcrumb title */}
+                <div className="flex items-center gap-1.5 min-w-0 flex-1 overflow-hidden">
+                  <DialogPrimitive.Title className="flex items-center gap-1.5 min-w-0 text-sm font-semibold">
+                    <span className="text-xs font-mono font-normal text-muted-foreground shrink-0">{sa.region}</span>
+                    <span className="text-muted-foreground shrink-0 text-xs font-normal">›</span>
+                    <span className="truncate">{sa.alias || sa.subaccountName}</span>
+                    <span className="text-xs font-normal font-mono text-muted-foreground shrink-0">({sa.subdomain})</span>
                   </DialogPrimitive.Title>
-                  {sa.subdomain && (
-                    <span className="text-xs font-normal font-mono text-muted-foreground bg-muted px-1.5 py-0.5 rounded shrink-0">
-                      {sa.subdomain}
-                    </span>
-                  )}
+                  {renderSwitcherDropdown()}
                   {sa.restricted && (
                     <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-red-500 bg-red-500/10 border border-red-500/30 px-1.5 py-0.5 rounded shrink-0">
                       <ShieldBan className="h-3 w-3" /> Restricted
                     </span>
                   )}
+                  <span className="text-muted-foreground shrink-0 text-xs font-normal">›</span>
+                  <span className="text-xs text-muted-foreground shrink-0 font-medium">{tabLabel}</span>
                 </div>
-                {canManageSpaces && sa.org && sa.org.spaces.length > 0 && (
-                  <>
-                    <button
-                      className={btnOutline}
-                      disabled={!spaceDestsDirty}
-                      onClick={() => { setSpaceDests(new Map(spaceDestsOrig)); setSpaceAods(new Map(spaceAodsOrig)); }}
-                    >
-                      <RotateCcw className="h-3 w-3" /> Reset
-                    </button>
-                    <button
-                      className={btnOutline}
-                      disabled={!spaceDestsDirty || spaceSaving || !onSpaceSave}
-                      onClick={() => void handleSpaceSave()}
-                    >
-                      <Save className="h-3 w-3" /> {spaceSaving ? 'Saving…' : 'Save'}
-                    </button>
-                  </>
-                )}
+
                 {cockpit && cockpitMenu && (() => {
                   const ctx     = buildCtx(sa, cockpit);
                   const url     = cockpitMenu.url ? resolveUrl(cockpitMenu.url, ctx) : undefined;
@@ -270,64 +415,93 @@ export default function SubaccountDetailModal({ sa, onClose, cockpit, cockpitMen
               {/* Tab bar */}
               <div className="flex border-b border-border shrink-0 px-2 bg-muted/5">
                 <button className={tabCls('info')} onClick={() => setActiveTab('info')}>
-                  Subaccount &amp; Org
-                </button>
-                <button className={tabCls('subscriptions')} onClick={() => setActiveTab('subscriptions')}>
-                  Subscriptions ({sa.subscriptions.length})
+                  Overview
                 </button>
                 <button className={tabCls('services')} onClick={() => setActiveTab('services')}>
-                  Service Instances ({sa.serviceInstances.length})
+                  Services
                 </button>
               </div>
 
               {/* Tab content */}
               <div className="flex-1 min-h-0 flex flex-col">
 
-                {/* ── Subaccount & Org ── */}
+                {/* ── Overview ── */}
                 {activeTab === 'info' && (
-                  <div className="flex-1 overflow-auto">
-                    <div className="p-4 space-y-4">
-                      {/* Identity grid */}
-                      <div className="grid grid-cols-2 gap-3">
-                        <Field label="Subaccount ID"       value={sa.subaccountId}                mono />
-                        <Field label="Global Account GUID" value={sa.globalAccountGUID}           mono />
+                  <div ref={overviewRef} className="flex-1 flex min-h-0 overflow-hidden">
+
+                    {/* Left pane — subaccount properties */}
+                    <div style={{ width: `${overviewSplit}%` }} className="overflow-auto shrink-0">
+                      <div className="p-4 flex flex-col gap-3">
+                        <Field label="Subaccount ID"            value={sa.subaccountId}                mono />
+                        <Field label="Global Account GUID"      value={sa.globalAccountGUID}           mono />
                         <Field label="Global Account Name"      value={sa.globalAccountName}                />
-                        <Field label="Global Account Subdomain" value={sa.globalAccountSubdomain} mono />
-                        <Field label="Region"              value={sa.region}                      mono />
-                        <Field label="Subdomain"           value={sa.subdomain}                   mono />
-                        <Field label="Org Name"            value={sa.org?.orgName ?? ''}               />
-                        <Field label="Org ID"              value={sa.org?.orgId   ?? ''}          mono />
-                        <Field label="Group IDs"           value={sa.groupIds}                         />
-                        <Field label="Alias"               value={sa.alias}                            />
+                        <Field label="Global Account Subdomain" value={sa.globalAccountSubdomain}      mono />
+                        <Field label="Region"                   value={sa.region}                      mono />
+                        <Field label="Subdomain"                value={sa.subdomain}                   mono />
+                        <Field label="Org Name"                 value={sa.org?.orgName ?? ''}               />
+                        <Field label="Org ID"                   value={sa.org?.orgId   ?? ''}          mono />
+                        <Field label="Group IDs"                value={sa.groupIds}                         />
+                        <Field label="Alias"                    value={sa.alias}                            />
+                        <div className="flex gap-4 pt-1">
+                          {([
+                            { label: 'In Homepage',         val: sa.inHomepage },
+                            { label: 'Manage Destinations', val: sa.manageDestinations },
+                          ] as const).map(({ label, val }) => (
+                            <div key={label} className="flex items-center gap-1.5">
+                              <span className={`w-2 h-2 rounded-full ${val ? 'bg-green-500' : 'bg-muted-foreground/30'}`} />
+                              <span className="text-xs text-muted-foreground">{label}</span>
+                            </div>
+                          ))}
+                        </div>
                       </div>
+                    </div>
 
-                      {/* Flags */}
-                      <div className="flex gap-4">
-                        {([
-                          { label: 'In Homepage',         val: sa.inHomepage },
-                          { label: 'Manage Destinations', val: sa.manageDestinations },
-                          { label: 'Use AOD',             val: sa.useAOD },
-                        ] as const).map(({ label, val }) => (
-                          <div key={label} className="flex items-center gap-1.5">
-                            <span className={`w-2 h-2 rounded-full ${val ? 'bg-green-500' : 'bg-muted-foreground/30'}`} />
-                            <span className="text-xs text-muted-foreground">{label}</span>
-                          </div>
-                        ))}
+                    {/* Drag handle */}
+                    <div
+                      className="w-1 shrink-0 cursor-col-resize bg-border hover:bg-primary/40 active:bg-primary/60 transition-colors"
+                      onMouseDown={e => startDrag(e, setOverviewSplit, overviewRef.current)}
+                    />
+
+                    {/* Right pane — Spaces */}
+                    <div className="flex-1 min-w-0 flex flex-col min-h-0">
+                      <div className="flex items-center gap-2 px-3 py-2 border-b border-border shrink-0">
+                        <span className="text-xs font-semibold flex-1">Spaces</span>
+                        {canManageSpaces && sa.org && sa.org.spaces.length > 0 && (
+                          spaceEditing ? (
+                            <>
+                              <button
+                                className={btnOutline}
+                                disabled={!spaceDestsDirty || spaceSaving || !onSpaceSave}
+                                onClick={() => void handleSpaceSave()}
+                              >
+                                <Save className="h-3 w-3" /> {spaceSaving ? 'Saving…' : 'Save'}
+                              </button>
+                              <button
+                                className={btnOutline}
+                                onClick={() => {
+                                  setSpaceDests(new Map(spaceDestsOrig));
+                                  setSpaceAods(new Map(spaceAodsOrig));
+                                  setSpaceEditing(false);
+                                }}
+                              >
+                                <RotateCcw className="h-3 w-3" /> Cancel
+                              </button>
+                            </>
+                          ) : (
+                            <button className={btnOutline} onClick={() => setSpaceEditing(true)}>
+                              <Pencil className="h-3 w-3" /> Edit
+                            </button>
+                          )
+                        )}
                       </div>
-
-                      {/* CF Spaces — full width */}
-                      {sa.org && sa.org.spaces.length > 0 && (
-                        <div>
-                          <h3 className="text-xs font-semibold text-foreground border-b border-border pb-1 mb-2">
-                            CF Spaces
-                          </h3>
+                      <div className="flex-1 overflow-auto">
+                        {sa.org && sa.org.spaces.length > 0 ? (
                           <table className="w-full border-collapse text-xs">
                             <thead>
                               <tr className="bg-muted/30">
-                                <th className={thCls}>Space Name</th>
-                                <th className={`${thCls} font-mono`}>Space ID</th>
-                                {canManageSpaces && <th className={`${thCls} text-center`}>Manage Dest</th>}
-                                {canManageSpaces && <th className={`${thCls} text-center`}>AOD</th>}
+                                <th className={thCls}>Space</th>
+                                {canManageSpaces && <th className={thCls}>Dest</th>}
+                                {canManageSpaces && <th className={thCls}>AOD</th>}
                               </tr>
                             </thead>
                             <tbody>
@@ -335,39 +509,57 @@ export default function SubaccountDetailModal({ sa, onClose, cockpit, cockpitMen
                                 const spaceUrl = cockpit?.host
                                   ? `${ensureHttps(cockpit.host)}/#/globalaccount/${sa.globalAccountGUID}/subaccount/${sa.subaccountId}/space/${s.spaceId}`
                                   : undefined;
+                                const destChecked = spaceDests.get(s.spaceId) ?? false;
+                                const aodChecked  = spaceAods.get(s.spaceId) ?? false;
                                 return (
                                   <tr key={s.spaceId} className="hover:bg-muted/20">
                                     <td className={tdCls}>
-                                      {spaceUrl
-                                        ? <a href={spaceUrl} target="_blank" rel="noopener noreferrer" className="hover:underline hover:text-primary transition-colors">{s.spaceName}</a>
-                                        : s.spaceName
-                                      }
+                                      <div className="flex flex-col">
+                                        <span>
+                                          {spaceUrl
+                                            ? <a href={spaceUrl} target="_blank" rel="noopener noreferrer" className="hover:underline hover:text-primary transition-colors">{s.spaceName}</a>
+                                            : s.spaceName
+                                          }
+                                        </span>
+                                        <span className="text-[10px] text-muted-foreground font-mono">{s.spaceId}</span>
+                                      </div>
                                     </td>
-                                    <td className={`${tdCls} font-mono text-muted-foreground`}>{s.spaceId}</td>
                                     {canManageSpaces && (
-                                      <td className={`${tdCls} text-center`}>
-                                        <input
-                                          type="checkbox"
-                                          checked={spaceDests.get(s.spaceId) ?? false}
-                                          onChange={e => {
-                                            const checked = e.target.checked;
-                                            setSpaceDests(prev => new Map(prev).set(s.spaceId, checked));
-                                            if (!checked) setSpaceAods(prev => new Map(prev).set(s.spaceId, false));
-                                          }}
-                                          className="cursor-pointer"
-                                        />
+                                      <td className={tdCls}>
+                                        {spaceEditing ? (
+                                          <input
+                                            type="checkbox"
+                                            checked={destChecked}
+                                            onChange={e => {
+                                              const checked = e.target.checked;
+                                              setSpaceDests(prev => new Map(prev).set(s.spaceId, checked));
+                                              if (!checked) setSpaceAods(prev => new Map(prev).set(s.spaceId, false));
+                                            }}
+                                            className="cursor-pointer"
+                                          />
+                                        ) : destChecked ? (
+                                          <span className="inline-flex items-center gap-1 text-[10px] text-green-600 dark:text-green-400 font-medium">
+                                            <span className="w-1.5 h-1.5 rounded-full bg-green-500 shrink-0" />Managed
+                                          </span>
+                                        ) : null}
                                       </td>
                                     )}
                                     {canManageSpaces && (
-                                      <td className={`${tdCls} text-center`}>
-                                        <input
-                                          type="checkbox"
-                                          checked={spaceAods.get(s.spaceId) ?? false}
-                                          disabled={!(spaceDests.get(s.spaceId) ?? false)}
-                                          onChange={e => setSpaceAods(prev => new Map(prev).set(s.spaceId, e.target.checked))}
-                                          className={spaceDests.get(s.spaceId) ? 'cursor-pointer' : 'cursor-not-allowed opacity-40'}
-                                          title={spaceDests.get(s.spaceId) ? undefined : 'Enable Manage Dest first'}
-                                        />
+                                      <td className={tdCls}>
+                                        {spaceEditing ? (
+                                          <input
+                                            type="checkbox"
+                                            checked={aodChecked}
+                                            disabled={!destChecked}
+                                            onChange={e => setSpaceAods(prev => new Map(prev).set(s.spaceId, e.target.checked))}
+                                            className={destChecked ? 'cursor-pointer' : 'cursor-not-allowed opacity-40'}
+                                            title={!destChecked ? 'Enable Dest first' : undefined}
+                                          />
+                                        ) : aodChecked ? (
+                                          <span className="inline-flex items-center gap-1 text-[10px] text-green-600 dark:text-green-400 font-medium">
+                                            <span className="w-1.5 h-1.5 rounded-full bg-green-500 shrink-0" />In Use
+                                          </span>
+                                        ) : null}
                                       </td>
                                     )}
                                   </tr>
@@ -375,81 +567,25 @@ export default function SubaccountDetailModal({ sa, onClose, cockpit, cockpitMen
                               })}
                             </tbody>
                           </table>
-                        </div>
-                      )}
+                        ) : (
+                          <p className="text-xs text-muted-foreground px-3 py-8 text-center">No CF spaces.</p>
+                        )}
+                      </div>
                     </div>
                   </div>
                 )}
 
-                {/* ── Subscriptions ── */}
-                {activeTab === 'subscriptions' && (() => {
-                  const q        = subFilter.toLowerCase().trim();
-                  const filtered = sa.subscriptions.filter(sub =>
-                    !q ||
-                    sub.displayName.toLowerCase().includes(q) ||
-                    sub.url.toLowerCase().includes(q)
-                  );
-                  return (
-                    <>
-                      <div className="shrink-0 flex items-center gap-2 px-2 py-2 border-b border-border">
-                        <div className="relative flex-1 min-w-0">
-                          <Filter className="absolute left-2 top-1/2 -translate-y-1/2 h-3 w-3 text-muted-foreground/50 pointer-events-none" />
-                          <input
-                            type="text"
-                            placeholder="Filter subscriptions…"
-                            value={subFilter}
-                            onChange={e => setSubFilter(e.target.value)}
-                            className="w-full h-7 pl-7 pr-7 text-xs bg-transparent border border-border rounded outline-none focus:border-primary placeholder:text-muted-foreground/50"
-                          />
-                          {subFilter && (
-                            <button onClick={() => setSubFilter('')} className="absolute right-1 top-1/2 -translate-y-1/2 p-0.5 rounded text-muted-foreground hover:text-foreground transition-colors" aria-label="Clear filter">
-                              <X className="h-3 w-3" />
-                            </button>
-                          )}
-                        </div>
-                      </div>
-                      <div className="flex-1 overflow-auto">
-                        {filtered.length > 0 ? (
-                          <table className="w-full border-collapse text-xs">
-                            <thead className="sticky top-0 z-10">
-                              <tr className="bg-muted/30">
-                                <th className={thCls}>Application</th>
-                                <th className={thCls}>URL</th>
-                                <th className={`${thCls} text-center`}>Customer Dev</th>
-                              </tr>
-                            </thead>
-                            <tbody>
-                              {filtered.map((sub, i) => (
-                                <tr key={i} className="hover:bg-muted/20">
-                                  <td className={tdCls}>{sub.displayName}</td>
-                                  <td className={`${tdCls} font-mono text-[11px]`}>
-                                    <a href={sub.url} target="_blank" rel="noreferrer" className="text-primary hover:underline break-all">
-                                      {sub.url}
-                                    </a>
-                                  </td>
-                                  <td className={`${tdCls} text-center`}>
-                                    {sub.customerDeveloped
-                                      ? <span className="text-green-600 dark:text-green-400 font-medium">Yes</span>
-                                      : <span className="text-muted-foreground/40">—</span>}
-                                  </td>
-                                </tr>
-                              ))}
-                            </tbody>
-                          </table>
-                        ) : (
-                          <p className="text-xs text-muted-foreground px-3 py-8 text-center">
-                            {sa.subscriptions.length === 0 ? 'No subscriptions.' : 'No subscriptions match the filter.'}
-                          </p>
-                        )}
-                      </div>
-                    </>
-                  );
-                })()}
-
-                {/* ── Service Instances ── */}
+                {/* ── Services (subscriptions + service instances) ── */}
                 {activeTab === 'services' && (() => {
-                  const q           = svcFilter.toLowerCase().trim();
-                  const isFiltering = q.length > 0;
+                  const subQ        = subFilter.toLowerCase().trim();
+                  const filteredSubs = sa.subscriptions.filter(sub =>
+                    !subQ ||
+                    sub.displayName.toLowerCase().includes(subQ) ||
+                    sub.url.toLowerCase().includes(subQ)
+                  );
+
+                  const svcQ        = svcFilter.toLowerCase().trim();
+                  const isFiltering = svcQ.length > 0;
 
                   const allGroups = Object.entries(
                     sa.serviceInstances.reduce<Record<string, typeof sa.serviceInstances>>((acc, svc) => {
@@ -466,13 +602,13 @@ export default function SubaccountDetailModal({ sa, onClose, cockpit, cockpitMen
                   const filteredGroups: Group[] = allGroups
                     .map(([spaceId, instances]) => {
                       const spaceName = (sa.org?.spaces.find(s => s.spaceId === spaceId)?.spaceName ?? spaceId) || 'Unknown Space';
-                      if (!q) return { spaceId, spaceName, instances };
-                      const spaceMatch = spaceName.toLowerCase().includes(q);
+                      if (!svcQ) return { spaceId, spaceName, instances };
+                      const spaceMatch = spaceName.toLowerCase().includes(svcQ);
                       if (spaceMatch) return { spaceId, spaceName, instances };
                       const matched = instances.filter(svc =>
-                        svc.instanceName.toLowerCase().includes(q) ||
-                        (svc.serviceOfferingName ?? '').toLowerCase().includes(q) ||
-                        (svc.servicePlanId ?? '').toLowerCase().includes(q)
+                        svc.instanceName.toLowerCase().includes(svcQ) ||
+                        (svc.serviceOfferingName ?? '').toLowerCase().includes(svcQ) ||
+                        (svc.servicePlanId ?? '').toLowerCase().includes(svcQ)
                       );
                       return matched.length > 0 ? { spaceId, spaceName, instances: matched } : null;
                     })
@@ -489,123 +625,182 @@ export default function SubaccountDetailModal({ sa, onClose, cockpit, cockpitMen
                   }
 
                   return (
-                    <>
-                      {/* Toolbar */}
-                      <div className="shrink-0 flex items-center gap-2 px-2 py-2 border-b border-border">
-                        <div className="relative flex-1 min-w-0">
-                          <Filter className="absolute left-2 top-1/2 -translate-y-1/2 h-3 w-3 text-muted-foreground/50 pointer-events-none" />
-                          <input
-                            type="text"
-                            placeholder="Filter spaces / instances…"
-                            value={svcFilter}
-                            onChange={e => setSvcFilter(e.target.value)}
-                            className="w-full h-7 pl-7 pr-7 text-xs bg-transparent border border-border rounded outline-none focus:border-primary placeholder:text-muted-foreground/50"
-                          />
-                          {svcFilter && (
-                            <button onClick={() => setSvcFilter('')} className="absolute right-1 top-1/2 -translate-y-1/2 p-0.5 rounded text-muted-foreground hover:text-foreground transition-colors" aria-label="Clear filter">
-                              <X className="h-3 w-3" />
-                            </button>
+                    <div ref={servicesRef} className="flex-1 flex min-h-0 overflow-hidden">
+
+                      {/* Left pane — subscriptions */}
+                      <div style={{ width: `${servicesSplit}%` }} className="flex flex-col min-h-0 shrink-0 border-r border-border">
+                        <div className="shrink-0 flex items-center gap-2 px-2 py-2 border-b border-border">
+                          <div className="relative flex-1 min-w-0">
+                            <Filter className="absolute left-2 top-1/2 -translate-y-1/2 h-3 w-3 text-muted-foreground/50 pointer-events-none" />
+                            <input
+                              type="text"
+                              placeholder="Filter subscriptions…"
+                              value={subFilter}
+                              onChange={e => setSubFilter(e.target.value)}
+                              className="w-full h-7 pl-7 pr-7 text-xs bg-transparent border border-border rounded outline-none focus:border-primary placeholder:text-muted-foreground/50"
+                            />
+                            {subFilter && (
+                              <button onClick={() => setSubFilter('')} className="absolute right-1 top-1/2 -translate-y-1/2 p-0.5 rounded text-muted-foreground hover:text-foreground transition-colors" aria-label="Clear filter">
+                                <X className="h-3 w-3" />
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                        <div className="flex-1 overflow-auto">
+                          {filteredSubs.length > 0 ? (
+                            <table className="w-full border-collapse text-xs">
+                              <thead className="sticky top-0 z-10">
+                                <tr className="bg-muted/30">
+                                  <th className={thCls}>Subscription</th>
+                                  <th className={`${thCls} text-center`}>Custom</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {filteredSubs.map((sub, i) => (
+                                  <tr key={i} className="hover:bg-muted/20">
+                                    <td className={tdCls}>
+                                      <a href={sub.url} target="_blank" rel="noreferrer" className="hover:underline hover:text-primary transition-colors">
+                                        {sub.displayName}
+                                      </a>
+                                    </td>
+                                    <td className={`${tdCls} text-center`}>
+                                      {sub.customerDeveloped
+                                        ? <span className="text-green-600 dark:text-green-400 font-medium">Yes</span>
+                                        : <span className="text-muted-foreground/40">—</span>}
+                                    </td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          ) : (
+                            <p className="text-xs text-muted-foreground px-3 py-8 text-center">
+                              {sa.subscriptions.length === 0 ? 'No subscriptions.' : 'No subscriptions match the filter.'}
+                            </p>
                           )}
                         </div>
-                        <button
-                          onClick={() => setSvcExpanded(new Set(allSpaceIds))}
-                          disabled={isFiltering}
-                          className={btnOutline}
-                          title="Expand all"
-                        >
-                          <ChevronsUpDown className="h-3.5 w-3.5" />
-                          <span className="hidden sm:inline">Expand</span>
-                        </button>
-                        <button
-                          onClick={() => setSvcExpanded(new Set())}
-                          disabled={isFiltering}
-                          className={btnOutline}
-                          title="Collapse all"
-                        >
-                          <ChevronsDownUp className="h-3.5 w-3.5" />
-                          <span className="hidden sm:inline">Collapse</span>
-                        </button>
                       </div>
 
-                      {/* Tree table */}
-                      <div className="flex-1 overflow-auto">
-                        {filteredGroups.length > 0 ? (
-                          <table className="w-full border-collapse text-xs">
-                            <thead className="sticky top-0 z-10">
-                              <tr className="bg-muted/30">
-                                <th className={thCls}>Space / Instance</th>
-                                <th className={thCls}>Service</th>
-                                <th className={thCls}>Dashboard</th>
-                              </tr>
-                            </thead>
-                            <tbody>
-                              {filteredGroups.flatMap(({ spaceId, spaceName, instances }) => {
-                                const isExpanded = isFiltering || svcExpanded.has(spaceId);
-                                const spaceUrl = cockpit && sa.org && spaceId
-                                  ? buildSpaceInstUrl(sa, cockpit, spaceId)
-                                  : undefined;
-                                return [
-                                  <tr
-                                    key={`sp-${spaceId}`}
-                                    className="bg-muted/20 hover:bg-muted/30 cursor-pointer select-none"
-                                    onClick={() => { if (!isFiltering) toggleSvc(spaceId); }}
-                                  >
-                                    <td colSpan={3} className="px-2 py-1.5 border-b border-border">
-                                      <div className="flex items-center gap-1.5">
-                                        <span className="shrink-0 text-muted-foreground">
-                                          {isExpanded
-                                            ? <ChevronDown className="h-3.5 w-3.5" />
-                                            : <ChevronRight className="h-3.5 w-3.5" />
-                                          }
-                                        </span>
-                                        <span className="font-medium text-foreground">
-                                          {spaceUrl
-                                            ? <a href={spaceUrl} target="_blank" rel="noopener noreferrer" className="hover:underline hover:text-primary transition-colors" onClick={e => e.stopPropagation()}>{spaceName}</a>
-                                            : spaceName
-                                          }
-                                        </span>
-                                        <span className="text-[10px] text-muted-foreground shrink-0">({instances.length})</span>
-                                      </div>
-                                    </td>
-                                  </tr>,
-                                  ...(isExpanded ? instances.map((svc, i) => {
-                                    const instUrl = cockpit && sa.org && spaceId && svc.id
-                                      ? buildInstanceDetailUrl(sa, cockpit, spaceId, svc.id)
-                                      : undefined;
-                                    return (
-                                      <tr key={`${spaceId}-${i}`} className="hover:bg-muted/20">
-                                        <td className={`${tdCls} pl-7`}>
-                                          {instUrl
-                                            ? <a href={instUrl} target="_blank" rel="noopener noreferrer" className="hover:underline hover:text-primary transition-colors">{svc.instanceName}</a>
-                                            : svc.instanceName
-                                          }
-                                        </td>
-                                        <td className={tdCls}>
-                                          {(svc.serviceOfferingName || svc.servicePlanId)
-                                            ? <span className="font-mono text-[10px] text-muted-foreground">{svc.serviceOfferingName || svc.servicePlanId}</span>
-                                            : <span className="text-muted-foreground/40">—</span>
-                                          }
-                                        </td>
-                                        <td className={`${tdCls} font-mono text-[11px]`}>
-                                          <a href={svc.url} target="_blank" rel="noreferrer" className="text-primary hover:underline break-all">{svc.url}</a>
-                                        </td>
-                                      </tr>
-                                    );
-                                  }) : []),
-                                ];
-                              })}
-                            </tbody>
-                          </table>
-                        ) : (
-                          <p className="text-xs text-muted-foreground px-3 py-8 text-center">
-                            {sa.serviceInstances.length === 0
-                              ? 'No service instances.'
-                              : 'No service instances match the filter.'
-                            }
-                          </p>
-                        )}
+                      {/* Drag handle */}
+                      <div
+                        className="w-1 shrink-0 cursor-col-resize bg-border hover:bg-primary/40 active:bg-primary/60 transition-colors"
+                        onMouseDown={e => startDrag(e, setServicesSplit, servicesRef.current)}
+                      />
+
+                      {/* Right pane — service instances */}
+                      <div className="flex-1 min-w-0 flex flex-col min-h-0">
+                        <div className="shrink-0 flex items-center gap-2 px-2 py-2 border-b border-border">
+                          <div className="relative flex-1 min-w-0">
+                            <Filter className="absolute left-2 top-1/2 -translate-y-1/2 h-3 w-3 text-muted-foreground/50 pointer-events-none" />
+                            <input
+                              type="text"
+                              placeholder="Filter spaces / instances…"
+                              value={svcFilter}
+                              onChange={e => setSvcFilter(e.target.value)}
+                              className="w-full h-7 pl-7 pr-7 text-xs bg-transparent border border-border rounded outline-none focus:border-primary placeholder:text-muted-foreground/50"
+                            />
+                            {svcFilter && (
+                              <button onClick={() => setSvcFilter('')} className="absolute right-1 top-1/2 -translate-y-1/2 p-0.5 rounded text-muted-foreground hover:text-foreground transition-colors" aria-label="Clear filter">
+                                <X className="h-3 w-3" />
+                              </button>
+                            )}
+                          </div>
+                          <button
+                            onClick={() => setSvcExpanded(new Set(allSpaceIds))}
+                            disabled={isFiltering}
+                            className={btnOutline}
+                            title="Expand all"
+                          >
+                            <ChevronsUpDown className="h-3.5 w-3.5" />
+                            <span className="hidden sm:inline">Expand</span>
+                          </button>
+                          <button
+                            onClick={() => setSvcExpanded(new Set())}
+                            disabled={isFiltering}
+                            className={btnOutline}
+                            title="Collapse all"
+                          >
+                            <ChevronsDownUp className="h-3.5 w-3.5" />
+                            <span className="hidden sm:inline">Collapse</span>
+                          </button>
+                        </div>
+                        <div className="flex-1 overflow-auto">
+                          {filteredGroups.length > 0 ? (
+                            <table className="w-full border-collapse text-xs">
+                              <thead className="sticky top-0 z-10">
+                                <tr className="bg-muted/30">
+                                  <th className={thCls}>Space / Instance</th>
+                                  <th className={thCls}>Service</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {filteredGroups.flatMap(({ spaceId, spaceName, instances }) => {
+                                  const isExpanded = isFiltering || svcExpanded.has(spaceId);
+                                  const spaceUrl = cockpit && sa.org && spaceId
+                                    ? buildSpaceInstUrl(sa, cockpit, spaceId)
+                                    : undefined;
+                                  return [
+                                    <tr
+                                      key={`sp-${spaceId}`}
+                                      className="bg-muted/20 hover:bg-muted/30 cursor-pointer select-none"
+                                      onClick={() => { if (!isFiltering) toggleSvc(spaceId); }}
+                                    >
+                                      <td colSpan={2} className="px-2 py-1.5 border-b border-border">
+                                        <div className="flex items-center gap-1.5">
+                                          <span className="shrink-0 text-muted-foreground">
+                                            {isExpanded
+                                              ? <ChevronDown className="h-3.5 w-3.5" />
+                                              : <ChevronRight className="h-3.5 w-3.5" />
+                                            }
+                                          </span>
+                                          <span className="font-medium text-foreground">
+                                            {spaceUrl
+                                              ? <a href={spaceUrl} target="_blank" rel="noopener noreferrer" className="hover:underline hover:text-primary transition-colors" onClick={e => e.stopPropagation()}>{spaceName}</a>
+                                              : spaceName
+                                            }
+                                          </span>
+                                          <span className="text-[10px] text-muted-foreground shrink-0">({instances.length})</span>
+                                        </div>
+                                      </td>
+                                    </tr>,
+                                    ...(isExpanded ? instances.map((svc, i) => {
+                                      const instUrl = cockpit && sa.org && spaceId && svc.id
+                                        ? buildInstanceDetailUrl(sa, cockpit, spaceId, svc.id)
+                                        : undefined;
+                                      return (
+                                        <tr key={`${spaceId}-${i}`} className="hover:bg-muted/20">
+                                          <td className={`${tdCls} pl-7`}>
+                                            {instUrl
+                                              ? <a href={instUrl} target="_blank" rel="noopener noreferrer" className="hover:underline hover:text-primary transition-colors">{svc.instanceName}</a>
+                                              : svc.instanceName
+                                            }
+                                          </td>
+                                          <td className={tdCls}>
+                                            {(svc.serviceOfferingName || svc.servicePlanId)
+                                              ? (svc.url
+                                                  ? <a href={svc.url} target="_blank" rel="noreferrer" className="font-mono text-[10px] text-muted-foreground hover:underline hover:text-primary transition-colors">{svc.serviceOfferingName || svc.servicePlanId}</a>
+                                                  : <span className="font-mono text-[10px] text-muted-foreground">{svc.serviceOfferingName || svc.servicePlanId}</span>
+                                                )
+                                              : <span className="text-muted-foreground/40">—</span>
+                                            }
+                                          </td>
+                                        </tr>
+                                      );
+                                    }) : []),
+                                  ];
+                                })}
+                              </tbody>
+                            </table>
+                          ) : (
+                            <p className="text-xs text-muted-foreground px-3 py-8 text-center">
+                              {sa.serviceInstances.length === 0
+                                ? 'No service instances.'
+                                : 'No service instances match the filter.'
+                              }
+                            </p>
+                          )}
+                        </div>
                       </div>
-                    </>
+                    </div>
                   );
                 })()}
 

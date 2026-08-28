@@ -528,6 +528,9 @@ export default function HomepageContent({ data, activeTab, onTabChange, filterQu
         onClose={() => setDetailSa(null)}
         cockpit={data.cockpit}
         cockpitMenu={data.cockpitMenu}
+        subaccounts={data.subaccounts}
+        onSelectSubaccount={setDetailSa}
+        tabs={data.tabs}
       />
     </>
   );

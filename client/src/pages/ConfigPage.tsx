@@ -757,6 +757,9 @@ export default function ConfigPage() {
         cockpitMenu={cockpitMenu}
         isAdmin={isAdmin}
         onSpaceSave={handleSpaceSave}
+        subaccounts={sasData}
+        onSelectSubaccount={setSelectedSa}
+        tabs={tabsData}
       />
 
       {/* Subaccounts refresh confirm dialog */}
