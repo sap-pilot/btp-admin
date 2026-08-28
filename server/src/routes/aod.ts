@@ -306,17 +306,21 @@ export async function aodProxyHandler(req: Request, res: Response, next: NextFun
       void updateAppFileState(appId, region, subdomain, 'STARTED');
     }
 
-    // Build proxy headers — strip host and x-aod-* headers
+    // Build proxy headers — strip host, x-aod-*, and content-length (recalculated below)
     const proxyHeaders: Record<string, string> = {};
     for (const [k, v] of Object.entries(req.headers)) {
       if (k.toLowerCase() === 'host') continue;
       if (k.toLowerCase().startsWith('x-aod-')) continue;
+      if (k.toLowerCase() === 'content-length') continue;
       if (typeof v === 'string') proxyHeaders[k] = v;
       else if (Array.isArray(v)) proxyHeaders[k] = v.join(', ');
     }
 
     const hasBody = req.method !== 'GET' && req.method !== 'HEAD';
     const bodyBuf = hasBody ? JSON.stringify(req.body) : undefined;
+    if (bodyBuf !== undefined) {
+      proxyHeaders['content-length'] = String(Buffer.byteLength(bodyBuf, 'utf-8'));
+    }
 
     // Upstream request and geo lookup run concurrently
     const [upstream, geo] = await Promise.all([

@@ -372,7 +372,7 @@ export async function updateAppFileAod(
       obj.aod  = true;
     } else {
       obj.urls = curUrls.filter(u => u !== destUrl);
-      obj.aod  = obj.urls.length > 0;
+      obj.aod  = false;
     }
     await writeFile(filePath, JSON.stringify(obj, null, 2), 'utf-8');
     logger.debug({ appGuid, aodInstalled, destUrl }, 'AOD: app JSON updated');
