@@ -50,8 +50,12 @@ const AOD_DIR = join(config.LOCAL_STORE_DIR, 'apps');
 // In-flight app-start promises keyed by app URL base (prevents concurrent starts)
 const startQueue = new Map<string, Promise<'up' | 'timeout'>>();
 
-// Geo cache keyed by IPv4 /24 subnet or full IPv6 address
-const geoCache = new Map<string, { country: string; countryCode: string; city: string; lat: number; lon: number }>();
+type GeoResult = { country: string; countryCode: string; city: string; lat: number; lon: number };
+
+// Resolved geo results keyed by /24 subnet (IPv4) or full address (IPv6) — never evicted
+const geoCache   = new Map<string, GeoResult>();
+// In-flight promises — deduplicates concurrent lookups for the same subnet
+const geoPending = new Map<string, Promise<GeoResult>>();
 
 const REGION_RE   = /\.cfapps\.([\w-]+)\.hana\.ondemand\.com/i;
 const PRIVATE_IP  = /^(10\.|172\.(1[6-9]|2\d|3[01])\.|192\.168\.|127\.|::1$)/;
@@ -64,34 +68,44 @@ function extractRegion(url: string): string | null {
 
 // ─── Geo lookup ───────────────────────────────────────────────────────────────
 
-async function lookupGeo(rawIp: string): Promise<{ country: string; countryCode: string; city: string; lat: number; lon: number }> {
+async function lookupGeo(rawIp: string): Promise<GeoResult> {
   const ip    = rawIp.startsWith('::ffff:') ? rawIp.slice(7) : rawIp;
-  const empty = { country: '', countryCode: '', city: '', lat: 0, lon: 0 };
+  const empty: GeoResult = { country: '', countryCode: '', city: '', lat: 0, lon: 0 };
   if (!ip || PRIVATE_IP.test(ip)) return empty;
 
   // Cache key: /24 subnet for IPv4, full address for IPv6
   const isIpv4   = /^\d+\.\d+\.\d+\.\d+$/.test(ip);
   const cacheKey = isIpv4 ? ip.split('.').slice(0, 3).join('.') : ip;
 
+  // Resolved cache hit — most common path
   const cached = geoCache.get(cacheKey);
   if (cached) return cached;
 
-  try {
-    const ctrl = new AbortController();
-    const id   = setTimeout(() => ctrl.abort(), 3000);
-    const res  = await fetch(`http://ip-api.com/json/${ip}?fields=status,country,countryCode,city,lat,lon`, { signal: ctrl.signal })
-      .finally(() => clearTimeout(id));
-    if (res.ok) {
-      const data = await res.json() as { status?: string; country?: string; countryCode?: string; city?: string; lat?: number; lon?: number };
-      if (data.status === 'success') {
-        const geo = { country: data.country ?? '', countryCode: data.countryCode ?? '', city: data.city ?? '', lat: data.lat ?? 0, lon: data.lon ?? 0 };
-        geoCache.set(cacheKey, geo);
-        return geo;
-      }
-    }
-  } catch { /* network error or timeout — return empty */ }
+  // In-flight dedup — prevents concurrent AOD requests from the same /24 subnet
+  // from each firing a separate ip-api.com call (rate limit: 45 req/min)
+  const pending = geoPending.get(cacheKey);
+  if (pending) return pending;
 
-  return empty;
+  const promise = (async (): Promise<GeoResult> => {
+    try {
+      const ctrl = new AbortController();
+      const id   = setTimeout(() => ctrl.abort(), 3000);
+      const res  = await fetch(`http://ip-api.com/json/${ip}?fields=status,country,countryCode,city,lat,lon`, { signal: ctrl.signal })
+        .finally(() => clearTimeout(id));
+      if (res.ok) {
+        const data = await res.json() as { status?: string; country?: string; countryCode?: string; city?: string; lat?: number; lon?: number };
+        if (data.status === 'success') {
+          const geo: GeoResult = { country: data.country ?? '', countryCode: data.countryCode ?? '', city: data.city ?? '', lat: data.lat ?? 0, lon: data.lon ?? 0 };
+          geoCache.set(cacheKey, geo);
+          return geo;
+        }
+      }
+    } catch { /* network error or timeout — fall through to empty */ }
+    return empty;
+  })().finally(() => geoPending.delete(cacheKey));
+
+  geoPending.set(cacheKey, promise);
+  return promise;
 }
 
 // ─── JWT userId extraction ────────────────────────────────────────────────────
