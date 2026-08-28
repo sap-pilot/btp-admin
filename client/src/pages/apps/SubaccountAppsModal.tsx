@@ -398,7 +398,7 @@ export default function SubaccountAppsModal({
     <>
       <div
         className={`fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm ${maximized ? 'p-0' : 'p-4'}`}
-        onClick={e => { if (e.target === e.currentTarget) onClose(); }}
+        onClick={() => {}}
       >
         <div className={`flex flex-col bg-background border border-border shadow-2xl ${
           maximized ? 'w-full h-full rounded-none' : 'w-full max-w-6xl h-[90vh] rounded-xl'
@@ -503,13 +503,29 @@ export default function SubaccountAppsModal({
               <div className="flex flex-col min-h-0 border-r border-border shrink-0 overflow-hidden" style={{ width: `${splitPct}%` }}>
                 {/* Filter + collapse/expand */}
                 <div className="px-3 py-2 border-b border-border shrink-0 flex items-center gap-2">
-                  <input
-                    type="text"
-                    value={filterText}
-                    onChange={e => setFilterText(e.target.value)}
-                    placeholder="Filter apps…"
-                    className="flex-1 h-7 px-2 text-xs border border-border rounded bg-background text-foreground outline-none focus:ring-1 focus:ring-ring placeholder:text-muted-foreground"
-                  />
+                  <div className="relative flex-1">
+                    <input
+                      type="text"
+                      value={filterText}
+                      onChange={e => setFilterText(e.target.value)}
+                      placeholder="Filter apps…"
+                      className={`w-full h-7 px-2 text-xs border border-border rounded bg-background text-foreground outline-none focus:ring-1 focus:ring-ring placeholder:text-muted-foreground ${filterText ? 'pr-28' : ''}`}
+                    />
+                    {filterText && (
+                      <>
+                        <span className="absolute right-6 top-1/2 -translate-y-1/2 text-[10px] text-muted-foreground/60 pointer-events-none whitespace-nowrap">
+                          Found {filteredApps.length} / {apps.length}
+                        </span>
+                        <button
+                          onClick={() => setFilterText('')}
+                          className="absolute right-1.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors p-0.5"
+                          tabIndex={-1}
+                        >
+                          <X className="h-3 w-3" />
+                        </button>
+                      </>
+                    )}
+                  </div>
                   <button
                     onClick={toggleAllExpanded}
                     className={iconBtn}

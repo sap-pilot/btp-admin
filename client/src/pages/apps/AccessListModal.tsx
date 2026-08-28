@@ -173,7 +173,7 @@ export default function AccessListModal({ open, onClose, onOpenApp }: Props) {
   return (
     <div
       className={`fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm ${maximized ? 'p-0' : 'p-4'}`}
-      onClick={e => { if (e.target === e.currentTarget) onClose(); }}
+      onClick={() => {}}
     >
       <div className={`flex flex-col bg-background border border-border shadow-2xl ${
         maximized ? 'w-full h-full rounded-none' : 'w-full max-w-6xl h-[90vh] rounded-xl'

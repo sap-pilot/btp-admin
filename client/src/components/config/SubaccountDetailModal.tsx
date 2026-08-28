@@ -191,7 +191,7 @@ export default function SubaccountDetailModal({ sa, onClose, cockpit, cockpitMen
         <DialogPrimitive.Overlay className="fixed inset-0 z-50 bg-black/50 backdrop-blur-sm" />
         <DialogPrimitive.Content
           className="fixed inset-4 z-50 flex flex-col bg-background rounded-lg shadow-xl outline-none overflow-hidden max-w-[62.4rem] mx-auto"
-          onInteractOutside={onClose}
+          onInteractOutside={e => e.preventDefault()}
           onEscapeKeyDown={onClose}
           aria-describedby={undefined}
         >
