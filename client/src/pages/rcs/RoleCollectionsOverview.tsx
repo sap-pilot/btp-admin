@@ -1,10 +1,11 @@
 import { Fragment, useEffect, useRef, useState } from 'react';
 import { useParams, useNavigate, useLocation, Link } from 'react-router';
 import { History, Loader2, PanelLeft, RefreshCw, Search, ShieldCheck, X } from 'lucide-react';
-import { useSidebar } from '@/components/AppLayout';
+import { useSidebar, useSettings } from '@/components/AppLayout';
+import { useAuth } from '@/hooks/useAuth';
 import type { SubaccountEntry } from '@/components/config/SubaccountsTable';
 import type { TabEntry, TabSection } from '@/components/config/TabsTable';
-import SubaccountRCModal from './SubaccountRCModal';
+import SubaccountDetailModal from '@/components/config/SubaccountDetailModal';
 import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
@@ -130,6 +131,8 @@ function renderGlobalChangelog(text: string, highlight?: string): React.ReactNod
 
 export default function RoleCollectionsOverview() {
   const { toggle, collapsed } = useSidebar();
+  const { settings, cockpitMenu } = useSettings();
+  const { isAdmin } = useAuth();
   const { tab: tabParam, region: regionParam, subdomain: subdomainParam, name: nameParam, rcTab } = useParams<{
     tab?: string; region?: string; subdomain?: string; name?: string; rcTab?: string;
   }>();
@@ -728,16 +731,22 @@ export default function RoleCollectionsOverview() {
       )}
 
       {modal && (
-        <SubaccountRCModal
+        <SubaccountDetailModal
           sa={modal.sa}
-          allNames={modal.allNames}
-          initialName={modal.initialName}
-          initialTab={modal.initialTab}
-          initialShowList={modal.initialShowList}
+          initialTab="roles"
+          allRcNames={modal.allNames}
+          initialRcName={modal.initialName}
+          initialRcTab={modal.initialTab}
+          initialRcShowList={modal.initialShowList}
           onClose={() => {
             setModal(null);
             navigate(returnUrl.current, { replace: true });
           }}
+          subaccounts={saData}
+          onSelectSubaccount={newSa => setModal(prev => prev ? { ...prev, sa: newSa } : null)}
+          cockpit={settings?.homepage.cockpit}
+          cockpitMenu={cockpitMenu}
+          isAdmin={isAdmin}
           onRcDataChange={() => void loadData()}
         />
       )}

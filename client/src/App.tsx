@@ -72,14 +72,17 @@ export default function App() {
               <Route path="/home/:tab" element={<HomePage />} />
               <Route path="/apps" element={<AppsPage />} />
               <Route path="/apps/:view" element={<AppsPage />} />
+              <Route path="/apps/:region/:subdomain" element={<AppsPage />} />
               <Route path="/destinations" element={<DestinationOverview />} />
               <Route path="/destinations/:tab" element={<DestinationOverview />} />
+              <Route path="/destinations/:region/:subdomain" element={<DestinationOverview />} />
               <Route path="/destinations/:region/:subdomain/:spaceName/:instanceName/:instanceGuid/:name/:destTab" element={<DestinationOverview />} />
               <Route path="/destinations/:region/:subdomain/:spaceName/:instanceName/:instanceGuid/:name" element={<DestinationOverview />} />
               <Route path="/destinations/:region/:subdomain/:name/:destTab" element={<DestinationOverview />} />
               <Route path="/destinations/:region/:subdomain/:name" element={<DestinationOverview />} />
               <Route path="/role-collections" element={<RoleCollectionsOverview />} />
               <Route path="/role-collections/:tab" element={<RoleCollectionsOverview />} />
+              <Route path="/role-collections/:region/:subdomain" element={<RoleCollectionsOverview />} />
               <Route path="/role-collections/:region/:subdomain/:name/:rcTab" element={<RoleCollectionsOverview />} />
               <Route path="/role-collections/:region/:subdomain/:name" element={<RoleCollectionsOverview />} />
               <Route path="/users" element={<UsersOverview />} />
@@ -87,6 +90,8 @@ export default function App() {
               <Route path="/users/:region/:subdomain" element={<UsersOverview />} />
               <Route path="/users/:region/:subdomain/:origin/:email" element={<UsersOverview />} />
               <Route path="/users/:region/:subdomain/:origin/:email/:userTab" element={<UsersOverview />} />
+              <Route path="/subaccount/:region/:subdomain" element={<ConfigPage />} />
+              <Route path="/services/:region/:subdomain" element={<ConfigPage />} />
               <Route path="/config" element={<Navigate to="/config/orgs" replace />} />
               <Route path="/config/:tab" element={<ConfigPage />} />
               <Route path="/" element={<Navigate to="/home" replace />} />

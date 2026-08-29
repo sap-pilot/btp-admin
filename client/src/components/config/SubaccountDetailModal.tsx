@@ -1,6 +1,10 @@
 import { useState, useEffect, useRef } from 'react';
-import { ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown, Filter, Pencil, RotateCcw, Save, ShieldBan, X } from 'lucide-react';
+import { ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown, Filter, Maximize2, Minimize2, Pencil, RotateCcw, Save, ShieldBan, X } from 'lucide-react';
 import * as DialogPrimitive from '@radix-ui/react-dialog';
+import AppsTab from '@/components/config/tabs/AppsTab';
+import DestTab, { type SelectedDest } from '@/components/config/tabs/DestTab';
+import RolesTab from '@/components/config/tabs/RolesTab';
+import UsersTab from '@/components/config/tabs/UsersTab';
 import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator,
   DropdownMenuSub, DropdownMenuSubContent, DropdownMenuSubTrigger, DropdownMenuTrigger,
@@ -10,18 +14,45 @@ import type { CockpitMenuItem } from '@/components/home/HomepageContent';
 import type { TabEntry } from './TabsTable';
 
 interface Props {
-  sa:                   SubaccountEntry | null;
-  onClose:              () => void;
-  cockpit?:             { idp: string; host: string };
-  cockpitMenu?:         CockpitMenuItem | null;
-  isAdmin?:             boolean;
-  onSpaceSave?:         (region: string, subdomain: string, spaces: { spaceId: string; manageDest: boolean; aod: boolean }[]) => Promise<void>;
-  subaccounts?:         SubaccountEntry[];
-  onSelectSubaccount?:  (sa: SubaccountEntry) => void;
-  tabs?:                TabEntry[];
+  sa:                    SubaccountEntry | null;
+  onClose:               () => void;
+  cockpit?:              { idp: string; host: string };
+  cockpitMenu?:          CockpitMenuItem | null;
+  isAdmin?:              boolean;
+  onSpaceSave?:          (region: string, subdomain: string, spaces: { spaceId: string; manageDest: boolean; aod: boolean }[]) => Promise<void>;
+  subaccounts?:          SubaccountEntry[];
+  onSelectSubaccount?:   (sa: SubaccountEntry) => void;
+  tabs?:                 TabEntry[];
+  initialTab?:           ModalTab;
+  // Apps tab
+  initialAppGuid?:       string;
+  onAppDataChange?:      () => void;
+  // Destinations tab
+  allDestNames?:         string[];
+  initialDestName?:      string;
+  initialDestTab?:       'properties' | 'changelog' | 'test';
+  initialDestShowList?:  boolean;
+  initialDestSpaceName?: string;
+  initialDestInstName?:  string;
+  initialDestInstGuid?:  string;
+  selectedDests?:        SelectedDest[];
+  onToggleCompare?:      (d: SelectedDest) => void;
+  onOpenCompare?:        (dests: SelectedDest[]) => void;
+  onDestDataChange?:     () => void;
+  // Roles tab
+  allRcNames?:           string[];
+  initialRcName?:        string;
+  initialRcTab?:         'details' | 'users' | 'changelog';
+  initialRcShowList?:    boolean;
+  onRcDataChange?:       () => void;
+  // Users tab
+  initialUserEmail?:     string;
+  initialUserOrigin?:    string;
+  initialUserTab?:       'detail' | 'access' | 'history';
+  onUserDataChange?:     () => void;
 }
 
-type ModalTab = 'info' | 'services';
+type ModalTab = 'info' | 'services' | 'apps' | 'destinations' | 'roles' | 'users';
 
 // ─── Cockpit URL helpers ──────────────────────────────────────────────────────
 
@@ -74,6 +105,7 @@ function buildCtx(sa: SubaccountEntry, cockpit: { idp: string; host: string }): 
 }
 
 const SPACE_SVC_INST_TPL = 'https://{cockpitRegion}.cockpit.btp.cloud.sap/cockpit/?idp={homepage.cockpit.idp}#/globalaccount/{globalAccountGUID}/subaccount/{subaccountId}/org/{orgId}/space/{spaceId}/service-instances';
+const SA_COCKPIT_TPL     = 'https://{cockpitRegion}.cockpit.btp.cloud.sap/cockpit/?idp={homepage.cockpit.idp}#/globalaccount/{globalAccountGUID}/subaccount/{subaccountId}/overview';
 
 function buildSpaceInstUrl(sa: SubaccountEntry, cockpit: { idp: string; host: string }, spaceId: string): string {
   return resolveUrl(SPACE_SVC_INST_TPL, { ...buildCtx(sa, cockpit), spaceId });
@@ -136,8 +168,14 @@ function Field({ label, value, mono }: { label: string; value: string; mono?: bo
 const thCls = 'text-left px-2 py-1.5 text-[10px] font-medium text-muted-foreground border-b border-border';
 const tdCls = 'px-2 py-1.5 border-b border-border text-xs';
 
-export default function SubaccountDetailModal({ sa, onClose, cockpit, cockpitMenu, isAdmin, onSpaceSave, subaccounts, onSelectSubaccount, tabs }: Props) {
-  const [activeTab, setActiveTab]           = useState<ModalTab>('info');
+const TAB_LABEL: Record<ModalTab, string> = {
+  info: 'Overview', services: 'Services', apps: 'Apps',
+  destinations: 'Destinations', roles: 'Roles', users: 'Users',
+};
+
+export default function SubaccountDetailModal({ sa, onClose, cockpit, cockpitMenu, isAdmin, onSpaceSave, subaccounts, onSelectSubaccount, tabs, initialTab, initialAppGuid, onAppDataChange, allDestNames, initialDestName, initialDestTab, initialDestShowList, initialDestSpaceName, initialDestInstName, initialDestInstGuid, selectedDests, onToggleCompare, onOpenCompare, onDestDataChange, allRcNames, initialRcName, initialRcTab, initialRcShowList, onRcDataChange, initialUserEmail, initialUserOrigin, initialUserTab, onUserDataChange }: Props) {
+  const [activeTab, setActiveTab]           = useState<ModalTab>(initialTab ?? 'info');
+  const [maximized, setMaximized]           = useState(false);
   const [svcFilter, setSvcFilter]           = useState('');
   const [subFilter, setSubFilter]           = useState('');
   const [saFilter, setSaFilter]             = useState('');
@@ -156,6 +194,7 @@ export default function SubaccountDetailModal({ sa, onClose, cockpit, cockpitMen
   const dragging    = useRef<{ set: (v: number) => void; left: number; width: number } | null>(null);
 
   const canManageSpaces = isAdmin || window.location.hostname === 'localhost';
+  const isAdminMode     = isAdmin || window.location.hostname === 'localhost';
 
   useEffect(() => {
     if (!sa) return;
@@ -169,6 +208,12 @@ export default function SubaccountDetailModal({ sa, onClose, cockpit, cockpitMen
     setSpaceDestsOrig(new Map(m));
     setSpaceAods(new Map(ma));
     setSpaceAodsOrig(new Map(ma));
+    // Reset activeTab if the new SA doesn't support the current tab
+    setActiveTab(prev => {
+      if (prev === 'destinations' && !sa.manageDestinations) return 'info';
+      if ((prev === 'roles' || prev === 'users') && !sa.manageRoles) return 'info';
+      return prev;
+    });
   }, [sa]);
 
   useEffect(() => {
@@ -197,6 +242,22 @@ export default function SubaccountDetailModal({ sa, onClose, cockpit, cockpitMen
         : 'border-transparent text-muted-foreground hover:text-foreground'
     }`;
 
+  function handleTabSwitch(tab: ModalTab) {
+    setActiveTab(tab);
+    if (!sa) return;
+    const r = encodeURIComponent(sa.region);
+    const s = encodeURIComponent(sa.subdomain);
+    const tabUrls: Record<ModalTab, string> = {
+      info:         `/subaccount/${r}/${s}`,
+      services:     `/services/${r}/${s}`,
+      apps:         `/apps/${r}/${s}`,
+      destinations: `/destinations/${r}/${s}`,
+      roles:        `/role-collections/${r}/${s}`,
+      users:        `/users/${r}/${s}`,
+    };
+    history.replaceState(null, '', tabUrls[tab]);
+  }
+
   const spaceDestsDirty = [...spaceDests.entries()].some(([id, v]) => spaceDestsOrig.get(id) !== v)
     || [...spaceAods.entries()].some(([id, v]) => spaceAodsOrig.get(id) !== v);
 
@@ -221,8 +282,8 @@ export default function SubaccountDetailModal({ sa, onClose, cockpit, cockpitMen
   const switcherList = subaccounts ?? [];
   const showSwitcher = switcherList.length > 1 && !!onSelectSubaccount;
 
-  function renderSwitcherDropdown() {
-    if (!sa || !showSwitcher) return null;
+  function renderSwitcherContent() {
+    if (!sa) return null;
     const q = saFilter.toLowerCase().trim();
 
     function saMatches(s: SubaccountEntry): boolean {
@@ -233,17 +294,14 @@ export default function SubaccountDetailModal({ sa, onClose, cockpit, cockpitMen
         s.groupIds.toLowerCase().includes(q);
     }
 
-    // csvIncludes: checks if a groupId appears in a CSV groupIds string
     function csvIncludes(csv: string, val: string): boolean {
       return csv.split(',').map(v => v.trim()).includes(val);
     }
 
-    // Build tab → group hierarchy from tabs prop (respects ordering from tabs.json)
-    // Falls back to a flat alphabetical list by region when tabs are not provided.
     type GroupNode = { groupId: string; title?: string; items: SubaccountEntry[] };
     type TabNode   = { tabName: string; groups: GroupNode[] };
 
-    const placed = new Set<string>(); // track subaccountIds already placed
+    const placed = new Set<string>();
 
     const tabNodes: TabNode[] = (tabs ?? []).flatMap(tab => {
       const groups: GroupNode[] = tab.sections
@@ -261,7 +319,6 @@ export default function SubaccountDetailModal({ sa, onClose, cockpit, cockpitMen
       return [{ tabName: tab.tab, groups }];
     });
 
-    // Subaccounts not covered by any tab section (no groupIds match, or no tabs prop)
     const ungrouped = switcherList
       .filter(s => !placed.has(s.subaccountId) && saMatches(s))
       .sort((a, b) => a.pos - b.pos);
@@ -285,72 +342,67 @@ export default function SubaccountDetailModal({ sa, onClose, cockpit, cockpitMen
     }
 
     return (
-      <DropdownMenu onOpenChange={open => { if (!open) setSaFilter(''); }}>
-        <DropdownMenuTrigger asChild>
-          <button className="shrink-0 p-0.5 rounded hover:bg-accent text-muted-foreground hover:text-foreground transition-colors" title="Switch subaccount">
-            <ChevronDown className="h-3.5 w-3.5" />
-          </button>
-        </DropdownMenuTrigger>
-        <DropdownMenuContent align="start" className="w-[28rem] p-0 flex flex-col max-h-[min(80vh,600px)] overflow-hidden">
-          <div className="shrink-0 p-2 border-b border-border">
-            <div className="relative">
-              <Filter className="absolute left-2 top-1/2 -translate-y-1/2 h-3 w-3 text-muted-foreground/50 pointer-events-none" />
-              <input
-                type="text"
-                placeholder="Filter subaccounts…"
-                value={saFilter}
-                onChange={e => setSaFilter(e.target.value)}
-                onKeyDown={e => { if (e.key !== 'Escape') e.stopPropagation(); }}
-                autoFocus
-                className="w-full h-7 pl-7 pr-2 text-xs bg-transparent border border-border rounded outline-none focus:border-primary placeholder:text-muted-foreground/50"
-              />
-            </div>
+      <DropdownMenuContent align="start" className="w-[28rem] p-0 flex flex-col max-h-[min(80vh,600px)] overflow-hidden">
+        <div className="shrink-0 p-2 border-b border-border">
+          <div className="relative">
+            <Filter className="absolute left-2 top-1/2 -translate-y-1/2 h-3 w-3 text-muted-foreground/50 pointer-events-none" />
+            <input
+              type="text"
+              placeholder="Filter subaccounts…"
+              value={saFilter}
+              onChange={e => setSaFilter(e.target.value)}
+              onKeyDown={e => { if (e.key !== 'Escape') e.stopPropagation(); }}
+              autoFocus
+              className="w-full h-7 pl-7 pr-2 text-xs bg-transparent border border-border rounded outline-none focus:border-primary placeholder:text-muted-foreground/50"
+            />
           </div>
-          <div className="overflow-y-auto overflow-x-hidden flex-1">
-            {!hasAnyResults ? (
-              <p className="text-xs text-muted-foreground px-3 py-4 text-center">No results.</p>
-            ) : (
-              <>
-                {tabNodes.map(tab => (
-                  <div key={tab.tabName}>
-                    <div className="px-2 py-1 text-[10px] font-semibold text-muted-foreground uppercase tracking-wider bg-muted/30 sticky top-0 z-10">
-                      {tab.tabName}
-                    </div>
-                    {tab.groups.map(group => (
-                      <div key={group.groupId}>
-                        <div className="px-3 py-0.5 text-[10px] text-muted-foreground/70 font-medium italic">
-                          {group.title || group.groupId}
-                        </div>
-                        {group.items.map(s => <SaItem key={s.subaccountId} s={s} />)}
+        </div>
+        <div className="overflow-y-auto overflow-x-hidden flex-1">
+          {!hasAnyResults ? (
+            <p className="text-xs text-muted-foreground px-3 py-4 text-center">No results.</p>
+          ) : (
+            <>
+              {tabNodes.map(tab => (
+                <div key={tab.tabName}>
+                  <div className="px-2 py-1 text-[10px] font-semibold text-muted-foreground uppercase tracking-wider bg-muted/30 sticky top-0 z-10">
+                    {tab.tabName}
+                  </div>
+                  {tab.groups.map(group => (
+                    <div key={group.groupId}>
+                      <div className="px-3 py-0.5 text-[10px] text-muted-foreground/70 font-medium italic">
+                        {group.title || group.groupId}
                       </div>
-                    ))}
-                  </div>
-                ))}
-                {ungrouped.length > 0 && (
-                  <div>
-                    {tabNodes.length > 0 && <DropdownMenuSeparator />}
-                    <div className="px-2 py-1 text-[10px] font-semibold text-muted-foreground uppercase tracking-wider bg-muted/30 sticky top-0 z-10">
-                      Other
+                      {group.items.map(s => <SaItem key={s.subaccountId} s={s} />)}
                     </div>
-                    {ungrouped.map(s => <SaItem key={s.subaccountId} s={s} />)}
+                  ))}
+                </div>
+              ))}
+              {ungrouped.length > 0 && (
+                <div>
+                  {tabNodes.length > 0 && <DropdownMenuSeparator />}
+                  <div className="px-2 py-1 text-[10px] font-semibold text-muted-foreground uppercase tracking-wider bg-muted/30 sticky top-0 z-10">
+                    Other
                   </div>
-                )}
-              </>
-            )}
-          </div>
-        </DropdownMenuContent>
-      </DropdownMenu>
+                  {ungrouped.map(s => <SaItem key={s.subaccountId} s={s} />)}
+                </div>
+              )}
+            </>
+          )}
+        </div>
+      </DropdownMenuContent>
     );
   }
 
-  const tabLabel = activeTab === 'info' ? 'Overview' : 'Services';
+  const tabLabel = TAB_LABEL[activeTab] ?? 'Overview';
 
   return (
     <DialogPrimitive.Root open={sa !== null} onOpenChange={v => { if (!v) onClose(); }}>
       <DialogPrimitive.Portal>
         <DialogPrimitive.Overlay className="fixed inset-0 z-50 bg-black/50 backdrop-blur-sm" />
         <DialogPrimitive.Content
-          className="fixed inset-4 z-50 flex flex-col bg-background rounded-lg shadow-xl outline-none overflow-hidden max-w-[62.4rem] mx-auto"
+          className={`fixed z-50 flex flex-col bg-background shadow-xl outline-none overflow-hidden mx-auto transition-none ${
+            maximized ? 'inset-0 rounded-none' : 'inset-4 rounded-lg max-w-[1150px]'
+          }`}
           onInteractOutside={e => e.preventDefault()}
           onEscapeKeyDown={onClose}
           aria-describedby={undefined}
@@ -361,13 +413,27 @@ export default function SubaccountDetailModal({ sa, onClose, cockpit, cockpitMen
               <div className="flex items-center gap-2 px-4 py-3 border-b border-border shrink-0">
                 {/* Breadcrumb title */}
                 <div className="flex items-center gap-1.5 min-w-0 flex-1 overflow-hidden">
-                  <DialogPrimitive.Title className="flex items-center gap-1.5 min-w-0 text-sm font-semibold">
+                  <DialogPrimitive.Title className="flex items-center gap-1.5 min-w-0 text-sm font-semibold shrink-0">
                     <span className="text-xs font-mono font-normal text-muted-foreground shrink-0">{sa.region}</span>
                     <span className="text-muted-foreground shrink-0 text-xs font-normal">›</span>
-                    <span className="truncate">{sa.alias || sa.subaccountName}</span>
-                    <span className="text-xs font-normal font-mono text-muted-foreground shrink-0">({sa.subdomain})</span>
                   </DialogPrimitive.Title>
-                  {renderSwitcherDropdown()}
+                  {showSwitcher ? (
+                    <DropdownMenu onOpenChange={open => { if (!open) setSaFilter(''); }}>
+                      <DropdownMenuTrigger asChild>
+                        <button className="flex items-center gap-1 rounded px-1 -mx-1 hover:bg-accent transition-colors min-w-0 max-w-[50%]">
+                          <span className="truncate text-sm font-semibold">{sa.alias || sa.subaccountName}</span>
+                          <span className="text-xs font-normal font-mono text-muted-foreground shrink-0">({sa.subdomain})</span>
+                          <ChevronDown className="h-3 w-3 text-muted-foreground shrink-0 opacity-60" />
+                        </button>
+                      </DropdownMenuTrigger>
+                      {renderSwitcherContent()}
+                    </DropdownMenu>
+                  ) : (
+                    <span className="flex items-center gap-1 min-w-0">
+                      <span className="truncate text-sm font-semibold">{sa.alias || sa.subaccountName}</span>
+                      <span className="text-xs font-normal font-mono text-muted-foreground shrink-0">({sa.subdomain})</span>
+                    </span>
+                  )}
                   {sa.restricted && (
                     <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-red-500 bg-red-500/10 border border-red-500/30 px-1.5 py-0.5 rounded shrink-0">
                       <ShieldBan className="h-3 w-3" /> Restricted
@@ -377,18 +443,15 @@ export default function SubaccountDetailModal({ sa, onClose, cockpit, cockpitMen
                   <span className="text-xs text-muted-foreground shrink-0 font-medium">{tabLabel}</span>
                 </div>
 
-                {cockpit && cockpitMenu && (() => {
+                {cockpit && (() => {
                   const ctx     = buildCtx(sa, cockpit);
-                  const url     = cockpitMenu.url ? resolveUrl(cockpitMenu.url, ctx) : undefined;
+                  const saUrl   = resolveUrl(SA_COCKPIT_TPL, ctx);
                   const spaces  = sa.org?.spaces ?? [];
-                  const hasSubs = cockpitMenu.submenus && cockpitMenu.submenus.length > 0;
+                  const hasSubs = !!(cockpitMenu?.submenus && cockpitMenu.submenus.length > 0);
                   const btnBase = 'flex items-center text-xs py-1 text-muted-foreground hover:bg-accent hover:text-foreground transition-colors';
                   return (
                     <div className="inline-flex rounded border border-border shrink-0 overflow-hidden">
-                      {url
-                        ? <a href={url} target="_blank" rel="noopener noreferrer" className={`${btnBase} px-2 ${hasSubs ? 'border-r border-border' : ''}`}>Open Cockpit</a>
-                        : hasSubs ? <span className={`${btnBase} px-2 border-r border-border`}>Cockpit</span> : null
-                      }
+                      <a href={saUrl} target="_blank" rel="noopener noreferrer" className={`${btnBase} px-2 ${hasSubs ? 'border-r border-border' : ''}`}>Open Cockpit</a>
                       {hasSubs && (
                         <DropdownMenu>
                           <DropdownMenuTrigger asChild>
@@ -397,13 +460,20 @@ export default function SubaccountDetailModal({ sa, onClose, cockpit, cockpitMen
                             </button>
                           </DropdownMenuTrigger>
                           <DropdownMenuContent align="end" className="max-h-[min(70vh,420px)] overflow-y-auto">
-                            {renderMenuItems(cockpitMenu.submenus!, ctx, spaces)}
+                            {renderMenuItems(cockpitMenu!.submenus!, ctx, spaces)}
                           </DropdownMenuContent>
                         </DropdownMenu>
                       )}
                     </div>
                   );
                 })()}
+                <button
+                  onClick={() => setMaximized(v => !v)}
+                  className="p-1.5 rounded hover:bg-accent text-muted-foreground hover:text-foreground transition-colors shrink-0"
+                  title={maximized ? 'Restore' : 'Maximize'}
+                >
+                  {maximized ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}
+                </button>
                 <button
                   onClick={onClose}
                   className="p-1.5 rounded hover:bg-accent text-muted-foreground hover:text-foreground transition-colors shrink-0"
@@ -414,12 +484,22 @@ export default function SubaccountDetailModal({ sa, onClose, cockpit, cockpitMen
 
               {/* Tab bar */}
               <div className="flex border-b border-border shrink-0 px-2 bg-muted/5">
-                <button className={tabCls('info')} onClick={() => setActiveTab('info')}>
-                  Overview
-                </button>
-                <button className={tabCls('services')} onClick={() => setActiveTab('services')}>
-                  Services
-                </button>
+                <button className={tabCls('info')} onClick={() => handleTabSwitch('info')}>Overview</button>
+                <button className={tabCls('services')} onClick={() => handleTabSwitch('services')}>Services</button>
+                {isAdminMode && (
+                  <>
+                    <button className={tabCls('apps')} onClick={() => handleTabSwitch('apps')}>Apps</button>
+                    {sa.manageDestinations && (
+                      <button className={tabCls('destinations')} onClick={() => handleTabSwitch('destinations')}>Destinations</button>
+                    )}
+                    {sa.manageRoles && (
+                      <>
+                        <button className={tabCls('roles')} onClick={() => handleTabSwitch('roles')}>Roles</button>
+                        <button className={tabCls('users')} onClick={() => handleTabSwitch('users')}>Users</button>
+                      </>
+                    )}
+                  </>
+                )}
               </div>
 
               {/* Tab content */}
@@ -442,10 +522,11 @@ export default function SubaccountDetailModal({ sa, onClose, cockpit, cockpitMen
                         <Field label="Org ID"                   value={sa.org?.orgId   ?? ''}          mono />
                         <Field label="Group IDs"                value={sa.groupIds}                         />
                         <Field label="Alias"                    value={sa.alias}                            />
-                        <div className="flex gap-4 pt-1">
+                        <div className="flex flex-wrap gap-4 pt-1">
                           {([
                             { label: 'In Homepage',         val: sa.inHomepage },
                             { label: 'Manage Destinations', val: sa.manageDestinations },
+                            { label: 'Manage Roles',        val: sa.manageRoles },
                           ] as const).map(({ label, val }) => (
                             <div key={label} className="flex items-center gap-1.5">
                               <span className={`w-2 h-2 rounded-full ${val ? 'bg-green-500' : 'bg-muted-foreground/30'}`} />
@@ -704,24 +785,19 @@ export default function SubaccountDetailModal({ sa, onClose, cockpit, cockpitMen
                               </button>
                             )}
                           </div>
-                          <button
-                            onClick={() => setSvcExpanded(new Set(allSpaceIds))}
-                            disabled={isFiltering}
-                            className={btnOutline}
-                            title="Expand all"
-                          >
-                            <ChevronsUpDown className="h-3.5 w-3.5" />
-                            <span className="hidden sm:inline">Expand</span>
-                          </button>
-                          <button
-                            onClick={() => setSvcExpanded(new Set())}
-                            disabled={isFiltering}
-                            className={btnOutline}
-                            title="Collapse all"
-                          >
-                            <ChevronsDownUp className="h-3.5 w-3.5" />
-                            <span className="hidden sm:inline">Collapse</span>
-                          </button>
+                          {(() => {
+                            const allSvcExpanded = !isFiltering && allSpaceIds.length > 0 && allSpaceIds.every(id => svcExpanded.has(id));
+                            return (
+                              <button
+                                onClick={() => setSvcExpanded(allSvcExpanded ? new Set() : new Set(allSpaceIds))}
+                                disabled={isFiltering}
+                                className="inline-flex items-center gap-1.5 px-2 py-1.5 rounded text-xs font-medium hover:bg-accent hover:text-accent-foreground transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                                title={allSvcExpanded ? 'Collapse all' : 'Expand all'}
+                              >
+                                {allSvcExpanded ? <ChevronsDownUp className="h-4 w-4" /> : <ChevronsUpDown className="h-4 w-4" />}
+                              </button>
+                            );
+                          })()}
                         </div>
                         <div className="flex-1 overflow-auto">
                           {filteredGroups.length > 0 ? (
@@ -803,6 +879,56 @@ export default function SubaccountDetailModal({ sa, onClose, cockpit, cockpitMen
                     </div>
                   );
                 })()}
+
+                {/* ── Apps ── */}
+                {activeTab === 'apps' && isAdminMode && sa && (
+                  <AppsTab
+                    sa={sa}
+                    initialGuid={initialAppGuid}
+                    onAppDataChange={onAppDataChange}
+                  />
+                )}
+
+                {/* ── Destinations ── */}
+                {activeTab === 'destinations' && isAdminMode && sa && (
+                  <DestTab
+                    sa={sa}
+                    allNames={allDestNames}
+                    initialName={initialDestName}
+                    initialTab={initialDestTab}
+                    initialShowList={initialDestShowList}
+                    initialSpaceName={initialDestSpaceName}
+                    initialInstName={initialDestInstName}
+                    initialInstGuid={initialDestInstGuid}
+                    selectedDests={selectedDests}
+                    onToggleCompare={onToggleCompare}
+                    onOpenCompare={onOpenCompare}
+                    onDestDataChange={onDestDataChange}
+                  />
+                )}
+
+                {/* ── Roles ── */}
+                {activeTab === 'roles' && isAdminMode && sa && (
+                  <RolesTab
+                    sa={sa}
+                    allNames={allRcNames}
+                    initialName={initialRcName}
+                    initialTab={initialRcTab}
+                    initialShowList={initialRcShowList}
+                    onRcDataChange={onRcDataChange}
+                  />
+                )}
+
+                {/* ── Users ── */}
+                {activeTab === 'users' && isAdminMode && sa && (
+                  <UsersTab
+                    sa={sa}
+                    initialUserEmail={initialUserEmail}
+                    initialUserOrigin={initialUserOrigin}
+                    initialTab={initialUserTab}
+                    onUserDataChange={onUserDataChange}
+                  />
+                )}
 
               </div>
             </>

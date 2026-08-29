@@ -6,7 +6,7 @@ import DateRangePicker from '@/components/DateRangePicker';
 import { fmtDateRange } from '@/hooks/useTimeRange';
 import type { SubaccountEntry } from '@/components/config/SubaccountsTable';
 import type { TabEntry, TabSection } from '@/components/config/TabsTable';
-import SubaccountAppsModal from './SubaccountAppsModal';
+import SubaccountDetailModal from '@/components/config/SubaccountDetailModal';
 import UsageAnalyticsView from './UsageAnalyticsView';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -212,7 +212,7 @@ function InfoBlock({ label, value, sub, accent }: { label: string; value: string
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
 export default function AppsPage() {
-  const { view: viewParam }  = useParams<{ view: string }>();
+  const { view: viewParam, region: regionParam, subdomain: subdomainParam } = useParams<{ view?: string; region?: string; subdomain?: string }>();
   const navigate             = useNavigate();
   const location             = useLocation();
   const { toggle }           = useSidebar();
@@ -240,6 +240,7 @@ export default function AppsPage() {
   const [searchResults, setSearchResults]     = useState<SubaccountTopApps[] | null>(null);
   const [modalState, setModalState]           = useState<{ region: string; subdomain: string; guid: string; spaceName: string; appName: string } | null>(null);
   const savedPath                             = useRef<string>('');
+  const deepLinkRef                           = useRef<string>('');
 
   // ── Navigation helpers ────────────────────────────────────────────────────
 
@@ -403,6 +404,18 @@ export default function AppsPage() {
     setSearchResults(null);
     setCommittedSearch('');
   }
+
+  // Deep-link: /apps/:region/:subdomain — reopen modal on refresh
+  useEffect(() => {
+    if (!regionParam || !subdomainParam) { deepLinkRef.current = ''; return; }
+    const key = `${regionParam}/${subdomainParam}`;
+    if (deepLinkRef.current === key) return;
+    if (!saData.length) return;
+    const sa = saData.find(s => !s.restricted && s.region === regionParam && s.subdomain === subdomainParam);
+    if (!sa) return;
+    deepLinkRef.current = key;
+    setModalState({ region: sa.region, subdomain: sa.subdomain, guid: '', spaceName: '', appName: '' });
+  }, [regionParam, subdomainParam, saData]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Modal URL sync ────────────────────────────────────────────────────────
 
@@ -896,11 +909,13 @@ export default function AppsPage() {
 
       {/* Subaccount apps modal */}
       {modalState && (
-        <SubaccountAppsModal
-          initialRegion={modalState.region}
-          initialSubdomain={modalState.subdomain}
-          initialGuid={modalState.guid}
-          allSubaccounts={allSas}
+        <SubaccountDetailModal
+          sa={allSas.find(s => s.region === modalState.region && s.subdomain === modalState.subdomain) ?? null}
+          initialTab="apps"
+          initialAppGuid={modalState.guid || undefined}
+          subaccounts={allSas}
+          onSelectSubaccount={s => setModalState({ region: s.region, subdomain: s.subdomain, guid: '', spaceName: '', appName: '' })}
+          tabs={tabEntries}
           onClose={closeModal}
         />
       )}

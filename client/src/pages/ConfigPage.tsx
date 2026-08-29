@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { useNavigate, useParams, useSearchParams } from 'react-router';
+import { useNavigate, useParams, useSearchParams, useLocation } from 'react-router';
 import { Building2, Clock, Download, Eye, Layers, PanelLeft, Search, Settings, Upload, X } from 'lucide-react';
 import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
@@ -18,8 +18,9 @@ type Tab = 'subaccounts' | 'tabs' | 'settings' | 'changelog';
 const VALID_TABS = new Set<Tab>(['subaccounts', 'tabs', 'settings', 'changelog']);
 
 export default function ConfigPage() {
-  const { tab: tabParam } = useParams<{ tab: string }>();
+  const { tab: tabParam, region: regionParam, subdomain: subdomainParam } = useParams<{ tab?: string; region?: string; subdomain?: string }>();
   const navigate          = useNavigate();
+  const location          = useLocation();
   const [searchParams]    = useSearchParams();
   const { toggle, collapsed } = useSidebar();
   const { refreshSettings } = useSettings();
@@ -35,7 +36,15 @@ export default function ConfigPage() {
   const [isSavingSas,    setIsSavingSas]  = useState(false);
   const [refreshProgress, setRefreshProgress] = useState<RefreshProgress | null>(null);
   const [selectedSa,     setSelectedSa]   = useState<SubaccountEntry | null>(null);
-  const progressTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const progressTimerRef  = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const autoOpenedRef     = useRef(false);
+
+  const autoOpenTab: 'info' | 'services' | null = (() => {
+    if (!regionParam || !subdomainParam) return null;
+    if (location.pathname.startsWith('/subaccount/')) return 'info';
+    if (location.pathname.startsWith('/services/')) return 'services';
+    return null;
+  })();
 
   // Tabs state
   const [tabsData,        setTabsData]        = useState<TabEntry[]>([]);
@@ -144,6 +153,15 @@ export default function ConfigPage() {
       .then(({ data }) => { setAodData(data); setOriginalAod(data); })
       .catch(() => {});
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Auto-open modal for /subaccount/:region/:subdomain and /services/:region/:subdomain
+  useEffect(() => {
+    if (!autoOpenTab || !sasData.length || autoOpenedRef.current) return;
+    const sa = sasData.find(s => s.region === regionParam && s.subdomain === subdomainParam);
+    if (!sa) return;
+    autoOpenedRef.current = true;
+    setSelectedSa(sa);
+  }, [sasData, autoOpenTab]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const configStateRef = useRef({
     sasDirty: false, tabsDirty: false, settingsDirty: false,
@@ -753,6 +771,7 @@ export default function ConfigPage() {
       <SubaccountDetailModal
         sa={selectedSa}
         onClose={() => setSelectedSa(null)}
+        initialTab={autoOpenTab ?? undefined}
         cockpit={settingsData?.homepage.cockpit}
         cockpitMenu={cockpitMenu}
         isAdmin={isAdmin}

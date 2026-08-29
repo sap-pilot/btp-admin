@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Download, Eye, EyeOff, GitCompare, Lock, Plus, RotateCcw, Save, X } from 'lucide-react';
 import { useAuth } from '@/hooks/useAuth';
-import type { SelectedDest } from './SubaccountDestModal';
+import type { SelectedDest } from '@/components/config/tabs/DestTab';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 

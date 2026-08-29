@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState } from 'react';
 import { useParams, useNavigate, useLocation, Link } from 'react-router';
 import { ChevronDown, GitCompare, Globe, History, PanelLeft, RefreshCw, Search, X } from 'lucide-react';
-import { useSidebar } from '@/components/AppLayout';
+import { useSidebar, useSettings } from '@/components/AppLayout';
+import { useAuth } from '@/hooks/useAuth';
 import type { SubaccountEntry } from '@/components/config/SubaccountsTable';
 import type { TabEntry, TabSection } from '@/components/config/TabsTable';
-import SubaccountDestModal from './SubaccountDestModal';
-import type { SelectedDest } from './SubaccountDestModal';
+import SubaccountDetailModal from '@/components/config/SubaccountDetailModal';
+import type { SelectedDest } from '@/components/config/tabs/DestTab';
 import CompareModal from './CompareModal';
 import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
@@ -132,6 +133,8 @@ function renderGlobalChangelog(text: string, highlight?: string): React.ReactNod
 
 export default function DestinationOverview() {
   const { toggle, collapsed } = useSidebar();
+  const { settings, cockpitMenu } = useSettings();
+  const { isAdmin } = useAuth();
   const { tab: tabParam, region: regionParam, subdomain: subdomainParam, name: nameParam, destTab, spaceName: spaceNameParam, instanceName: instanceNameParam, instanceGuid: instanceGuidParam } = useParams<{
     tab?: string; region?: string; subdomain?: string; name?: string; destTab?: string; spaceName?: string; instanceName?: string; instanceGuid?: string;
   }>();
@@ -945,19 +948,25 @@ export default function DestinationOverview() {
       </div>}
 
       {modal && (
-        <SubaccountDestModal
-          org={modal.sa}
-          allNames={modal.allNames}
-          initialName={modal.initialName}
-          initialTab={modal.initialTab}
-          initialShowList={modal.initialShowList}
-          initialSpaceName={modal.initialSpaceName}
-          initialInstanceName={modal.initialInstanceName}
-          initialInstanceGuid={modal.initialInstanceGuid}
+        <SubaccountDetailModal
+          sa={modal.sa}
+          initialTab="destinations"
+          allDestNames={modal.allNames}
+          initialDestName={modal.initialName}
+          initialDestTab={modal.initialTab}
+          initialDestShowList={modal.initialShowList}
+          initialDestSpaceName={modal.initialSpaceName}
+          initialDestInstName={modal.initialInstanceName}
+          initialDestInstGuid={modal.initialInstanceGuid}
           onClose={() => {
             setModal(null);
             navigate(returnUrl.current, { replace: true });
           }}
+          subaccounts={saData}
+          onSelectSubaccount={newSa => setModal(prev => prev ? { ...prev, sa: newSa } : null)}
+          cockpit={settings?.homepage.cockpit}
+          cockpitMenu={cockpitMenu}
+          isAdmin={isAdmin}
           selectedDests={selectedDests}
           onToggleCompare={toggleCompare}
           onOpenCompare={dests => { setEphemeralCompareDests(dests); }}
