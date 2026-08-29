@@ -40,5 +40,11 @@ export default defineConfig({
   build: {
     outDir: '../server/public',
     emptyOutDir: true,
+    rollupOptions: {
+      input: {
+        main:  path.resolve(__dirname, 'index.html'),
+        popup: path.resolve(__dirname, 'popup.html'),
+      },
+    },
   },
 });

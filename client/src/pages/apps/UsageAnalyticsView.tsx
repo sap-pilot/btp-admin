@@ -74,14 +74,14 @@ function InfoBlock({ label, value, accent }: { label: string; value: string; acc
 
 interface RequestRowProps {
   req: RequestItem;
-  onOpen: (region: string, subdomain: string, appGuid: string, spaceName?: string, appName?: string) => void;
+  onOpen: (e: React.MouseEvent, region: string, subdomain: string, appGuid: string, spaceName?: string, appName?: string) => void;
 }
 function RequestRow({ req, onOpen }: RequestRowProps) {
   return (
     <div className="flex items-baseline gap-2 py-1.5 border-b border-border/50 last:border-0 text-xs min-w-0">
       <span className="text-muted-foreground tabular-nums shrink-0">{fmtTime(req.ts)}</span>
       <button
-        onClick={() => onOpen(req.region, req.subdomain, req.appGuid, req.spaceName, req.appName)}
+        onClick={(e) => onOpen(e, req.region, req.subdomain, req.appGuid, req.spaceName, req.appName)}
         className="font-medium truncate text-foreground hover:text-primary hover:underline text-left min-w-0"
       >
         {req.appName || req.alias}
@@ -99,7 +99,7 @@ function RequestRow({ req, onOpen }: RequestRowProps) {
 interface Props {
   isDarkMap?:    boolean;
   durationHours: number;
-  onOpenModal?:  (region: string, subdomain: string, appGuid: string, spaceName?: string, appName?: string) => void;
+  onOpenModal?:  (e: React.MouseEvent, region: string, subdomain: string, appGuid: string, spaceName?: string, appName?: string) => void;
 }
 
 export default function UsageAnalyticsView({ isDarkMap, durationHours, onOpenModal }: Props) {
@@ -121,8 +121,8 @@ export default function UsageAnalyticsView({ isDarkMap, durationHours, onOpenMod
     return () => ro.disconnect();
   }, []);
 
-  const handleOpen = useCallback((region: string, subdomain: string, appGuid: string, spaceName?: string, appName?: string) => {
-    onOpenModal?.(region, subdomain, appGuid, spaceName, appName);
+  const handleOpen = useCallback((e: React.MouseEvent, region: string, subdomain: string, appGuid: string, spaceName?: string, appName?: string) => {
+    onOpenModal?.(e, region, subdomain, appGuid, spaceName, appName);
   }, [onOpenModal]);
 
   // ── Analytics (map + stats) fetch ─────────────────────────────────────────

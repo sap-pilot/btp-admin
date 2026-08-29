@@ -51,7 +51,7 @@ function fmtDateTime(ts: number): string {
 interface Props {
   open:       boolean;
   onClose:    () => void;
-  onOpenApp?: (region: string, subdomain: string, appGuid: string, spaceName?: string, appName?: string) => void;
+  onOpenApp?: (e: React.MouseEvent, region: string, subdomain: string, appGuid: string, spaceName?: string, appName?: string) => void;
 }
 
 // ─── Component ────────────────────────────────────────────────────────────────
@@ -265,7 +265,7 @@ export default function AccessListModal({ open, onClose, onOpenApp }: Props) {
                   <td className="px-3 py-1.5 overflow-hidden text-ellipsis whitespace-nowrap">
                     {item.appGuid && onOpenApp ? (
                       <button
-                        onClick={() => onOpenApp(item.region, item.subdomain, item.appGuid, item.spaceName, item.appName)}
+                        onClick={(e) => onOpenApp(e, item.region, item.subdomain, item.appGuid, item.spaceName, item.appName)}
                         className="text-primary hover:underline text-left w-full truncate block"
                         title={item.appName}
                       >

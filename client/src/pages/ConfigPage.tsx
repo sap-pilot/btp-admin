@@ -8,7 +8,7 @@ import {
 import { useSidebar, useSettings } from '@/components/AppLayout';
 import { useAuth } from '@/hooks/useAuth';
 import SubaccountsTable, { type SubaccountEntry, type RefreshProgress } from '@/components/config/SubaccountsTable';
-import SubaccountDetailModal from '@/components/config/SubaccountDetailModal';
+import SubaccountDetailModal from '@/components/SubaccountModal';
 import TabsTable, { type TabEntry } from '@/components/config/TabsTable';
 import SettingsPanel, { type SettingsData, type AodData } from '@/components/config/SettingsPanel';
 import HomePreviewPanel from '@/components/config/HomePreviewPanel';

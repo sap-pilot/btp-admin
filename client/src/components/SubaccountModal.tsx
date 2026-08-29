@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown, Filter, Maximize2, Minimize2, Pencil, RotateCcw, Save, ShieldBan, X } from 'lucide-react';
+import { ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown, ExternalLink, Filter, Maximize2, Minimize2, Pencil, RotateCcw, Save, ShieldBan, X } from 'lucide-react';
 import * as DialogPrimitive from '@radix-ui/react-dialog';
 import AppsTab from '@/components/config/tabs/AppsTab';
 import DestTab, { type SelectedDest } from '@/components/config/tabs/DestTab';
@@ -9,9 +9,10 @@ import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator,
   DropdownMenuSub, DropdownMenuSubContent, DropdownMenuSubTrigger, DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
-import type { SubaccountEntry, SpaceEntry } from './SubaccountsTable';
+import { openSubaccountPopup } from '@/lib/openSubaccountPopup';
+import type { SubaccountEntry, SpaceEntry } from './config/SubaccountsTable';
 import type { CockpitMenuItem } from '@/components/home/HomepageContent';
-import type { TabEntry } from './TabsTable';
+import type { TabEntry } from './config/TabsTable';
 
 interface Props {
   sa:                    SubaccountEntry | null;
@@ -50,9 +51,11 @@ interface Props {
   initialUserOrigin?:    string;
   initialUserTab?:       'detail' | 'access' | 'history';
   onUserDataChange?:     () => void;
+  // Popup mode
+  isPopup?:              boolean;
 }
 
-type ModalTab = 'info' | 'services' | 'apps' | 'destinations' | 'roles' | 'users';
+export type ModalTab = 'info' | 'services' | 'apps' | 'destinations' | 'roles' | 'users';
 
 // ─── Cockpit URL helpers ──────────────────────────────────────────────────────
 
@@ -173,7 +176,7 @@ const TAB_LABEL: Record<ModalTab, string> = {
   destinations: 'Destinations', roles: 'Roles', users: 'Users',
 };
 
-export default function SubaccountDetailModal({ sa, onClose, cockpit, cockpitMenu, isAdmin, onSpaceSave, subaccounts, onSelectSubaccount, tabs, initialTab, initialAppGuid, onAppDataChange, allDestNames, initialDestName, initialDestTab, initialDestShowList, initialDestSpaceName, initialDestInstName, initialDestInstGuid, selectedDests, onToggleCompare, onOpenCompare, onDestDataChange, allRcNames, initialRcName, initialRcTab, initialRcShowList, onRcDataChange, initialUserEmail, initialUserOrigin, initialUserTab, onUserDataChange }: Props) {
+export default function SubaccountModal({ sa, onClose, cockpit, cockpitMenu, isAdmin, onSpaceSave, subaccounts, onSelectSubaccount, tabs, initialTab, initialAppGuid, onAppDataChange, allDestNames, initialDestName, initialDestTab, initialDestShowList, initialDestSpaceName, initialDestInstName, initialDestInstGuid, selectedDests, onToggleCompare, onOpenCompare, onDestDataChange, allRcNames, initialRcName, initialRcTab, initialRcShowList, onRcDataChange, initialUserEmail, initialUserOrigin, initialUserTab, onUserDataChange, isPopup }: Props) {
   const [activeTab, setActiveTab]           = useState<ModalTab>(initialTab ?? 'info');
   const [maximized, setMaximized]           = useState(false);
   const [svcFilter, setSvcFilter]           = useState('');
@@ -217,6 +220,12 @@ export default function SubaccountDetailModal({ sa, onClose, cockpit, cockpitMen
   }, [sa]);
 
   useEffect(() => {
+    if (!isPopup || !sa) return;
+    const label = sa.alias || sa.subaccountName;
+    document.title = `${label} › ${TAB_LABEL[activeTab] ?? activeTab}`;
+  }, [isPopup, sa, activeTab]);
+
+  useEffect(() => {
     function onMove(e: MouseEvent) {
       if (!dragging.current) return;
       const { set, left, width } = dragging.current;
@@ -256,6 +265,12 @@ export default function SubaccountDetailModal({ sa, onClose, cockpit, cockpitMen
       users:        `/users/${r}/${s}`,
     };
     history.replaceState(null, '', tabUrls[tab]);
+  }
+
+  function openInPopup() {
+    if (!sa) return;
+    openSubaccountPopup(sa.region, sa.subdomain, activeTab);
+    onClose();
   }
 
   const spaceDestsDirty = [...spaceDests.entries()].some(([id, v]) => spaceDestsOrig.get(id) !== v)
@@ -335,7 +350,7 @@ export default function SubaccountDetailModal({ sa, onClose, cockpit, cockpitMen
         >
           <span className="truncate">
             {s.alias || s.subaccountName}
-            <span className="text-muted-foreground font-mono text-[10px] ml-1">({s.subdomain})</span>
+            <span className="text-muted-foreground font-mono text-[10px] ml-1">({s.region}.{s.subdomain})</span>
           </span>
         </DropdownMenuItem>
       );
@@ -401,7 +416,7 @@ export default function SubaccountDetailModal({ sa, onClose, cockpit, cockpitMen
         <DialogPrimitive.Overlay className="fixed inset-0 z-50 bg-black/50 backdrop-blur-sm" />
         <DialogPrimitive.Content
           className={`fixed z-50 flex flex-col bg-background shadow-xl outline-none overflow-hidden mx-auto transition-none ${
-            maximized ? 'inset-0 rounded-none' : 'inset-4 rounded-lg max-w-[1150px]'
+            isPopup || maximized ? 'inset-0 rounded-none' : 'inset-4 rounded-lg max-w-[1150px]'
           }`}
           onInteractOutside={e => e.preventDefault()}
           onEscapeKeyDown={onClose}
@@ -412,17 +427,13 @@ export default function SubaccountDetailModal({ sa, onClose, cockpit, cockpitMen
               {/* Header */}
               <div className="flex items-center gap-2 px-4 py-3 border-b border-border shrink-0">
                 {/* Breadcrumb title */}
-                <div className="flex items-center gap-1.5 min-w-0 flex-1 overflow-hidden">
-                  <DialogPrimitive.Title className="flex items-center gap-1.5 min-w-0 text-sm font-semibold shrink-0">
-                    <span className="text-xs font-mono font-normal text-muted-foreground shrink-0">{sa.region}</span>
-                    <span className="text-muted-foreground shrink-0 text-xs font-normal">›</span>
-                  </DialogPrimitive.Title>
+                <DialogPrimitive.Title className="flex items-center gap-1.5 min-w-0 flex-1 overflow-hidden text-sm font-semibold">
                   {showSwitcher ? (
                     <DropdownMenu onOpenChange={open => { if (!open) setSaFilter(''); }}>
                       <DropdownMenuTrigger asChild>
                         <button className="flex items-center gap-1 rounded px-1 -mx-1 hover:bg-accent transition-colors min-w-0 max-w-[50%]">
                           <span className="truncate text-sm font-semibold">{sa.alias || sa.subaccountName}</span>
-                          <span className="text-xs font-normal font-mono text-muted-foreground shrink-0">({sa.subdomain})</span>
+                          <span className="text-xs font-normal font-mono text-muted-foreground shrink-0">({sa.region}.{sa.subdomain})</span>
                           <ChevronDown className="h-3 w-3 text-muted-foreground shrink-0 opacity-60" />
                         </button>
                       </DropdownMenuTrigger>
@@ -431,7 +442,7 @@ export default function SubaccountDetailModal({ sa, onClose, cockpit, cockpitMen
                   ) : (
                     <span className="flex items-center gap-1 min-w-0">
                       <span className="truncate text-sm font-semibold">{sa.alias || sa.subaccountName}</span>
-                      <span className="text-xs font-normal font-mono text-muted-foreground shrink-0">({sa.subdomain})</span>
+                      <span className="text-xs font-normal font-mono text-muted-foreground shrink-0">({sa.region}.{sa.subdomain})</span>
                     </span>
                   )}
                   {sa.restricted && (
@@ -441,7 +452,7 @@ export default function SubaccountDetailModal({ sa, onClose, cockpit, cockpitMen
                   )}
                   <span className="text-muted-foreground shrink-0 text-xs font-normal">›</span>
                   <span className="text-xs text-muted-foreground shrink-0 font-medium">{tabLabel}</span>
-                </div>
+                </DialogPrimitive.Title>
 
                 {cockpit && (() => {
                   const ctx     = buildCtx(sa, cockpit);
@@ -467,13 +478,24 @@ export default function SubaccountDetailModal({ sa, onClose, cockpit, cockpitMen
                     </div>
                   );
                 })()}
-                <button
-                  onClick={() => setMaximized(v => !v)}
-                  className="p-1.5 rounded hover:bg-accent text-muted-foreground hover:text-foreground transition-colors shrink-0"
-                  title={maximized ? 'Restore' : 'Maximize'}
-                >
-                  {maximized ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}
-                </button>
+                {!isPopup && (
+                  <button
+                    onClick={openInPopup}
+                    className="p-1.5 rounded hover:bg-accent text-muted-foreground hover:text-foreground transition-colors shrink-0"
+                    title={"Open this modal in a new window.\nCtrl-click a subaccount link to open directly in a popup.\nShift-click a subaccount link to open in a new tab."}
+                  >
+                    <ExternalLink className="h-4 w-4" />
+                  </button>
+                )}
+                {!isPopup && (
+                  <button
+                    onClick={() => setMaximized(v => !v)}
+                    className="p-1.5 rounded hover:bg-accent text-muted-foreground hover:text-foreground transition-colors shrink-0"
+                    title={maximized ? 'Restore' : 'Maximize'}
+                  >
+                    {maximized ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}
+                  </button>
+                )}
                 <button
                   onClick={onClose}
                   className="p-1.5 rounded hover:bg-accent text-muted-foreground hover:text-foreground transition-colors shrink-0"

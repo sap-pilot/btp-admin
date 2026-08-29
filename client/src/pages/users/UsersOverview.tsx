@@ -5,7 +5,8 @@ import { useSidebar, useSettings } from '@/components/AppLayout';
 import { useAuth } from '@/hooks/useAuth';
 import type { SubaccountEntry } from '@/components/config/SubaccountsTable';
 import type { TabEntry, TabSection } from '@/components/config/TabsTable';
-import SubaccountDetailModal from '@/components/config/SubaccountDetailModal';
+import SubaccountDetailModal from '@/components/SubaccountModal';
+import { openSubaccountModal } from '@/lib/openSubaccountPopup';
 import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
@@ -584,7 +585,7 @@ export default function UsersOverview() {
                                 key={sa.subaccountId}
                                 colSpan={2}
                                 className="text-center text-xs font-medium px-3 py-2 min-w-[260px] border-l border-b border-border text-muted-foreground cursor-pointer hover:bg-muted/40 transition-colors first:border-l-0"
-                                onClick={() => openModal(sa)}
+                                onClick={(e) => { openSubaccountModal(e, sa.region, sa.subdomain, 'users', () => openModal(sa)) }}
                               >
                                 <div className="flex flex-col gap-0.5 items-center">
                                   <span>{sa.alias || sa.subaccountName}</span>
@@ -608,7 +609,7 @@ export default function UsersOverview() {
                                         <button
                                           className="text-[11px] hover:underline text-left truncate block w-full text-foreground"
                                           title={user.email || user.userName}
-                                          onClick={() => openModal(sa, user.email, user.origin)}
+                                          onClick={(e) => { openSubaccountModal(e, sa.region, sa.subdomain, 'users', () => openModal(sa, user.email, user.origin), { userEmail: user.email, userOrigin: user.origin }) }}
                                         >
                                           {committedSearch
                                             ? highlightText(user.email || user.userName, committedSearch)
@@ -629,7 +630,7 @@ export default function UsersOverview() {
                             {visibleBuckets.map(({ sa, total, matchCount }) => (
                               <td key={sa.subaccountId} colSpan={2} className="px-2 py-1.5 text-xs border-l first:border-l-0 border-border">
                                 <button
-                                  onClick={() => openModal(sa)}
+                                  onClick={(e) => { openSubaccountModal(e, sa.region, sa.subdomain, 'users', () => openModal(sa)) }}
                                   className="w-full text-center text-[11px] text-muted-foreground hover:text-foreground hover:bg-accent/50 py-1 px-2 rounded transition-colors"
                                 >
                                   {searchActive
