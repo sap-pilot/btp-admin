@@ -597,16 +597,16 @@ export default function AppsPage() {
           {/* View mode toggle */}
           <div className="flex h-8 rounded-md border border-input overflow-hidden text-sm">
             <button
-              onClick={() => navigateTo('all', duration)}
-              className={`px-3 transition-colors ${viewMode === 'all' ? 'bg-primary text-primary-foreground' : 'bg-background text-foreground hover:bg-accent hover:text-accent-foreground'}`}
-            >
-              Memory Usage
-            </button>
-            <button
               onClick={() => navigateTo('analytics', duration)}
-              className={`px-3 transition-colors border-l border-input ${viewMode === 'analytics' ? 'bg-primary text-primary-foreground' : 'bg-background text-foreground hover:bg-accent hover:text-accent-foreground'}`}
+              className={`px-3 transition-colors ${viewMode === 'analytics' ? 'bg-primary text-primary-foreground' : 'bg-background text-foreground hover:bg-accent hover:text-accent-foreground'}`}
             >
               Analytics
+            </button>
+            <button
+              onClick={() => navigateTo('all', duration)}
+              className={`px-3 transition-colors border-l border-input ${viewMode === 'all' ? 'bg-primary text-primary-foreground' : 'bg-background text-foreground hover:bg-accent hover:text-accent-foreground'}`}
+            >
+              Memory Usage
             </button>
           </div>
 
