@@ -345,6 +345,36 @@ export async function getAnalytics(durationHours: number): Promise<AnalyticsPayl
   return payload;
 }
 
+// ─── Top Apps API — aggregated by app name within a duration window ───────────
+
+export interface TopAppEntry { appName: string; count: number; region: string; subdomain: string; appGuid: string; spaceName: string; }
+
+export async function getTopApps(
+  durationHours: number,
+  opts: { city?: string; countryCode?: string } = {},
+): Promise<TopAppEntry[]> {
+  const rows = await readAccessLogs(durationHours);
+  const filtered = (opts.city || opts.countryCode)
+    ? rows.filter(r => (!opts.countryCode || r.countryCode === opts.countryCode) && (!opts.city || r.city === opts.city))
+    : rows;
+
+  const perSaAppMaps = new Map<string, Map<string, { name: string; spaceName: string }>>();
+  const countMap     = new Map<string, TopAppEntry>();
+
+  for (const row of filtered) {
+    const saKey = `${row.region}/${row.subdomain}`;
+    let am = perSaAppMaps.get(saKey);
+    if (!am) { am = await getAppMap(row.region, row.subdomain); perSaAppMaps.set(saKey, am); }
+    const meta  = am.get(row.appId);
+    const name  = meta?.name || row.appId;
+    const entry = countMap.get(name);
+    if (entry) { entry.count++; }
+    else countMap.set(name, { appName: name, count: 1, region: row.region, subdomain: row.subdomain, appGuid: row.appId, spaceName: meta?.spaceName ?? '' });
+  }
+
+  return [...countMap.values()].sort((a, b) => b.count - a.count);
+}
+
 // ─── Requests API (paginated, filtered, sorted — reads all CSV files) ─────────
 
 export interface RequestItem {

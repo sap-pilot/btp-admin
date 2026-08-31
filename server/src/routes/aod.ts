@@ -1,7 +1,7 @@
 import { appendFile, mkdir, rename, stat } from 'node:fs/promises';
 import { Readable } from 'node:stream';
 import { touchAppLastAccessed, updateAppFileState } from '../services/appService.js';
-import { getAnalytics, getRequests, recordAodRequest } from '../services/aodAnalyticsService.js';
+import { getAnalytics, getRequests, getTopApps, recordAodRequest } from '../services/aodAnalyticsService.js';
 import { join } from 'node:path';
 import type { Request, Response, NextFunction } from 'express';
 import { Router } from 'express';
@@ -38,6 +38,17 @@ router.get('/analytics', async (req, res, next) => {
     const raw   = req.query['duration'];
     const hours = typeof raw === 'string' ? Math.max(1, Math.min(168, Number(raw) || 24)) : 24;
     const data  = await getAnalytics(hours);
+    res.json({ ok: true, data });
+  } catch (err) { next(err); }
+});
+
+router.get('/top-apps', async (req, res, next) => {
+  try {
+    const raw   = req.query['duration'];
+    const hours = typeof raw === 'string' ? Math.max(1, Math.min(168, Number(raw) || 24)) : 24;
+    const city        = typeof req.query['city']        === 'string' ? req.query['city']        : undefined;
+    const countryCode = typeof req.query['countryCode'] === 'string' ? req.query['countryCode'] : undefined;
+    const data = await getTopApps(hours, { city, countryCode });
     res.json({ ok: true, data });
   } catch (err) { next(err); }
 });

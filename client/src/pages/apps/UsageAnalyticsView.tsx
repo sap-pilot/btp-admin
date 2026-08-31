@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { ExternalLink } from 'lucide-react';
 import WorldMap from './WorldMap';
 import AccessListModal from './AccessListModal';
 
@@ -94,6 +95,24 @@ function RequestRow({ req, onOpen }: RequestRowProps) {
   );
 }
 
+interface TopAppEntry { appName: string; count: number; pct: number; region: string; subdomain: string; appGuid: string; spaceName: string; }
+interface TopAppRowProps {
+  app: TopAppEntry;
+  onOpen: (e: React.MouseEvent, region: string, subdomain: string, appGuid: string, spaceName?: string, appName?: string) => void;
+}
+function TopAppRow({ app, onOpen }: TopAppRowProps) {
+  return (
+    <button
+      className="relative w-full flex items-center text-xs py-1.5 px-2 rounded overflow-hidden hover:bg-accent/30 transition-colors text-left"
+      onClick={(e) => onOpen(e, app.region, app.subdomain, app.appGuid, app.spaceName, app.appName)}
+    >
+      <div className="absolute inset-y-0 left-0 bg-primary/15 rounded transition-all" style={{ width: `${app.pct}%` }} />
+      <span className="relative truncate">{app.appName}</span>
+      <span className="relative ml-auto pl-2 tabular-nums text-muted-foreground shrink-0">{app.count}</span>
+    </button>
+  );
+}
+
 // ─── Main component ───────────────────────────────────────────────────────────
 
 interface Props {
@@ -109,6 +128,8 @@ export default function UsageAnalyticsView({ isDarkMap, durationHours, onOpenMod
   const [reqItems,     setReqItems]     = useState<RequestItem[]>([]);
   const [selectedCity, setSelectedCity] = useState<string>('');
   const [showModal,    setShowModal]    = useState(false);
+  const [listTab,      setListTab]      = useState<'requests' | 'topApps'>('requests');
+  const [topApps,      setTopApps]      = useState<TopAppEntry[]>([]);
   const esRef    = useRef<EventSource | null>(null);
   const mapColRef = useRef<HTMLDivElement>(null);
   const [mapColH, setMapColH] = useState(0);
@@ -145,7 +166,7 @@ export default function UsageAnalyticsView({ isDarkMap, durationHours, onOpenMod
   // ── Requests (inline list) fetch from API ─────────────────────────────────
 
   const fetchRequests = useCallback(async (cityFilter: string) => {
-    const params = new URLSearchParams({ pageSize: '100', sortBy: 'ts', sortDir: 'desc' });
+    const params = new URLSearchParams({ pageSize: '500', sortBy: 'ts', sortDir: 'desc' });
     if (cityFilter) {
       const { countryCode, city } = splitCityKey(cityFilter);
       if (countryCode) params.set('countryCode', countryCode);
@@ -159,8 +180,28 @@ export default function UsageAnalyticsView({ isDarkMap, durationHours, onOpenMod
     } catch { /* silently ignore */ }
   }, []);
 
+  const fetchTopApps = useCallback(async (hours: number, cityFilter: string) => {
+    const params = new URLSearchParams({ duration: String(hours) });
+    if (cityFilter) {
+      const { countryCode, city } = splitCityKey(cityFilter);
+      if (countryCode) params.set('countryCode', countryCode);
+      if (city)        params.set('city', city);
+    }
+    try {
+      const res  = await fetch(`/api/aod/top-apps?${params.toString()}`);
+      if (!res.ok) return;
+      const json = await res.json() as { ok: boolean; data: Omit<TopAppEntry, 'pct'>[] };
+      if (json.ok) {
+        const items = json.data;
+        const total = items.reduce((s, a) => s + a.count, 0) || 1;
+        setTopApps(items.map(a => ({ ...a, pct: (a.count / total) * 100 })));
+      }
+    } catch { /* silently ignore */ }
+  }, []);
+
   useEffect(() => { void fetchAnalytics(durationHours); }, [durationHours, fetchAnalytics]);
   useEffect(() => { void fetchRequests(selectedCity); }, [selectedCity, fetchRequests]);
+  useEffect(() => { void fetchTopApps(durationHours, selectedCity); }, [durationHours, selectedCity, fetchTopApps]);
 
   // ── SSE ───────────────────────────────────────────────────────────────────
 
@@ -199,12 +240,13 @@ export default function UsageAnalyticsView({ isDarkMap, durationHours, onOpenMod
         } else if (msg.type === 'apps-synced') {
           void fetchAnalytics(durationHours);
           void fetchRequests(selectedCity);
+          void fetchTopApps(durationHours, selectedCity);
         }
       } catch { /* ignore parse errors */ }
     });
 
     return () => { es.close(); esRef.current = null; };
-  }, [durationHours, selectedCity, fetchAnalytics, fetchRequests]);
+  }, [durationHours, selectedCity, fetchAnalytics, fetchRequests, fetchTopApps]);
 
   // ── City filter options ───────────────────────────────────────────────────
 
@@ -271,13 +313,25 @@ export default function UsageAnalyticsView({ isDarkMap, durationHours, onOpenMod
           )}
         </div>
         <div className="flex-1 min-w-0 flex flex-col" style={mapColH ? { height: mapColH } : undefined}>
-          {/* Header: "Latest Requests" link + city filter */}
-          <div className="flex items-center gap-2 mb-1.5 min-w-0">
+          {/* Tab bar + city filter */}
+          <div className="flex items-center gap-1 mb-1.5 min-w-0">
+            {(['requests', 'topApps'] as const).map(t => (
+              <button
+                key={t}
+                onClick={() => setListTab(t)}
+                className={`text-xs font-medium px-1 pb-0.5 border-b-2 transition-colors shrink-0 ${
+                  listTab === t ? 'border-primary text-foreground' : 'border-transparent text-muted-foreground hover:text-foreground'
+                }`}
+              >
+                {t === 'requests' ? 'Latest Req' : 'Top Apps'}
+              </button>
+            ))}
             <button
               onClick={() => setShowModal(true)}
-              className="text-xs font-medium text-muted-foreground hover:text-primary hover:underline shrink-0 text-left"
+              className="p-0.5 text-muted-foreground/50 hover:text-primary transition-colors shrink-0"
+              title="View all requests"
             >
-              Latest Requests
+              <ExternalLink className="h-3 w-3" />
             </button>
             {cityOptions.length > 0 && (
               <select
@@ -292,13 +346,17 @@ export default function UsageAnalyticsView({ isDarkMap, durationHours, onOpenMod
               </select>
             )}
           </div>
-          {/* Scrollable list — no visible scrollbar */}
+          {/* List panel — hidden scrollbar, wheel-scrollable */}
           <div className="flex-1 min-h-0 rounded-lg border border-border bg-card px-3 py-2 overflow-y-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-            {reqItems.length === 0
-              ? <p className="text-xs text-muted-foreground text-center py-4">
-                  {selectedCity ? `No requests from ${selectedCity}` : 'No requests yet'}
-                </p>
-              : reqItems.map((req, i) => <RequestRow key={`${req.ts}-${i}`} req={req} onOpen={handleOpen} />)
+            {listTab === 'requests'
+              ? (reqItems.length === 0
+                  ? <p className="text-xs text-muted-foreground text-center py-4">{selectedCity ? `No requests from ${selectedCity}` : 'No requests yet'}</p>
+                  : reqItems.map((req, i) => <RequestRow key={`${req.ts}-${i}`} req={req} onOpen={handleOpen} />)
+                )
+              : (topApps.length === 0
+                  ? <p className="text-xs text-muted-foreground text-center py-4">{selectedCity ? `No requests from ${selectedCity}` : 'No requests yet'}</p>
+                  : topApps.map(app => <TopAppRow key={app.appName} app={app} onOpen={handleOpen} />)
+                )
             }
           </div>
         </div>
