@@ -26,6 +26,7 @@ export interface HomepageData {
   cockpit:           { idp: string; host: string };
   cockpitMenu:       CockpitMenuItem | null;
   mainSubscriptions: MainSubscription[];
+  isAdmin?:          boolean;
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -529,6 +530,7 @@ export default function HomepageContent({ data, activeTab, onTabChange, filterQu
         onClose={() => setDetailSa(null)}
         cockpit={data.cockpit}
         cockpitMenu={data.cockpitMenu}
+        isAdmin={data.isAdmin}
         subaccounts={data.subaccounts}
         onSelectSubaccount={setDetailSa}
         tabs={data.tabs}

@@ -60,7 +60,7 @@ function buildAppCockpitUrl(sa: SubaccountEntry, app: AppFileData, cockpit: { id
   const rawHost  = cockpit.host || `cockpit.${region}.hana.ondemand.com`;
   const base     = rawHost.startsWith('http') ? rawHost : `https://${rawHost}`;
   const idpParam = cockpit.idp ? `?idp=${encodeURIComponent(cockpit.idp)}` : '';
-  return `${base}/cockpit${idpParam}#/globalaccount/${sa.globalAccountGUID}/subaccount/${sa.subaccountId}/org/${sa.org?.orgId ?? ''}/space/${app.spaceGuid}/applications/${app.guid}`;
+  return `${base}/cockpit/${idpParam}#/globalaccount/${sa.globalAccountGUID}/subaccount/${sa.subaccountId}/org/${sa.org?.orgId ?? ''}/space/${app.spaceGuid}/app/${app.guid}/overview`;
 }
 
 function fmtMB(mb: number): string {

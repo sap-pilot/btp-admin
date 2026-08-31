@@ -7,6 +7,7 @@ import { fmtDateRange } from '@/hooks/useTimeRange';
 import type { SubaccountEntry } from '@/components/config/SubaccountsTable';
 import type { TabEntry, TabSection } from '@/components/config/TabsTable';
 import SubaccountDetailModal from '@/components/SubaccountModal';
+import type { CockpitMenuItem } from '@/components/home/HomepageContent';
 import { openSubaccountModal } from '@/lib/openSubaccountPopup';
 import UsageAnalyticsView from './UsageAnalyticsView';
 
@@ -234,6 +235,8 @@ export default function AppsPage() {
   const [tabEntries, setTabEntries]         = useState<TabEntry[]>([]);
   const [saData, setSaData]                 = useState<SubaccountEntry[]>([]);
   const [isAdmin, setIsAdmin]               = useState(false);
+  const [cockpit, setCockpit]               = useState<{ idp: string; host: string }>({ idp: '', host: '' });
+  const [cockpitMenu, setCockpitMenu]       = useState<CockpitMenuItem | null>(null);
   const [activeTab, setActiveTab]           = useState('');
 
   const [searchInput, setSearchInput]         = useState('');
@@ -292,10 +295,14 @@ export default function AppsPage() {
       fetch('/api/config/tabs').then(r => r.json() as Promise<{ ok: boolean; data: TabEntry[] }>),
       fetch('/api/config/subaccounts').then(r => r.json() as Promise<{ ok: boolean; data: SubaccountEntry[] }>),
       fetch('/api/me').then(r => r.json() as Promise<{ isAdmin?: boolean }>),
-    ]).then(([tabs, sas, me]) => {
-      if (tabs.ok) setTabEntries(tabs.data);
-      if (sas.ok)  setSaData(sas.data);
+      fetch('/api/settings').then(r => r.json() as Promise<{ ok: boolean; data: { homepage?: { cockpit?: { idp: string; host: string } } } }>),
+      fetch('/api/config/cockpit-menu').then(r => r.json() as Promise<CockpitMenuItem | null>),
+    ]).then(([tabs, sas, me, settings, menu]) => {
+      if (tabs.ok)     setTabEntries(tabs.data);
+      if (sas.ok)      setSaData(sas.data);
       setIsAdmin(me.isAdmin ?? false);
+      if (settings.ok) setCockpit(settings.data?.homepage?.cockpit ?? { idp: '', host: '' });
+      setCockpitMenu(menu);
     }).catch(() => {});
 
     void fetchTopApps();
@@ -918,6 +925,8 @@ export default function AppsPage() {
           initialTab="apps"
           initialAppGuid={modalState.guid || undefined}
           isAdmin={isAdmin}
+          cockpit={cockpit}
+          cockpitMenu={cockpitMenu}
           subaccounts={allSas}
           onSelectSubaccount={s => setModalState({ region: s.region, subdomain: s.subdomain, guid: '', spaceName: '', appName: '' })}
           tabs={tabEntries}
