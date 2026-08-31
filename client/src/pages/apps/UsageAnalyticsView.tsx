@@ -95,7 +95,7 @@ function RequestRow({ req, onOpen }: RequestRowProps) {
   );
 }
 
-interface TopAppEntry { appName: string; count: number; pct: number; region: string; subdomain: string; appGuid: string; spaceName: string; }
+interface TopAppEntry { appName: string; count: number; percent: number; region: string; subdomain: string; appGuid: string; spaceName: string; }
 interface TopAppRowProps {
   app: TopAppEntry;
   onOpen: (e: React.MouseEvent, region: string, subdomain: string, appGuid: string, spaceName?: string, appName?: string) => void;
@@ -106,12 +106,27 @@ function TopAppRow({ app, onOpen }: TopAppRowProps) {
       className="relative w-full flex items-center text-xs py-1.5 px-2 rounded overflow-hidden hover:bg-accent/30 transition-colors text-left"
       onClick={(e) => onOpen(e, app.region, app.subdomain, app.appGuid, app.spaceName, app.appName)}
     >
-      <div className="absolute inset-y-0 left-0 bg-primary/15 rounded transition-all" style={{ width: `${app.pct}%` }} />
+      <div className="absolute inset-y-0 left-0 bg-primary/15 rounded transition-all" style={{ width: `${app.percent}%` }} />
       <span className="relative truncate">{app.appName}</span>
-      <span className="relative ml-auto pl-2 tabular-nums text-muted-foreground shrink-0">{app.count}</span>
+      <span className="relative ml-auto pl-2 tabular-nums text-muted-foreground shrink-0">{app.count} <span className="text-muted-foreground/60">({app.percent}%)</span></span>
     </button>
   );
 }
+
+interface TopUserEntry { userId: string; count: number; percent: number; }
+function TopUserRow({ user }: { user: TopUserEntry }) {
+  return (
+    <div className="relative w-full flex items-center text-xs py-1.5 px-2 rounded overflow-hidden">
+      <div className="absolute inset-y-0 left-0 bg-emerald-500/15 rounded transition-all" style={{ width: `${user.percent}%` }} />
+      <span className="relative truncate text-foreground">{user.userId}</span>
+      <span className="relative ml-auto pl-2 tabular-nums text-muted-foreground shrink-0">{user.count} <span className="text-muted-foreground/60">({user.percent}%)</span></span>
+    </div>
+  );
+}
+
+type ListTab = 'requests' | 'topApps' | 'topUsers';
+const TAB_LABELS: Record<ListTab, string> = { requests: 'Latest Req', topApps: 'Top Apps', topUsers: 'Top Users' };
+const ALL_TABS: ListTab[] = ['requests', 'topApps', 'topUsers'];
 
 // ─── Main component ───────────────────────────────────────────────────────────
 
@@ -128,16 +143,28 @@ export default function UsageAnalyticsView({ isDarkMap, durationHours, onOpenMod
   const [reqItems,     setReqItems]     = useState<RequestItem[]>([]);
   const [selectedCity, setSelectedCity] = useState<string>('');
   const [showModal,    setShowModal]    = useState(false);
-  const [listTab,      setListTab]      = useState<'requests' | 'topApps'>('requests');
+  const [listTab,      setListTab]      = useState<ListTab>('requests');
   const [topApps,      setTopApps]      = useState<TopAppEntry[]>([]);
-  const esRef    = useRef<EventSource | null>(null);
-  const mapColRef = useRef<HTMLDivElement>(null);
+  const [topUsers,     setTopUsers]     = useState<TopUserEntry[]>([]);
+  const [tabsCollapsed, setTabsCollapsed] = useState(false);
+  const esRef       = useRef<EventSource | null>(null);
+  const mapColRef   = useRef<HTMLDivElement>(null);
+  const tabHeaderRef = useRef<HTMLDivElement>(null);
   const [mapColH, setMapColH] = useState(0);
 
   useEffect(() => {
     const el = mapColRef.current;
     if (!el) return;
     const ro = new ResizeObserver(([entry]) => setMapColH(entry?.contentRect.height ?? 0));
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
+  // Collapse tabs to select when the right panel is too narrow
+  useEffect(() => {
+    const el = tabHeaderRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver(([entry]) => setTabsCollapsed((entry?.contentRect.width ?? 999) < 220));
     ro.observe(el);
     return () => ro.disconnect();
   }, []);
@@ -190,18 +217,30 @@ export default function UsageAnalyticsView({ isDarkMap, durationHours, onOpenMod
     try {
       const res  = await fetch(`/api/aod/top-apps?${params.toString()}`);
       if (!res.ok) return;
-      const json = await res.json() as { ok: boolean; data: Omit<TopAppEntry, 'pct'>[] };
-      if (json.ok) {
-        const items = json.data;
-        const total = items.reduce((s, a) => s + a.count, 0) || 1;
-        setTopApps(items.map(a => ({ ...a, pct: (a.count / total) * 100 })));
-      }
+      const json = await res.json() as { ok: boolean; data: TopAppEntry[] };
+      if (json.ok) setTopApps(json.data);
+    } catch { /* silently ignore */ }
+  }, []);
+
+  const fetchTopUsers = useCallback(async (hours: number, cityFilter: string) => {
+    const params = new URLSearchParams({ duration: String(hours) });
+    if (cityFilter) {
+      const { countryCode, city } = splitCityKey(cityFilter);
+      if (countryCode) params.set('countryCode', countryCode);
+      if (city)        params.set('city', city);
+    }
+    try {
+      const res  = await fetch(`/api/aod/top-users?${params.toString()}`);
+      if (!res.ok) return;
+      const json = await res.json() as { ok: boolean; data: TopUserEntry[] };
+      if (json.ok) setTopUsers(json.data);
     } catch { /* silently ignore */ }
   }, []);
 
   useEffect(() => { void fetchAnalytics(durationHours); }, [durationHours, fetchAnalytics]);
   useEffect(() => { void fetchRequests(selectedCity); }, [selectedCity, fetchRequests]);
   useEffect(() => { void fetchTopApps(durationHours, selectedCity); }, [durationHours, selectedCity, fetchTopApps]);
+  useEffect(() => { void fetchTopUsers(durationHours, selectedCity); }, [durationHours, selectedCity, fetchTopUsers]);
 
   // ── SSE ───────────────────────────────────────────────────────────────────
 
@@ -241,12 +280,13 @@ export default function UsageAnalyticsView({ isDarkMap, durationHours, onOpenMod
           void fetchAnalytics(durationHours);
           void fetchRequests(selectedCity);
           void fetchTopApps(durationHours, selectedCity);
+          void fetchTopUsers(durationHours, selectedCity);
         }
       } catch { /* ignore parse errors */ }
     });
 
     return () => { es.close(); esRef.current = null; };
-  }, [durationHours, selectedCity, fetchAnalytics, fetchRequests, fetchTopApps]);
+  }, [durationHours, selectedCity, fetchAnalytics, fetchRequests, fetchTopApps, fetchTopUsers]);
 
   // ── City filter options ───────────────────────────────────────────────────
 
@@ -314,18 +354,28 @@ export default function UsageAnalyticsView({ isDarkMap, durationHours, onOpenMod
         </div>
         <div className="flex-1 min-w-0 flex flex-col" style={mapColH ? { height: mapColH } : undefined}>
           {/* Tab bar + city filter */}
-          <div className="flex items-center gap-1 mb-1.5 min-w-0">
-            {(['requests', 'topApps'] as const).map(t => (
-              <button
-                key={t}
-                onClick={() => setListTab(t)}
-                className={`text-xs font-medium px-1 pb-0.5 border-b-2 transition-colors shrink-0 ${
-                  listTab === t ? 'border-primary text-foreground' : 'border-transparent text-muted-foreground hover:text-foreground'
-                }`}
+          <div ref={tabHeaderRef} className="flex items-center gap-1 mb-1.5 min-w-0">
+            {tabsCollapsed ? (
+              <select
+                value={listTab}
+                onChange={e => setListTab(e.target.value as ListTab)}
+                className="text-[11px] rounded border border-border bg-background text-foreground px-1.5 py-0.5 focus:outline-none focus:ring-1 focus:ring-ring shrink-0"
               >
-                {t === 'requests' ? 'Latest Req' : 'Top Apps'}
-              </button>
-            ))}
+                {ALL_TABS.map(t => <option key={t} value={t}>{TAB_LABELS[t]}</option>)}
+              </select>
+            ) : (
+              ALL_TABS.map(t => (
+                <button
+                  key={t}
+                  onClick={() => setListTab(t)}
+                  className={`text-xs font-medium px-1 pb-0.5 border-b-2 transition-colors shrink-0 ${
+                    listTab === t ? 'border-primary text-foreground' : 'border-transparent text-muted-foreground hover:text-foreground'
+                  }`}
+                >
+                  {TAB_LABELS[t]}
+                </button>
+              ))
+            )}
             <button
               onClick={() => setShowModal(true)}
               className="p-0.5 text-muted-foreground/50 hover:text-primary transition-colors shrink-0"
@@ -348,16 +398,21 @@ export default function UsageAnalyticsView({ isDarkMap, durationHours, onOpenMod
           </div>
           {/* List panel — hidden scrollbar, wheel-scrollable */}
           <div className="flex-1 min-h-0 rounded-lg border border-border bg-card px-3 py-2 overflow-y-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-            {listTab === 'requests'
-              ? (reqItems.length === 0
-                  ? <p className="text-xs text-muted-foreground text-center py-4">{selectedCity ? `No requests from ${selectedCity}` : 'No requests yet'}</p>
-                  : reqItems.map((req, i) => <RequestRow key={`${req.ts}-${i}`} req={req} onOpen={handleOpen} />)
-                )
-              : (topApps.length === 0
-                  ? <p className="text-xs text-muted-foreground text-center py-4">{selectedCity ? `No requests from ${selectedCity}` : 'No requests yet'}</p>
-                  : topApps.map(app => <TopAppRow key={app.appName} app={app} onOpen={handleOpen} />)
-                )
-            }
+            {listTab === 'requests' && (
+              reqItems.length === 0
+                ? <p className="text-xs text-muted-foreground text-center py-4">{selectedCity ? `No requests from ${selectedCity}` : 'No requests yet'}</p>
+                : reqItems.map((req, i) => <RequestRow key={`${req.ts}-${i}`} req={req} onOpen={handleOpen} />)
+            )}
+            {listTab === 'topApps' && (
+              topApps.length === 0
+                ? <p className="text-xs text-muted-foreground text-center py-4">{selectedCity ? `No requests from ${selectedCity}` : 'No requests yet'}</p>
+                : topApps.map(app => <TopAppRow key={app.appName} app={app} onOpen={handleOpen} />)
+            )}
+            {listTab === 'topUsers' && (
+              topUsers.length === 0
+                ? <p className="text-xs text-muted-foreground text-center py-4">{selectedCity ? `No requests from ${selectedCity}` : 'No users yet'}</p>
+                : topUsers.map(user => <TopUserRow key={user.userId} user={user} />)
+            )}
           </div>
         </div>
       </div>

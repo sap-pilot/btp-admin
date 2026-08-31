@@ -347,19 +347,23 @@ export async function getAnalytics(durationHours: number): Promise<AnalyticsPayl
 
 // ─── Top Apps API — aggregated by app name within a duration window ───────────
 
-export interface TopAppEntry { appName: string; count: number; region: string; subdomain: string; appGuid: string; spaceName: string; }
+export interface TopAppEntry  { appName: string; count: number; percent: number; region: string; subdomain: string; appGuid: string; spaceName: string; }
+export interface TopUserEntry { userId: string;  count: number; percent: number; }
+
+function applyFilter(rows: RawRow[], opts: { city?: string; countryCode?: string }): RawRow[] {
+  return (opts.city || opts.countryCode)
+    ? rows.filter(r => (!opts.countryCode || r.countryCode === opts.countryCode) && (!opts.city || r.city === opts.city))
+    : rows;
+}
 
 export async function getTopApps(
   durationHours: number,
   opts: { city?: string; countryCode?: string } = {},
 ): Promise<TopAppEntry[]> {
-  const rows = await readAccessLogs(durationHours);
-  const filtered = (opts.city || opts.countryCode)
-    ? rows.filter(r => (!opts.countryCode || r.countryCode === opts.countryCode) && (!opts.city || r.city === opts.city))
-    : rows;
+  const filtered = applyFilter(await readAccessLogs(durationHours), opts);
 
   const perSaAppMaps = new Map<string, Map<string, { name: string; spaceName: string }>>();
-  const countMap     = new Map<string, TopAppEntry>();
+  const countMap     = new Map<string, Omit<TopAppEntry, 'percent'>>();
 
   for (const row of filtered) {
     const saKey = `${row.region}/${row.subdomain}`;
@@ -372,7 +376,26 @@ export async function getTopApps(
     else countMap.set(name, { appName: name, count: 1, region: row.region, subdomain: row.subdomain, appGuid: row.appId, spaceName: meta?.spaceName ?? '' });
   }
 
-  return [...countMap.values()].sort((a, b) => b.count - a.count);
+  const sorted = [...countMap.values()].sort((a, b) => b.count - a.count);
+  const total  = sorted.reduce((s, e) => s + e.count, 0) || 1;
+  return sorted.map(e => ({ ...e, percent: Math.round(e.count / total * 1000) / 10 }));
+}
+
+export async function getTopUsers(
+  durationHours: number,
+  opts: { city?: string; countryCode?: string } = {},
+): Promise<TopUserEntry[]> {
+  const filtered = applyFilter(await readAccessLogs(durationHours), opts);
+
+  const countMap = new Map<string, number>();
+  for (const row of filtered) {
+    if (!row.userId) continue;
+    countMap.set(row.userId, (countMap.get(row.userId) ?? 0) + 1);
+  }
+
+  const sorted = [...countMap.entries()].sort((a, b) => b[1] - a[1]);
+  const total  = sorted.reduce((s, [, c]) => s + c, 0) || 1;
+  return sorted.map(([userId, count]) => ({ userId, count, percent: Math.round(count / total * 1000) / 10 }));
 }
 
 // ─── Requests API (paginated, filtered, sorted — reads all CSV files) ─────────
