@@ -85,8 +85,8 @@ function RequestRow({ req, onOpen }: RequestRowProps) {
         className="font-medium truncate text-foreground hover:text-primary hover:underline text-left min-w-0"
       >
         {req.appName || req.alias}
-        {req.subdomain && (
-          <span className="text-muted-foreground/60 ml-1 text-[11px]">({req.subdomain})</span>
+        {req.alias && (
+          <span className="text-muted-foreground/60 ml-1 text-[11px]">({req.alias})</span>
         )}
       </button>
       <span className="text-muted-foreground truncate shrink-0 max-w-[7rem] ml-auto">{req.userId || '—'}</span>
