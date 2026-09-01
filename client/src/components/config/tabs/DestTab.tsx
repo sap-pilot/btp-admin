@@ -723,7 +723,10 @@ export default function DestTab({ sa, allNames = [], initialName, initialTab, in
   async function loadChangelog(name: string) {
     setIsLoadingChangelog(true);
     try {
-      const res  = await fetch(`/api/destinations/${enc(sa.region)}/${enc(sa.subdomain)}/${enc(name)}/changelog`);
+      const url = activeInstScope
+        ? `/api/destinations/${enc(sa.region)}/${enc(sa.subdomain)}/spaces/${enc(activeInstScope.spaceName)}/instances/${enc(activeInstScope.instanceGuid)}/${enc(name)}/changelog`
+        : `/api/destinations/${enc(sa.region)}/${enc(sa.subdomain)}/${enc(name)}/changelog`;
+      const res  = await fetch(url);
       const json = await res.json() as { ok: boolean; data: string };
       if (json.ok) setChangelog(json.data);
     } catch { /* ignore */ } finally { setIsLoadingChangelog(false); }

@@ -178,6 +178,7 @@ const TAB_LABEL: Record<ModalTab, string> = {
 
 export default function SubaccountModal({ sa, onClose, cockpit, cockpitMenu, isAdmin, onSpaceSave, subaccounts, onSelectSubaccount, tabs, initialTab, initialAppGuid, onAppDataChange, allDestNames, initialDestName, initialDestTab, initialDestShowList, initialDestSpaceName, initialDestInstName, initialDestInstGuid, selectedDests, onToggleCompare, onOpenCompare, onDestDataChange, allRcNames, initialRcName, initialRcTab, initialRcShowList, onRcDataChange, initialUserEmail, initialUserOrigin, initialUserTab, onUserDataChange, isPopup }: Props) {
   const [activeTab, setActiveTab]           = useState<ModalTab>(initialTab ?? 'info');
+  const [mountedTabs, setMountedTabs]       = useState<Set<ModalTab>>(new Set);
   const [maximized, setMaximized]           = useState(false);
   const [svcFilter, setSvcFilter]           = useState('');
   const [subFilter, setSubFilter]           = useState('');
@@ -192,9 +193,25 @@ export default function SubaccountModal({ sa, onClose, cockpit, cockpitMenu, isA
   const [overviewSplit, setOverviewSplit]   = useState(40);
   const [servicesSplit, setServicesSplit]   = useState(40);
 
-  const overviewRef = useRef<HTMLDivElement>(null);
-  const servicesRef = useRef<HTMLDivElement>(null);
-  const dragging    = useRef<{ set: (v: number) => void; left: number; width: number } | null>(null);
+  const overviewRef  = useRef<HTMLDivElement>(null);
+  const servicesRef  = useRef<HTMLDivElement>(null);
+  const dragging     = useRef<{ set: (v: number) => void; left: number; width: number } | null>(null);
+  const prevSaKeyRef = useRef('');
+
+  const saKey = sa ? `${sa.region}/${sa.subdomain}` : '';
+
+  // Lazy-mount admin tabs: add on first visit; reset to empty when SA switches.
+  useEffect(() => {
+    const isNewSa = saKey !== prevSaKeyRef.current;
+    prevSaKeyRef.current = saKey;
+    setMountedTabs(prev => {
+      if (isNewSa) return saKey ? new Set([activeTab]) : new Set();
+      if (prev.has(activeTab)) return prev;
+      const next = new Set(prev);
+      next.add(activeTab);
+      return next;
+    });
+  }, [activeTab, saKey]);
 
   const canManageSpaces = isAdmin || window.location.hostname === 'localhost';
   const isAdminMode     = isAdmin || window.location.hostname === 'localhost';
@@ -902,54 +919,61 @@ export default function SubaccountModal({ sa, onClose, cockpit, cockpitMenu, isA
                   );
                 })()}
 
-                {/* ── Apps ── */}
-                {activeTab === 'apps' && isAdminMode && sa && (
-                  <AppsTab
-                    sa={sa}
-                    initialGuid={initialAppGuid}
-                    onAppDataChange={onAppDataChange}
-                  />
+                {/* ── Apps / Destinations / Roles / Users ──
+                    Lazy-mount on first visit; stay mounted (hidden) on tab switch
+                    so intra-tab selections are preserved. Reset when SA changes. */}
+                {mountedTabs.has('apps') && isAdminMode && sa && (
+                  <div className={activeTab === 'apps' ? 'flex-1 min-h-0 flex flex-col' : 'hidden'}>
+                    <AppsTab
+                      sa={sa}
+                      initialGuid={initialAppGuid}
+                      onAppDataChange={onAppDataChange}
+                    />
+                  </div>
                 )}
 
-                {/* ── Destinations ── */}
-                {activeTab === 'destinations' && isAdminMode && sa && (
-                  <DestTab
-                    sa={sa}
-                    allNames={allDestNames}
-                    initialName={initialDestName}
-                    initialTab={initialDestTab}
-                    initialShowList={initialDestShowList}
-                    initialSpaceName={initialDestSpaceName}
-                    initialInstName={initialDestInstName}
-                    initialInstGuid={initialDestInstGuid}
-                    selectedDests={selectedDests}
-                    onToggleCompare={onToggleCompare}
-                    onOpenCompare={onOpenCompare}
-                    onDestDataChange={onDestDataChange}
-                  />
+                {mountedTabs.has('destinations') && isAdminMode && sa && (
+                  <div className={activeTab === 'destinations' ? 'flex-1 min-h-0 flex flex-col' : 'hidden'}>
+                    <DestTab
+                      sa={sa}
+                      allNames={allDestNames}
+                      initialName={initialDestName}
+                      initialTab={initialDestTab}
+                      initialShowList={initialDestShowList}
+                      initialSpaceName={initialDestSpaceName}
+                      initialInstName={initialDestInstName}
+                      initialInstGuid={initialDestInstGuid}
+                      selectedDests={selectedDests}
+                      onToggleCompare={onToggleCompare}
+                      onOpenCompare={onOpenCompare}
+                      onDestDataChange={onDestDataChange}
+                    />
+                  </div>
                 )}
 
-                {/* ── Roles ── */}
-                {activeTab === 'roles' && isAdminMode && sa && (
-                  <RolesTab
-                    sa={sa}
-                    allNames={allRcNames}
-                    initialName={initialRcName}
-                    initialTab={initialRcTab}
-                    initialShowList={initialRcShowList}
-                    onRcDataChange={onRcDataChange}
-                  />
+                {mountedTabs.has('roles') && isAdminMode && sa && (
+                  <div className={activeTab === 'roles' ? 'flex-1 min-h-0 flex flex-col' : 'hidden'}>
+                    <RolesTab
+                      sa={sa}
+                      allNames={allRcNames}
+                      initialName={initialRcName}
+                      initialTab={initialRcTab}
+                      initialShowList={initialRcShowList}
+                      onRcDataChange={onRcDataChange}
+                    />
+                  </div>
                 )}
 
-                {/* ── Users ── */}
-                {activeTab === 'users' && isAdminMode && sa && (
-                  <UsersTab
-                    sa={sa}
-                    initialUserEmail={initialUserEmail}
-                    initialUserOrigin={initialUserOrigin}
-                    initialTab={initialUserTab}
-                    onUserDataChange={onUserDataChange}
-                  />
+                {mountedTabs.has('users') && isAdminMode && sa && (
+                  <div className={activeTab === 'users' ? 'flex-1 min-h-0 flex flex-col' : 'hidden'}>
+                    <UsersTab
+                      sa={sa}
+                      initialUserEmail={initialUserEmail}
+                      initialUserOrigin={initialUserOrigin}
+                      initialTab={initialUserTab}
+                      onUserDataChange={onUserDataChange}
+                    />
+                  </div>
                 )}
 
               </div>

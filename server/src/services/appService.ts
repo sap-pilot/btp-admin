@@ -352,27 +352,35 @@ async function findAppFile(appGuid: string, region: string, subdomain: string): 
   return null;
 }
 
-// Update appGuid.json->urls and ->aod after a destination AOD install/uninstall.
+// Update appGuid.json->urls, ->aod, and optionally ->lastAccessed after a destination AOD
+// install/uninstall. lastAccessed modes (install path only):
+//   'skip'   — do not touch lastAccessed (default, and always used on uninstall)
+//   'ifEmpty' — set lastAccessed=now only when the field is absent (already-installed sync)
+//   'always'  — always set lastAccessed=now (new installation; existing value may be stale)
+// All fields are written in one atomic read-modify-write to avoid concurrent-update races.
 export async function updateAppFileAod(
   appGuid:      string,
   region:       string,
   subdomain:    string,
   destUrl:      string,
   aodInstalled: boolean,
+  lastAccessed: 'skip' | 'ifEmpty' | 'always' = 'skip',
 ): Promise<void> {
-  if (!appGuid || !destUrl) return;
+  if (!appGuid) return;
   const filePath = await findAppFile(appGuid, region, subdomain);
   if (!filePath) return;
   try {
-    const raw      = await readFile(filePath, 'utf-8');
-    const obj      = JSON.parse(raw) as AppFile;
-    const curUrls  = obj.urls ?? [];
+    const raw     = await readFile(filePath, 'utf-8');
+    const obj     = JSON.parse(raw) as AppFile;
+    const curUrls = obj.urls ?? [];
     if (aodInstalled) {
-      obj.urls = curUrls.includes(destUrl) ? curUrls : [...curUrls, destUrl];
-      obj.aod  = true;
+      if (destUrl) obj.urls = curUrls.includes(destUrl) ? curUrls : [...curUrls, destUrl];
+      obj.aod = true;
+      if (lastAccessed === 'always' || (lastAccessed === 'ifEmpty' && !obj.lastAccessed))
+        obj.lastAccessed = Math.floor(Date.now() / 1000);
     } else {
-      obj.urls = curUrls.filter(u => u !== destUrl);
-      obj.aod  = false;
+      if (destUrl) obj.urls = curUrls.filter(u => u !== destUrl);
+      obj.aod = false;
     }
     await writeFile(filePath, JSON.stringify(obj, null, 2), 'utf-8');
     logger.debug({ appGuid, aodInstalled, destUrl }, 'AOD: app JSON updated');
