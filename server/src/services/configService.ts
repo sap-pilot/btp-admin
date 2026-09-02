@@ -3,8 +3,10 @@ import type { AppConfig, ServiceConfig, LandscapeConfig, SiteConfig, EndpointCon
 import { config } from '../config.js';
 import { logger } from '../logger.js';
 import { getVar } from './variablesService.js';
+import { getCachedSettingsOverrides } from './settingsDataCache.js';
 
 let appConfig: AppConfig | null = null;
+let rawAppConfig: AppConfig | null = null;
 
 function applyVars(str: string, vars: Record<string, string>): string {
   return str.replace(/\{\{([^}]+)\}\}/g, (_, key: string) => vars[key.trim()] ?? `{{${key}}}`);
@@ -48,11 +50,13 @@ export function loadConfig(): AppConfig {
       } else {
         logger.warn({ err, path: config.CONFIG_FILE }, 'Failed to parse config — starting with no services');
       }
+      rawAppConfig = { services: [] };
       appConfig = { services: [] };
       return appConfig;
     }
   }
 
+  rawAppConfig = raw;
   const vars = raw.variables ?? {};
   appConfig = {
     ...raw,
@@ -62,6 +66,11 @@ export function loadConfig(): AppConfig {
     })),
   };
   return appConfig;
+}
+
+export function getRawConfig(): AppConfig {
+  if (!rawAppConfig) loadConfig();
+  return rawAppConfig!;
 }
 
 export function getConfig(): AppConfig {
@@ -74,14 +83,28 @@ export function getService(name: string): ServiceConfig | undefined {
 }
 
 export function getAllServices(): ServiceConfig[] {
+  const overrideServices = getCachedSettingsOverrides().statusPage?.services;
+  if (overrideServices && overrideServices.length > 0) {
+    const vars = getConfig().variables ?? {};
+    return (overrideServices as ServiceConfig[])
+      .filter(s => s.enabled !== false)
+      .map(svc => ({
+        ...svc,
+        endpoints: (svc.endpoints ?? []).map(ep => substituteEndpoint(ep, vars)),
+      }));
+  }
   return getConfig().services.filter(s => s.enabled !== false);
 }
 
 export function getLandscapes(): LandscapeConfig[] {
+  const overrideLandscapes = getCachedSettingsOverrides().statusPage?.landscapes;
+  if (overrideLandscapes && overrideLandscapes.length > 0) return overrideLandscapes;
   return getConfig().landscapes ?? [];
 }
 
 export function getSites(): SiteConfig[] {
+  const overrideSites = getCachedSettingsOverrides().sites;
+  if (overrideSites && overrideSites.length > 0) return overrideSites as SiteConfig[];
   return getConfig().sites ?? [];
 }
 
@@ -94,10 +117,15 @@ export function getSyncKey(): string | null {
 /**
  * Returns the set of restricted subaccount IDs whose destinations and AOD features are blocked.
  * RESTRICTED_SUBACCOUNT_IDS env var (comma-separated) takes precedence over config.variables entry.
+ * Each entry may have an optional inline comment: "{id}(comment)" — the "(comment)" is stripped before matching.
  */
 export function getRestrictedIds(): Set<string> {
   const raw = process.env.RESTRICTED_SUBACCOUNT_IDS ?? getConfig().variables?.['RESTRICTED_SUBACCOUNT_IDS'] ?? '';
-  return new Set(raw.split(',').map(s => s.trim()).filter(Boolean));
+  return new Set(
+    raw.split(',')
+      .map(s => s.trim().replace(/\([^)]*\)$/, '').trim())
+      .filter(Boolean),
+  );
 }
 
 /**

@@ -25,7 +25,7 @@ export const VARIABLE_DEFS: VariableDef[] = [
   { key: 'MAX_RESPONSE_STORAGE_DAYS',    description: 'Days to retain probe response history files',                   sensitive: false, readonly: false },
   { key: 'REFRESH_APPS_INTERVAL_HRS',    description: 'CF app scan interval in hours; saving restarts the scheduler', sensitive: false, readonly: false },
   { key: 'STOP_APPS_UNUSED_AFTER_HRS',   description: 'Stop AOD-managed apps idle for this many hours (0 = disabled)', sensitive: false, readonly: false },
-  { key: 'RESTRICTED_SUBACCOUNT_IDS',    description: 'Comma-separated subaccount IDs whose destinations and AOD are restricted', sensitive: false, readonly: true  },
+  { key: 'RESTRICTED_SUBACCOUNT_IDS',    description: 'Comma-separated org GUIDs whose destinations and AOD are restricted. Each entry may include an inline label: {guid}(label) — the label is stripped during matching.', sensitive: false, readonly: true  },
 ];
 
 const SENSITIVE_KEYS = new Set(VARIABLE_DEFS.filter(d => d.sensitive).map(d => d.key));
@@ -130,4 +130,9 @@ export function getEffectiveDefault(key: string): { value: string | undefined; i
 /** Returns the current settings.json override value for a key, or undefined if not set. */
 export function getSettingsVar(key: string): string | undefined {
   return settingsVarsCache[key];
+}
+
+/** Returns all current settings.json->variables entries (including custom keys not in VARIABLE_DEFS). */
+export function getAllSettingsVars(): Record<string, string> {
+  return { ...settingsVarsCache };
 }

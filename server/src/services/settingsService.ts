@@ -7,6 +7,7 @@ import { emit } from './liveEvents.js';
 import { appendConfigChangelog } from './configChangelogService.js';
 import { touchLastUpdated } from './lastUpdatedService.js';
 import { updateSettingsVarsCache } from './variablesService.js';
+import { updateSettingsDataCache, type CachedSettingsData } from './settingsDataCache.js';
 
 const CONFIG_DIR     = join(config.LOCAL_STORE_DIR, 'conf');
 const SETTINGS_PATH  = join(CONFIG_DIR, 'settings.json');
@@ -22,6 +23,15 @@ export interface SettingsData {
   };
   menus: MenuEntry[];
   variables?: Record<string, string>;
+  aod?: {
+    regionalEndpoints?: Record<string, string>;
+    excludeApps?: string[];
+  };
+  sites?: Array<{ name: string; url: string; legacyUrls?: string[] }>;
+  statusPage?: {
+    landscapes?: Array<{ name: string; diagram: string }>;
+    services?: unknown[];
+  };
 }
 
 const varsChangedCallbacks: Array<() => void> = [];
@@ -53,6 +63,54 @@ function parseSettings(raw: string): SettingsData {
       )
     : undefined;
 
+  // ── aod overrides ────────────────────────────────────────────────────────────
+  const rawAod = parsed['aod'];
+  let aod: SettingsData['aod'];
+  if (rawAod && typeof rawAod === 'object' && !Array.isArray(rawAod)) {
+    const ra = rawAod as Record<string, unknown>;
+    const re = ra['regionalEndpoints'];
+    const ea = ra['excludeApps'];
+    const aodObj: NonNullable<SettingsData['aod']> = {};
+    if (re && typeof re === 'object' && !Array.isArray(re))
+      aodObj.regionalEndpoints = re as Record<string, string>;
+    if (Array.isArray(ea))
+      aodObj.excludeApps = (ea as unknown[]).filter((x): x is string => typeof x === 'string');
+    if (aodObj.regionalEndpoints || aodObj.excludeApps) aod = aodObj;
+  }
+
+  // ── sites override ────────────────────────────────────────────────────────────
+  const rawSites = parsed['sites'];
+  const sites: SettingsData['sites'] = Array.isArray(rawSites)
+    ? (rawSites as unknown[]).flatMap(s => {
+        const site = s as Record<string, unknown>;
+        if (!site['name'] || !site['url']) return [];
+        return [{
+          name: String(site['name']),
+          url:  String(site['url']),
+          ...(Array.isArray(site['legacyUrls']) ? { legacyUrls: (site['legacyUrls'] as unknown[]).map(String) } : {}),
+        }];
+      })
+    : undefined;
+
+  // ── statusPage override ───────────────────────────────────────────────────────
+  const rawSp = parsed['statusPage'];
+  let statusPage: SettingsData['statusPage'];
+  if (rawSp && typeof rawSp === 'object' && !Array.isArray(rawSp)) {
+    const sp = rawSp as Record<string, unknown>;
+    const rawLands = sp['landscapes'];
+    const rawSvcs  = sp['services'];
+    const spObj: NonNullable<SettingsData['statusPage']> = {};
+    if (Array.isArray(rawLands))
+      spObj.landscapes = (rawLands as unknown[]).flatMap(l => {
+        const lm = l as Record<string, unknown>;
+        if (!lm['name'] || !lm['diagram']) return [];
+        return [{ name: String(lm['name']), diagram: String(lm['diagram']) }];
+      });
+    if (Array.isArray(rawSvcs) && rawSvcs.length > 0)
+      spObj.services = rawSvcs;
+    if (spObj.landscapes?.length || spObj.services?.length) statusPage = spObj;
+  }
+
   return {
     homepage: {
       cockpit: {
@@ -83,6 +141,9 @@ function parseSettings(raw: string): SettingsData {
         })
       : [],
     ...(variables !== undefined && Object.keys(variables).length > 0 ? { variables } : {}),
+    ...(aod ? { aod } : {}),
+    ...(sites && sites.length > 0 ? { sites } : {}),
+    ...(statusPage ? { statusPage } : {}),
   };
 }
 
@@ -100,14 +161,26 @@ export async function readSettings(): Promise<SettingsData> {
   }
 }
 
+function toDataCacheEntry(data: SettingsData): CachedSettingsData {
+  return { aod: data.aod, sites: data.sites, statusPage: data.statusPage };
+}
+
 export async function writeSettings(data: SettingsData): Promise<void> {
   await mkdir(CONFIG_DIR, { recursive: true });
   await writeFile(SETTINGS_PATH, JSON.stringify(data, null, 2), 'utf-8');
   updateSettingsVarsCache(data.variables ?? {});
+  updateSettingsDataCache(toDataCacheEntry(data));
   notifyVarsChanged();
   touchLastUpdated();
   notifyCallbacks();
   emit('config', { ts: Date.now() });
+}
+
+export async function warmSettingsDataCache(): Promise<void> {
+  try {
+    const data = await readSettings();
+    updateSettingsDataCache(toDataCacheEntry(data));
+  } catch { /* ignore — cache stays empty */ }
 }
 
 export async function settingsFileExists(): Promise<boolean> {

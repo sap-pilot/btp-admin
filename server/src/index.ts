@@ -23,7 +23,7 @@ import appsRouter from './routes/apps.js';
 import { startAppsScheduler, stopAppsScheduler } from './services/appService.js';
 import { initRequestLog, mergeAccessLogFromSync } from './services/aodAnalyticsService.js';
 import { warmSettingsVarsCache } from './services/variablesService.js';
-import { registerSettingsVarsChangedCallback, triggerSettingsVarsChanged } from './services/settingsService.js';
+import { registerSettingsVarsChangedCallback, triggerSettingsVarsChanged, warmSettingsDataCache } from './services/settingsService.js';
 import { resetCfLoginCache } from './services/cfLoginService.js';
 import { registerOnSettingsSynced } from './services/syncService.js';
 import { requireSessionGlobal } from './middleware/requireAuth.js';
@@ -38,15 +38,18 @@ app.use(express.json({ limit: '5mb' }));
 const cfg = loadConfig();
 logger.info({ configFile: config.CONFIG_FILE, services: cfg.services.length }, 'Config initialized');
 
-// Register settings-change callbacks (CF login cache + apps scheduler)
+// Register settings-change callbacks
 registerSettingsVarsChangedCallback(resetCfLoginCache);
 registerSettingsVarsChangedCallback(startAppsScheduler);
+// Restart status probe scheduler when statusPage.services override changes
+registerSettingsVarsChangedCallback(startScheduler);
 
-// When conf/settings.json arrives via remote sync, re-warm the vars cache and
-// trigger the same callbacks so credentials and job intervals take effect immediately.
+// When conf/settings.json arrives via remote sync, re-warm both caches and
+// trigger all callbacks so credentials, job intervals, sites, and status page
+// definitions take effect immediately.
 registerOnSettingsSynced(() => {
-  void warmSettingsVarsCache().then(() => {
-    logger.debug('Settings vars cache refreshed after remote sync');
+  void Promise.all([warmSettingsVarsCache(), warmSettingsDataCache()]).then(() => {
+    logger.debug('Settings caches refreshed after remote sync');
     triggerSettingsVarsChanged();
   });
 });
@@ -88,7 +91,9 @@ const server = app.listen(config.PORT, () => {
   void refreshLastUpdated();
   void initGeo();
   void initRequestLog();
-  void warmSettingsVarsCache().then(() => { logger.debug('Settings vars cache warmed'); });
+  void Promise.all([warmSettingsVarsCache(), warmSettingsDataCache()]).then(() => {
+    logger.debug('Settings caches warmed');
+  });
   registerOnAccessLogSynced(saPaths => {
     for (const key of saPaths) {
       const slash = key.indexOf('/');
