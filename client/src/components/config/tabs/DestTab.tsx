@@ -1492,7 +1492,6 @@ export default function DestTab({ sa, allNames = [], initialName, initialTab, in
                             toExport.push({ instanceGuid: prefix, spaceName: sName, name });
                           }
                         }
-                        if (treeSelectedKeys.size === 0) { await handleExport(); return; }
                         if (saNames.length === 0 && toExport.length === 0) return;
                         const all: Record<string, unknown>[] = [];
                         for (const name of [...saNames].sort()) {

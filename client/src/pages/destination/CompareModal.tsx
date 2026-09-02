@@ -298,6 +298,7 @@ export default function CompareModal({ selected, onClose }: Props) {
   return (
     <div
       className="fixed inset-0 z-[60] flex items-center justify-center bg-black/70 p-3"
+      style={{ pointerEvents: 'auto' }}
       onClick={e => { if (e.target === e.currentTarget) onClose(); }}
     >
       <div className="bg-background border border-border rounded-lg shadow-xl flex flex-col w-full h-full max-w-[min(95vw,1600px)] max-h-[calc(100vh-1.5rem)]">
