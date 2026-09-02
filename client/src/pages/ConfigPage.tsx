@@ -18,15 +18,16 @@ type Tab = 'subaccounts' | 'tabs' | 'settings' | 'changelog';
 const VALID_TABS = new Set<Tab>(['subaccounts', 'tabs', 'settings', 'changelog']);
 
 export default function ConfigPage() {
-  const { tab: tabParam, region: regionParam, subdomain: subdomainParam } = useParams<{ tab?: string; region?: string; subdomain?: string }>();
+  const { tab: tabParam, region: regionParam, subdomain: subdomainParam, section: sectionParam } = useParams<{ tab?: string; region?: string; subdomain?: string; section?: string }>();
   const navigate          = useNavigate();
   const location          = useLocation();
   const [searchParams]    = useSearchParams();
   const { toggle, collapsed } = useSidebar();
   const { refreshSettings } = useSettings();
   const { isAdmin }       = useAuth();
-  const activeTab: Tab    = VALID_TABS.has(tabParam as Tab) ? (tabParam as Tab) : 'subaccounts';
-  const initialSection    = searchParams.get('section') ?? undefined;
+  // When on /config/settings/:section, tabParam is undefined but sectionParam is set
+  const activeTab: Tab    = sectionParam ? 'settings' : (VALID_TABS.has(tabParam as Tab) ? (tabParam as Tab) : 'subaccounts');
+  const initialSection    = sectionParam ?? searchParams.get('section') ?? undefined;
 
   // Subaccounts state
   const [sasData,        setSasData]       = useState<SubaccountEntry[]>([]);
@@ -205,7 +206,9 @@ export default function ConfigPage() {
     return () => es.close();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  function goTab(t: Tab) { navigate(`/config/${t}`, { replace: true }); }
+  function goTab(t: Tab) {
+    navigate(t === 'settings' ? '/config/settings/homepage' : `/config/${t}`, { replace: true });
+  }
 
   // ── Subaccounts handlers ──────────────────────────────────────────────────────
 

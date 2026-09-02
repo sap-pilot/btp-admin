@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { useNavigate } from 'react-router';
 import { Eye, EyeOff, GripVertical, Plus, RotateCcw, Save, X } from 'lucide-react';
 import MenusEditor from './MenusEditor';
 
@@ -53,6 +54,14 @@ const NAV_ITEMS: { id: NavItem; label: string }[] = [
   { id: 'statusPage', label: 'Status Page'             },
   { id: 'variables',  label: 'Variables'               },
 ];
+const NAV_TO_SLUG: Record<NavItem, string> = {
+  homepage: 'homepage', menus: 'menus', sites: 'sites',
+  aod: 'aod', statusPage: 'status-page', variables: 'variables',
+};
+const SLUG_TO_NAV: Record<string, NavItem> = {
+  homepage: 'homepage', menus: 'menus', sites: 'sites',
+  aod: 'aod', 'status-page': 'statusPage', variables: 'variables',
+};
 
 // ─── AOD data ─────────────────────────────────────────────────────────────────
 
@@ -84,9 +93,15 @@ export default function SettingsPanel({
   data, onChange, isDirty, isSaving, onReset, onSave, saveStatus,
   initialSection,
 }: Props) {
+  const navigate                = useNavigate();
   const [search, setSearch]     = useState('');
-  const validInitial = (['homepage', 'menus', 'sites', 'aod', 'statusPage', 'variables'] as string[]).includes(initialSection ?? '') ? initialSection as NavItem : 'homepage';
+  const validInitial: NavItem   = SLUG_TO_NAV[initialSection ?? ''] ?? ((['homepage', 'menus', 'sites', 'aod', 'statusPage', 'variables'] as string[]).includes(initialSection ?? '') ? initialSection as NavItem : 'homepage');
   const [activeNav, setActiveNav] = useState<NavItem>(validInitial);
+
+  function goSection(section: NavItem) {
+    setActiveNav(section);
+    navigate(`/config/settings/${NAV_TO_SLUG[section]}`, { replace: true });
+  }
 
   // AOD variable overrides (STOP_APPS_UNUSED_AFTER_HRS saved via /api/settings/variables)
   const [aodVarOverride, setAodVarOverride] = useState<string>('');
@@ -211,7 +226,7 @@ export default function SettingsPanel({
         {NAV_ITEMS.map(n => (
           <button
             key={n.id}
-            onClick={() => setActiveNav(n.id)}
+            onClick={() => goSection(n.id)}
             className={`px-4 py-2 text-sm border-b-2 whitespace-nowrap transition-colors ${
               activeNav === n.id
                 ? 'border-primary text-foreground font-medium'
@@ -238,7 +253,7 @@ export default function SettingsPanel({
           {visibleItems.map(n => (
             <button
               key={n.id}
-              onClick={() => setActiveNav(n.id)}
+              onClick={() => goSection(n.id)}
               className={`w-full text-left px-3 py-2 text-sm transition-colors rounded-none ${
                 activeNav === n.id
                   ? 'bg-accent text-accent-foreground font-medium'
@@ -870,8 +885,8 @@ function VariablesSection({ vars, overrides, onOverrideChange, shown, onToggleSh
         <table className="w-full text-xs border-collapse" style={{ tableLayout: 'fixed' }}>
           <colgroup>
             <col style={{ width: '25%' }} />
-            <col style={{ width: '35%' }} />
-            <col style={{ width: '40%' }} />
+            <col style={{ width: '45%' }} />
+            <col style={{ width: '30%' }} />
           </colgroup>
           <thead>
             <tr className="border-b border-border">
@@ -901,10 +916,18 @@ function VariablesSection({ vars, overrides, onOverrideChange, shown, onToggleSh
                     {entry.custom ? (
                       <span className="text-muted-foreground/40 italic text-[11px]">—</span>
                     ) : (
-                      <div className="flex items-center gap-1.5 flex-wrap">
-                        <span className={`font-mono break-all ${entry.defaultValue ? 'text-muted-foreground' : 'text-muted-foreground/40 italic'}`}>
-                          {entry.defaultValue || '—'}
-                        </span>
+                      <div className="flex items-start gap-1.5 flex-wrap">
+                        {entry.key === 'RESTRICTED_SUBACCOUNT_IDS' && entry.defaultValue ? (
+                          <span className="font-mono text-muted-foreground whitespace-pre-wrap break-all">
+                            {entry.defaultValue.split(',').map((part, i, arr) =>
+                              i < arr.length - 1 ? part + ',\n' : part
+                            ).join('')}
+                          </span>
+                        ) : (
+                          <span className={`font-mono break-all ${entry.defaultValue ? 'text-muted-foreground' : 'text-muted-foreground/40 italic'}`}>
+                            {entry.defaultValue || '—'}
+                          </span>
+                        )}
                         {entry.isEnvOverride && entry.defaultValue && (
                           <span className="shrink-0 text-[10px] px-1 py-0.5 rounded bg-amber-500/15 text-amber-600 dark:text-amber-400 font-medium border border-amber-500/25">
                             ENV

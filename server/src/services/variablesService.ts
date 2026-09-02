@@ -25,7 +25,7 @@ export const VARIABLE_DEFS: VariableDef[] = [
   { key: 'MAX_RESPONSE_STORAGE_DAYS',    description: 'Days to retain probe response history files',                   sensitive: false, readonly: false },
   { key: 'REFRESH_APPS_INTERVAL_HRS',    description: 'CF app scan interval in hours; saving restarts the scheduler', sensitive: false, readonly: false },
   { key: 'STOP_APPS_UNUSED_AFTER_HRS',   description: 'Stop AOD-managed apps idle for this many hours (0 = disabled)', sensitive: false, readonly: false },
-  { key: 'RESTRICTED_SUBACCOUNT_IDS',    description: 'Comma-separated org GUIDs whose destinations and AOD are restricted. Each entry may include an inline label: {guid}(label) — the label is stripped during matching.', sensitive: false, readonly: true  },
+  { key: 'RESTRICTED_SUBACCOUNT_IDS',    description: 'Comma-separated org GUIDs whose destinations and AOD are restricted. Each entry may include a label: {guid}:{label} — the label is stripped during matching (e.g. abc-123:prod-acct).', sensitive: false, readonly: true  },
 ];
 
 const SENSITIVE_KEYS = new Set(VARIABLE_DEFS.filter(d => d.sensitive).map(d => d.key));

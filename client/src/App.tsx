@@ -93,6 +93,7 @@ export default function App() {
               <Route path="/subaccount/:region/:subdomain" element={<ConfigPage />} />
               <Route path="/services/:region/:subdomain" element={<ConfigPage />} />
               <Route path="/config" element={<Navigate to="/config/orgs" replace />} />
+              <Route path="/config/settings/:section" element={<ConfigPage />} />
               <Route path="/config/:tab" element={<ConfigPage />} />
               <Route path="/" element={<Navigate to="/home" replace />} />
               <Route path="*" element={<Navigate to="/home" replace />} />
