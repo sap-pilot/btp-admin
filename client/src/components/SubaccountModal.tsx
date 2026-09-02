@@ -1,10 +1,11 @@
 import { useState, useEffect, useRef } from 'react';
-import { ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown, ExternalLink, Filter, Maximize2, Minimize2, Pencil, RotateCcw, Save, ShieldBan, X } from 'lucide-react';
+import { Check, ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown, Copy, ExternalLink, Filter, Maximize2, Minimize2, Pencil, RotateCcw, Save, ShieldBan, X } from 'lucide-react';
 import * as DialogPrimitive from '@radix-ui/react-dialog';
 import AppsTab from '@/components/config/tabs/AppsTab';
 import DestTab, { type SelectedDest } from '@/components/config/tabs/DestTab';
 import RolesTab from '@/components/config/tabs/RolesTab';
 import UsersTab from '@/components/config/tabs/UsersTab';
+import CompareModal from '@/pages/destination/CompareModal';
 import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator,
   DropdownMenuSub, DropdownMenuSubContent, DropdownMenuSubTrigger, DropdownMenuTrigger,
@@ -159,11 +160,33 @@ function renderMenuItems(items: CockpitMenuItem[], ctx: Record<string, string>, 
   });
 }
 
-function Field({ label, value, mono }: { label: string; value: string; mono?: boolean }) {
+function CopyBtn({ value }: { value: string }) {
+  const [copied, setCopied] = useState(false);
+  function handleCopy() {
+    void navigator.clipboard.writeText(value).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    });
+  }
+  return (
+    <button
+      onClick={handleCopy}
+      title="Copy"
+      className="shrink-0 text-muted-foreground/50 hover:text-muted-foreground transition-colors p-0.5 rounded"
+    >
+      {copied ? <Check className="h-3 w-3 text-green-500" /> : <Copy className="h-3 w-3" />}
+    </button>
+  );
+}
+
+function Field({ label, value, mono, copyable }: { label: string; value: string; mono?: boolean; copyable?: boolean }) {
   return (
     <div className="flex flex-col gap-0.5">
       <span className="text-[10px] text-muted-foreground uppercase tracking-wide">{label}</span>
-      <span className={`text-xs text-foreground break-all ${mono ? 'font-mono' : ''}`}>{value || '—'}</span>
+      <div className="flex items-center gap-1 min-w-0">
+        <span className={`text-xs text-foreground break-all ${mono ? 'font-mono' : ''}`}>{value || '—'}</span>
+        {copyable && value && <CopyBtn value={value} />}
+      </div>
     </div>
   );
 }
@@ -190,6 +213,7 @@ export default function SubaccountModal({ sa, onClose, cockpit, cockpitMenu, isA
   const [spaceAodsOrig, setSpaceAodsOrig]   = useState<Map<string, boolean>>(new Map());
   const [spaceSaving, setSpaceSaving]       = useState(false);
   const [spaceEditing, setSpaceEditing]     = useState(false);
+  const [internalCompare, setInternalCompare] = useState<SelectedDest[] | null>(null);
   const [aodRefreshPending, setAodRefreshPending] = useState(false);
   const [destAutoRefresh, setDestAutoRefresh]     = useState(0);
   const [overviewSplit, setOverviewSplit]   = useState(40);
@@ -562,14 +586,14 @@ export default function SubaccountModal({ sa, onClose, cockpit, cockpitMenu, isA
                     {/* Left pane — subaccount properties */}
                     <div style={{ width: `${overviewSplit}%` }} className="overflow-auto shrink-0">
                       <div className="p-4 flex flex-col gap-3">
-                        <Field label="Subaccount ID"            value={sa.subaccountId}                mono />
-                        <Field label="Global Account GUID"      value={sa.globalAccountGUID}           mono />
-                        <Field label="Global Account Name"      value={sa.globalAccountName}                />
-                        <Field label="Global Account Subdomain" value={sa.globalAccountSubdomain}      mono />
-                        <Field label="Region"                   value={sa.region}                      mono />
-                        <Field label="Subdomain"                value={sa.subdomain}                   mono />
-                        <Field label="Org Name"                 value={sa.org?.orgName ?? ''}               />
-                        <Field label="Org ID"                   value={sa.org?.orgId   ?? ''}          mono />
+                        <Field label="Subaccount ID"            value={sa.subaccountId}                mono copyable />
+                        <Field label="Global Account GUID"      value={sa.globalAccountGUID}           mono copyable />
+                        <Field label="Global Account Name"      value={sa.globalAccountName}               copyable />
+                        <Field label="Global Account Subdomain" value={sa.globalAccountSubdomain}      mono copyable />
+                        <Field label="Region"                   value={sa.region}                      mono copyable />
+                        <Field label="Subdomain"                value={sa.subdomain}                   mono copyable />
+                        <Field label="Org Name"                 value={sa.org?.orgName ?? ''}               copyable />
+                        <Field label="Org ID"                   value={sa.org?.orgId   ?? ''}          mono copyable />
                         <Field label="Group IDs"                value={sa.groupIds}                         />
                         <Field label="Alias"                    value={sa.alias}                            />
                         <div className="flex flex-wrap gap-4 pt-1">
@@ -646,13 +670,17 @@ export default function SubaccountModal({ sa, onClose, cockpit, cockpitMenu, isA
                                   <tr key={s.spaceId} className="hover:bg-muted/20">
                                     <td className={tdCls}>
                                       <div className="flex flex-col">
-                                        <span>
+                                        <div className="flex items-center gap-1">
                                           {spaceUrl
                                             ? <a href={spaceUrl} target="_blank" rel="noopener noreferrer" className="hover:underline hover:text-primary transition-colors">{s.spaceName}</a>
-                                            : s.spaceName
+                                            : <span>{s.spaceName}</span>
                                           }
-                                        </span>
-                                        <span className="text-[10px] text-muted-foreground font-mono">{s.spaceId}</span>
+                                          {s.spaceName && <CopyBtn value={s.spaceName} />}
+                                        </div>
+                                        <div className="flex items-center gap-1">
+                                          <span className="text-[10px] text-muted-foreground font-mono">{s.spaceId}</span>
+                                          {s.spaceId && <CopyBtn value={s.spaceId} />}
+                                        </div>
                                       </div>
                                     </td>
                                     {canManageSpaces && (
@@ -956,7 +984,7 @@ export default function SubaccountModal({ sa, onClose, cockpit, cockpitMenu, isA
                       initialInstGuid={initialDestInstGuid}
                       selectedDests={selectedDests}
                       onToggleCompare={onToggleCompare}
-                      onOpenCompare={onOpenCompare}
+                      onOpenCompare={dests => { setInternalCompare(dests); onOpenCompare?.(dests); }}
                       onDestDataChange={onDestDataChange}
                       autoRefreshTrigger={destAutoRefresh}
                     />
@@ -1016,6 +1044,14 @@ export default function SubaccountModal({ sa, onClose, cockpit, cockpitMenu, isA
                 </div>
               )}
             </>
+          )}
+
+          {/* Compare modal rendered inside Radix focus scope so keyboard events work */}
+          {internalCompare && internalCompare.length > 0 && (
+            <CompareModal
+              selected={internalCompare}
+              onClose={() => setInternalCompare(null)}
+            />
           )}
         </DialogPrimitive.Content>
       </DialogPrimitive.Portal>

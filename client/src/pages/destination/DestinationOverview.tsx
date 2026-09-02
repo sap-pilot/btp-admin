@@ -166,8 +166,7 @@ export default function DestinationOverview() {
   const [showCompareModal,   setShowCompareModal]   = useState(false);
   const [showCompareDropdown, setShowCompareDropdown] = useState(false);
   const compareDropdownRef = useRef<HTMLDivElement>(null);
-  // Ephemeral compare: instant compare from SubaccountDestModal Compare(N) — not added to basket
-  const [ephemeralCompareDests, setEphemeralCompareDests] = useState<SelectedDest[] | null>(null);
+  // Ephemeral compare is now handled inside SubaccountModal (within Radix focus scope)
 
   // Global changelog (Change History tab)
   const [globalChangelog,        setGlobalChangelog]        = useState('');
@@ -962,7 +961,7 @@ export default function DestinationOverview() {
           isAdmin={isAdmin}
           selectedDests={selectedDests}
           onToggleCompare={toggleCompare}
-          onOpenCompare={dests => { setEphemeralCompareDests(dests); }}
+          onOpenCompare={() => { /* handled internally by SubaccountModal */ }}
         />
       )}
 
@@ -973,12 +972,7 @@ export default function DestinationOverview() {
         />
       )}
 
-      {ephemeralCompareDests && ephemeralCompareDests.length > 0 && (
-        <CompareModal
-          selected={ephemeralCompareDests}
-          onClose={() => setEphemeralCompareDests(null)}
-        />
-      )}
+      {/* ephemeralCompareDests is now handled inside SubaccountModal to stay within Radix focus scope */}
 
       {/* Refresh confirmation dialog */}
       <AlertDialog open={showRefreshDialog}>
