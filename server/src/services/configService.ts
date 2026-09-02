@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import type { AppConfig, ServiceConfig, LandscapeConfig, SiteConfig, EndpointConfig } from '../types/index.js';
 import { config } from '../config.js';
 import { logger } from '../logger.js';
+import { getVar } from './variablesService.js';
 
 let appConfig: AppConfig | null = null;
 
@@ -108,8 +109,7 @@ export function getRestrictedIds(): Set<string> {
  */
 export function getAutoSubaccountRefreshMs(): number {
   const mins =
-    process.env.AUTO_SUBACCOUNT_REFRESH_MINS ??
-    getConfig().variables?.['AUTO_SUBACCOUNT_REFRESH_MINS'] ??
+    getVar('AUTO_SUBACCOUNT_REFRESH_MINS') ??
     process.env.DESTINATIONS_AUTO_SUBACCOUNT_REFRESH_MINS ??
     getConfig().variables?.['DESTINATIONS_AUTO_SUBACCOUNT_REFRESH_MINS'] ??
     process.env.DESTINATION_AUTO_SUBACCOUNT_REFRESH_MINS ??
@@ -167,8 +167,7 @@ export function getSyncExcludes(): Set<string> {
  */
 export function getAutoGlobalRefreshMs(): number {
   const raw =
-    process.env.AUTO_GLOBAL_REFRESH_HRS ??
-    getConfig().variables?.['AUTO_GLOBAL_REFRESH_HRS'] ??
+    getVar('AUTO_GLOBAL_REFRESH_HRS') ??
     process.env.DESTINATION_AUTO_GLOBAL_REFRESH_HRS ??
     getConfig().variables?.['DESTINATION_AUTO_GLOBAL_REFRESH_HRS'];
   if (raw !== undefined && raw !== '') {
@@ -185,9 +184,7 @@ export function getAutoGlobalRefreshMs(): number {
  * Default: 6 hours. Set to 0 to disable.
  */
 export function getRefreshAppsIntervalHrs(): number {
-  const raw =
-    process.env.REFRESH_APPS_INTERVAL_HRS ??
-    getConfig().variables?.['REFRESH_APPS_INTERVAL_HRS'];
+  const raw = getVar('REFRESH_APPS_INTERVAL_HRS');
   if (raw !== undefined && raw !== '') {
     const n = parseFloat(raw);
     return (!isNaN(n) && n >= 0) ? n : 0;
@@ -204,9 +201,7 @@ export function getRefreshAppsIntervalHrs(): number {
  * Default: 120 hours. Set to 0 to disable auto-stop.
  */
 export function getStopAppsUnusedAfterHrs(): number {
-  const raw =
-    process.env.STOP_APPS_UNUSED_AFTER_HRS ??
-    getConfig().variables?.['STOP_APPS_UNUSED_AFTER_HRS'];
+  const raw = getVar('STOP_APPS_UNUSED_AFTER_HRS');
   if (raw !== undefined && raw !== '') {
     const n = parseFloat(raw);
     return (!isNaN(n) && n >= 0) ? n : 0;

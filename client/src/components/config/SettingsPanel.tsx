@@ -1,8 +1,8 @@
-import { useRef, useState } from 'react';
-import { GripVertical, Plus, RotateCcw, Save, X } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
+import { Eye, EyeOff, GripVertical, Plus, RotateCcw, Save, X } from 'lucide-react';
 import MenusEditor from './MenusEditor';
 
-// ─── Types (re-exported so AppLayout can import them) ─────────────────────────
+// ─── Types ────────────────────────────────────────────────────────────────────
 
 export interface MainSubscription { name: string; alias?: string; }
 export interface Submenu  { text: string; url: string; public?: boolean; }
@@ -13,15 +13,27 @@ export interface SettingsData {
     mainSubscriptions: MainSubscription[];
   };
   menus: MenuEntry[];
+  variables?: Record<string, string>;
+}
+
+export interface VarEntry {
+  key: string;
+  description: string;
+  sensitive: boolean;
+  readonly: boolean;
+  defaultValue: string;
+  isEnvOverride: boolean;
+  settingsOverride: string;
 }
 
 // ─── Nav items ────────────────────────────────────────────────────────────────
 
-type NavItem = 'homepage' | 'menus' | 'aod';
+type NavItem = 'homepage' | 'menus' | 'aod' | 'variables';
 const NAV_ITEMS: { id: NavItem; label: string }[] = [
-  { id: 'homepage', label: 'Homepage'                },
-  { id: 'menus',    label: 'Menus'                   },
-  { id: 'aod',      label: 'Application on Demand'   },
+  { id: 'homepage',  label: 'Homepage'                },
+  { id: 'menus',     label: 'Menus'                   },
+  { id: 'aod',       label: 'Application on Demand'   },
+  { id: 'variables', label: 'Variables'               },
 ];
 
 // ─── AOD data ─────────────────────────────────────────────────────────────────
@@ -31,21 +43,21 @@ export interface AodData { stopAppsUnusedAfterHrs?: number; excludeApps?: string
 // ─── Props ────────────────────────────────────────────────────────────────────
 
 interface Props {
-  data:           SettingsData;
-  onChange:       (data: SettingsData) => void;
-  isDirty:        boolean;
-  isSaving:       boolean;
-  onReset:        () => void;
-  onSave:         () => void;
-  saveStatus?:    { message: string; ok: boolean } | null;
+  data:            SettingsData;
+  onChange:        (data: SettingsData) => void;
+  isDirty:         boolean;
+  isSaving:        boolean;
+  onReset:         () => void;
+  onSave:          () => void;
+  saveStatus?:     { message: string; ok: boolean } | null;
   initialSection?: string;
-  aodData?:       AodData | null;
-  onAodChange?:   (d: AodData) => void;
-  isAodDirty?:    boolean;
-  isSavingAod?:   boolean;
-  onAodReset?:    () => void;
-  onAodSave?:     () => void;
-  aodSaveStatus?: { message: string; ok: boolean } | null;
+  aodData?:        AodData | null;
+  onAodChange?:    (d: AodData) => void;
+  isAodDirty?:     boolean;
+  isSavingAod?:    boolean;
+  onAodReset?:     () => void;
+  onAodSave?:      () => void;
+  aodSaveStatus?:  { message: string; ok: boolean } | null;
 }
 
 // ─── Shared style tokens ──────────────────────────────────────────────────────
@@ -57,13 +69,41 @@ const inpCls     = 'w-full text-xs bg-transparent border border-border rounded p
 
 // ─── Main component ───────────────────────────────────────────────────────────
 
-export default function SettingsPanel({ data, onChange, isDirty, isSaving, onReset, onSave, saveStatus, initialSection, aodData, onAodChange, isAodDirty, isSavingAod, onAodReset, onAodSave, aodSaveStatus }: Props) {
+export default function SettingsPanel({
+  data, onChange, isDirty, isSaving, onReset, onSave, saveStatus,
+  initialSection, aodData, onAodChange, isAodDirty, isSavingAod,
+  onAodReset, onAodSave, aodSaveStatus,
+}: Props) {
   const [search, setSearch]     = useState('');
-  const validInitial = (['homepage', 'menus', 'aod'] as string[]).includes(initialSection ?? '') ? initialSection as NavItem : 'homepage';
+  const validInitial = (['homepage', 'menus', 'aod', 'variables'] as string[]).includes(initialSection ?? '') ? initialSection as NavItem : 'homepage';
   const [activeNav, setActiveNav] = useState<NavItem>(validInitial);
+
+  // AOD variable overrides (STOP_APPS_UNUSED_AFTER_HRS saved via /api/settings/variables)
+  const [aodVarKey]                     = useState('STOP_APPS_UNUSED_AFTER_HRS');
+  const [aodVarOverride, setAodVarOverride] = useState<string>(''); // current input value
+  const [isSavingAodVar, setIsSavingAodVar] = useState(false);
+
+  async function handleAodSaveWithVar() {
+    // Save the variable override first, then the AOD config
+    if (aodVarOverride !== undefined) {
+      setIsSavingAodVar(true);
+      try {
+        await fetch('/api/settings/variables', {
+          method:  'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body:    JSON.stringify({ variables: { [aodVarKey]: aodVarOverride } }),
+        });
+      } catch { /* non-fatal */ } finally {
+        setIsSavingAodVar(false);
+      }
+    }
+    onAodSave?.();
+  }
 
   const q = search.trim().toLowerCase();
   const visibleItems = NAV_ITEMS.filter(n => !q || n.label.toLowerCase().includes(q));
+
+  const isBusy = isSavingAod || isSavingAodVar;
 
   return (
     <div className="flex flex-col sm:flex-row h-full">
@@ -117,18 +157,21 @@ export default function SettingsPanel({ data, onChange, isDirty, isSaving, onRes
         {/* Action bar */}
         <div className="flex items-center gap-2 px-4 py-2 border-b border-border shrink-0">
           <span className="text-sm font-medium flex-1">
-            {activeNav === 'homepage' ? 'Homepage' : activeNav === 'menus' ? 'Menus' : 'Application on Demand'}
+            {activeNav === 'homepage' ? 'Homepage'
+              : activeNav === 'menus' ? 'Menus'
+              : activeNav === 'aod' ? 'Application on Demand'
+              : 'Variables'}
           </span>
           {activeNav === 'aod' ? (
             <>
-              <button onClick={onAodReset} disabled={!isAodDirty || isSavingAod} className={btnOutline} title="Reset">
+              <button onClick={onAodReset} disabled={!isAodDirty || isBusy} className={btnOutline} title="Reset">
                 <RotateCcw className="h-3.5 w-3.5" /><span className="hidden sm:inline"> Reset</span>
               </button>
-              <button onClick={onAodSave} disabled={!isAodDirty || isSavingAod} className={btnPrimary} title={isSavingAod ? 'Saving…' : 'Save'}>
-                <Save className="h-3.5 w-3.5" /><span className="hidden sm:inline"> {isSavingAod ? 'Saving…' : 'Save'}</span>
+              <button onClick={() => void handleAodSaveWithVar()} disabled={!isAodDirty || isBusy} className={btnPrimary} title={isBusy ? 'Saving…' : 'Save'}>
+                <Save className="h-3.5 w-3.5" /><span className="hidden sm:inline"> {isBusy ? 'Saving…' : 'Save'}</span>
               </button>
             </>
-          ) : (
+          ) : activeNav === 'variables' ? null : (
             <>
               <button onClick={onReset} disabled={!isDirty || isSaving} className={btnOutline} title="Reset">
                 <RotateCcw className="h-3.5 w-3.5" /><span className="hidden sm:inline"> Reset</span>
@@ -141,7 +184,7 @@ export default function SettingsPanel({ data, onChange, isDirty, isSaving, onRes
         </div>
 
         {/* Save status banner */}
-        {(activeNav === 'aod' ? aodSaveStatus : saveStatus) && (() => {
+        {(activeNav === 'aod' ? aodSaveStatus : activeNav !== 'variables' ? saveStatus : null) && (() => {
           const st = activeNav === 'aod' ? aodSaveStatus : saveStatus;
           return st ? (
             <div className="shrink-0 relative h-7 border-b border-border overflow-hidden">
@@ -161,7 +204,15 @@ export default function SettingsPanel({ data, onChange, isDirty, isSaving, onRes
             <MenusSection data={data} onChange={onChange} />
           )}
           {activeNav === 'aod' && (
-            <AodSection data={aodData ?? {}} onChange={onAodChange ?? (() => {})} />
+            <AodSection
+              data={aodData ?? {}}
+              onChange={onAodChange ?? (() => {})}
+              stopHrsOverride={aodVarOverride}
+              onStopHrsOverrideChange={setAodVarOverride}
+            />
+          )}
+          {activeNav === 'variables' && (
+            <VariablesSection />
           )}
         </div>
       </div>
@@ -360,13 +411,32 @@ function MenusSection({ data, onChange }: { data: SettingsData; onChange: (d: Se
 
 // ─── AOD section ──────────────────────────────────────────────────────────────
 
-function AodSection({ data, onChange }: { data: AodData; onChange: (d: AodData) => void }) {
+interface AodSectionProps {
+  data: AodData;
+  onChange: (d: AodData) => void;
+  stopHrsOverride: string;
+  onStopHrsOverrideChange: (val: string) => void;
+}
+
+function AodSection({ data, onChange, stopHrsOverride, onStopHrsOverrideChange }: AodSectionProps) {
+  const [stopHrsDefault, setStopHrsDefault] = useState<string>('');
   const patterns = data.excludeApps ?? [];
 
-  function setHours(val: string) {
-    const n = val === '' ? undefined : parseInt(val, 10);
-    onChange({ ...data, stopAppsUnusedAfterHrs: Number.isNaN(n) ? undefined : n });
-  }
+  useEffect(() => {
+    void fetch('/api/settings/variables')
+      .then(r => r.json() as Promise<{ ok: boolean; vars: VarEntry[] }>)
+      .then(({ ok, vars }) => {
+        if (!ok) return;
+        const entry = vars.find(v => v.key === 'STOP_APPS_UNUSED_AFTER_HRS');
+        if (entry) {
+          setStopHrsDefault(entry.defaultValue);
+          if (entry.settingsOverride && !stopHrsOverride) {
+            onStopHrsOverrideChange(entry.settingsOverride);
+          }
+        }
+      })
+      .catch(() => {});
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   function updatePattern(i: number, val: string) {
     const next = patterns.map((p, j) => j === i ? val : p);
@@ -391,14 +461,14 @@ function AodSection({ data, onChange }: { data: AodData; onChange: (d: AodData) 
           type="number"
           min={0}
           step={1}
-          value={data.stopAppsUnusedAfterHrs ?? ''}
-          onChange={e => setHours(e.target.value)}
-          placeholder="e.g. 8"
+          value={stopHrsOverride}
+          onChange={e => onStopHrsOverrideChange(e.target.value)}
+          placeholder={stopHrsDefault || 'e.g. 120'}
           className={inpCls}
           style={{ maxWidth: 120 }}
         />
         <p className="text-[11px] text-muted-foreground/70 mt-1">
-          Apps idle for this many hours will be stopped. Leave blank to disable auto-stop.
+          Apps idle for this many hours will be stopped. Leave blank to use the configured default{stopHrsDefault ? ` (${stopHrsDefault} hrs)` : ''}. Saved in Settings → Variables.
         </p>
       </div>
 
@@ -428,6 +498,177 @@ function AodSection({ data, onChange }: { data: AodData; onChange: (d: AodData) 
               </div>
             ))}
           </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ─── Variables section ────────────────────────────────────────────────────────
+
+function VariablesSection() {
+  const [vars, setVars] = useState<VarEntry[] | null>(null);
+  const [overrides, setOverrides] = useState<Record<string, string>>({});
+  const [shown, setShown] = useState<Set<string>>(new Set());
+  const [isSaving, setIsSaving] = useState(false);
+  const [saveStatus, setSaveStatus] = useState<{ ok: boolean; message: string } | null>(null);
+  const timerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+
+  useEffect(() => {
+    void fetch('/api/settings/variables')
+      .then(r => r.json() as Promise<{ ok: boolean; vars: VarEntry[] }>)
+      .then(({ ok, vars: v }) => {
+        if (!ok) return;
+        setVars(v);
+        const initial: Record<string, string> = {};
+        for (const entry of v) {
+          if (!entry.readonly) initial[entry.key] = entry.settingsOverride;
+        }
+        setOverrides(initial);
+      })
+      .catch(() => {});
+  }, []);
+
+  function toggleShow(key: string) {
+    setShown(prev => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key); else next.add(key);
+      return next;
+    });
+  }
+
+  async function handleSave() {
+    if (!vars) return;
+    setIsSaving(true);
+    clearTimeout(timerRef.current);
+    try {
+      // Build payload: all non-readonly entries (empty string = remove override)
+      const payload: Record<string, string> = {};
+      for (const entry of vars) {
+        if (entry.readonly) continue;
+        payload[entry.key] = overrides[entry.key] ?? '';
+      }
+      const res  = await fetch('/api/settings/variables', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ variables: payload }),
+      });
+      const json = await res.json() as { ok: boolean; error?: string };
+      if (!json.ok) throw new Error(json.error ?? 'Save failed');
+      setSaveStatus({ ok: true, message: 'Variables saved' });
+      timerRef.current = setTimeout(() => setSaveStatus(null), 4000);
+    } catch (err) {
+      setSaveStatus({ ok: false, message: err instanceof Error ? err.message : 'Save failed' });
+    } finally {
+      setIsSaving(false);
+    }
+  }
+
+  if (!vars) {
+    return <div className="flex h-full items-center justify-center text-sm text-muted-foreground">Loading…</div>;
+  }
+
+  return (
+    <div className="p-4 flex flex-col gap-4 max-w-4xl">
+      <p className="text-xs text-muted-foreground">
+        Override runtime variables. Overrides are stored in <code className="font-mono bg-muted/40 px-1 rounded">settings.json</code> and take effect immediately (highest priority over env vars and config.json).
+      </p>
+
+      <div className="overflow-x-auto">
+        <table className="w-full text-xs border-collapse">
+          <thead>
+            <tr className="border-b border-border">
+              <th className="text-left py-2 pr-3 font-medium text-muted-foreground w-48">Variable</th>
+              <th className="text-left py-2 pr-3 font-medium text-muted-foreground w-48">Default Value</th>
+              <th className="text-left py-2 font-medium text-muted-foreground">Override</th>
+            </tr>
+          </thead>
+          <tbody>
+            {vars.map(entry => {
+              const showVal = shown.has(entry.key);
+              const isReadonly = entry.readonly;
+              return (
+                <tr key={entry.key} className="border-b border-border/30 align-top">
+                  {/* Column 1: key + description */}
+                  <td className="py-2 pr-3">
+                    <div className="font-mono text-foreground">{entry.key}</div>
+                    <div className="text-[11px] text-muted-foreground/70 mt-0.5 leading-tight">{entry.description}</div>
+                  </td>
+                  {/* Column 2: effective default + ENV badge */}
+                  <td className="py-2 pr-3">
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      <span className={`font-mono break-all ${entry.defaultValue ? 'text-muted-foreground' : 'text-muted-foreground/40 italic'}`}>
+                        {entry.defaultValue || '—'}
+                      </span>
+                      {entry.isEnvOverride && entry.defaultValue && (
+                        <span className="shrink-0 text-[10px] px-1 py-0.5 rounded bg-amber-500/15 text-amber-600 dark:text-amber-400 font-medium border border-amber-500/25">
+                          ENV
+                        </span>
+                      )}
+                    </div>
+                  </td>
+                  {/* Column 3: override input */}
+                  <td className="py-2">
+                    {isReadonly ? (
+                      <div className="space-y-1">
+                        <input
+                          type="text"
+                          disabled
+                          value=""
+                          placeholder="Read-only"
+                          className={`${inpCls} opacity-40 cursor-not-allowed max-w-xs`}
+                        />
+                        <p className="text-[10px] text-muted-foreground/60">Set via environment variable or config.json</p>
+                      </div>
+                    ) : entry.sensitive ? (
+                      <div className="flex items-center gap-1 max-w-xs">
+                        <input
+                          type={showVal ? 'text' : 'password'}
+                          value={overrides[entry.key] ?? ''}
+                          onChange={e => setOverrides(prev => ({ ...prev, [entry.key]: e.target.value }))}
+                          placeholder="Leave blank to use default"
+                          className={`${inpCls} flex-1 font-mono`}
+                          autoComplete="off"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => toggleShow(entry.key)}
+                          className="p-1 text-muted-foreground hover:text-foreground transition-colors"
+                          title={showVal ? 'Hide' : 'Show'}
+                        >
+                          {showVal ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+                        </button>
+                      </div>
+                    ) : (
+                      <input
+                        type="text"
+                        value={overrides[entry.key] ?? ''}
+                        onChange={e => setOverrides(prev => ({ ...prev, [entry.key]: e.target.value }))}
+                        placeholder="Leave blank to use default"
+                        className={`${inpCls} max-w-xs font-mono`}
+                      />
+                    )}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+
+      <div className="flex items-center gap-3">
+        <button
+          onClick={() => void handleSave()}
+          disabled={isSaving}
+          className={btnPrimary}
+        >
+          <Save className="h-3.5 w-3.5" />
+          {isSaving ? 'Saving…' : 'Save Variables'}
+        </button>
+        {saveStatus && (
+          <span className={`text-xs ${saveStatus.ok ? 'text-green-600 dark:text-green-400' : 'text-destructive'}`}>
+            {saveStatus.message}
+          </span>
         )}
       </div>
     </div>

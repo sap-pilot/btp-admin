@@ -22,6 +22,9 @@ import aodRouter, { aodProxyHandler } from './routes/aod.js';
 import appsRouter from './routes/apps.js';
 import { startAppsScheduler, stopAppsScheduler } from './services/appService.js';
 import { initRequestLog, mergeAccessLogFromSync } from './services/aodAnalyticsService.js';
+import { warmSettingsVarsCache } from './services/variablesService.js';
+import { registerSettingsVarsChangedCallback } from './services/settingsService.js';
+import { resetCfLoginCache } from './services/cfLoginService.js';
 import { requireSessionGlobal } from './middleware/requireAuth.js';
 import { errorHandler } from './middleware/errorHandler.js';
 import { compress } from './middleware/compress.js';
@@ -33,6 +36,10 @@ app.use(express.json({ limit: '5mb' }));
 
 const cfg = loadConfig();
 logger.info({ configFile: config.CONFIG_FILE, services: cfg.services.length }, 'Config initialized');
+
+// Register settings-change callbacks (CF login cache + apps scheduler)
+registerSettingsVarsChangedCallback(resetCfLoginCache);
+registerSettingsVarsChangedCallback(startAppsScheduler);
 
 app.use('/health', healthRouter);
 app.use(authRouter);
@@ -71,6 +78,7 @@ const server = app.listen(config.PORT, () => {
   void refreshLastUpdated();
   void initGeo();
   void initRequestLog();
+  void warmSettingsVarsCache().then(() => { logger.debug('Settings vars cache warmed'); });
   registerOnAccessLogSynced(saPaths => {
     for (const key of saPaths) {
       const slash = key.indexOf('/');

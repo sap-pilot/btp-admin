@@ -6,6 +6,7 @@ import { notifyCallbacks } from './syncService.js';
 import { emit } from './liveEvents.js';
 import { appendConfigChangelog } from './configChangelogService.js';
 import { touchLastUpdated } from './lastUpdatedService.js';
+import { updateSettingsVarsCache } from './variablesService.js';
 
 const CONFIG_DIR     = join(config.LOCAL_STORE_DIR, 'conf');
 const SETTINGS_PATH  = join(CONFIG_DIR, 'settings.json');
@@ -20,12 +21,33 @@ export interface SettingsData {
     mainSubscriptions: MainSubscription[];
   };
   menus: MenuEntry[];
+  variables?: Record<string, string>;
+}
+
+const varsChangedCallbacks: Array<() => void> = [];
+
+export function registerSettingsVarsChangedCallback(fn: () => void): void {
+  varsChangedCallbacks.push(fn);
+}
+
+function notifyVarsChanged(): void {
+  for (const fn of varsChangedCallbacks) fn();
 }
 
 function parseSettings(raw: string): SettingsData {
   const parsed = JSON.parse(raw) as Record<string, unknown>;
   const hp = (parsed['homepage'] ?? {}) as Record<string, unknown>;
   const cockpit = (hp['cockpit'] ?? {}) as Record<string, unknown>;
+
+  const rawVars = parsed['variables'];
+  const variables: Record<string, string> | undefined = (rawVars && typeof rawVars === 'object' && !Array.isArray(rawVars))
+    ? Object.fromEntries(
+        Object.entries(rawVars as Record<string, unknown>)
+          .filter(([, v]) => typeof v === 'string' && v !== '')
+          .map(([k, v]) => [k, v as string]),
+      )
+    : undefined;
+
   return {
     homepage: {
       cockpit: {
@@ -55,6 +77,7 @@ function parseSettings(raw: string): SettingsData {
           return { text: String(menu['text'] ?? ''), icon: String(menu['icon'] ?? ''), submenus };
         })
       : [],
+    ...(variables !== undefined && Object.keys(variables).length > 0 ? { variables } : {}),
   };
 }
 
@@ -75,6 +98,8 @@ export async function readSettings(): Promise<SettingsData> {
 export async function writeSettings(data: SettingsData): Promise<void> {
   await mkdir(CONFIG_DIR, { recursive: true });
   await writeFile(SETTINGS_PATH, JSON.stringify(data, null, 2), 'utf-8');
+  updateSettingsVarsCache(data.variables ?? {});
+  notifyVarsChanged();
   touchLastUpdated();
   notifyCallbacks();
   emit('config', { ts: Date.now() });
@@ -86,6 +111,21 @@ export async function settingsFileExists(): Promise<boolean> {
 
 function diffSettings(before: SettingsData, after: SettingsData): string {
   const lines: string[] = [];
+
+  // ── Variables ─────────────────────────────────────────────────────────────────
+  const bv = before.variables ?? {};
+  const av = after.variables ?? {};
+  const allVarKeys = new Set([...Object.keys(bv), ...Object.keys(av)]);
+  for (const k of allVarKeys) {
+    const bVal = bv[k] ?? '';
+    const aVal = av[k] ?? '';
+    if (bVal !== aVal) {
+      const SENSITIVE = new Set(['CF_PASSWORD', 'MONITOR_PASSWORD', 'SYNC_KEY']);
+      const bShow = SENSITIVE.has(k) && bVal ? '****' : bVal || '(unset)';
+      const aShow = SENSITIVE.has(k) && aVal ? '****' : aVal || '(unset)';
+      lines.push(`~ variables.${k}: ${bShow} → ${aShow}`);
+    }
+  }
 
   // ── Cockpit ───────────────────────────────────────────────────────────────
   const bc = before.homepage.cockpit;
