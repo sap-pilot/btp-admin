@@ -45,6 +45,7 @@ export interface DestTabProps {
   onToggleCompare?:    (d: SelectedDest) => void;
   onOpenCompare?:      (dests: SelectedDest[]) => void;
   onDestDataChange?:   () => void;
+  autoRefreshTrigger?: number;
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -364,7 +365,7 @@ function getImportTargets(
 
 // ─── Main component ───────────────────────────────────────────────────────────
 
-export default function DestTab({ sa, allNames = [], initialName, initialTab, initialSpaceName, initialInstName, initialInstGuid, selectedDests, onToggleCompare, onOpenCompare, onDestDataChange }: DestTabProps) {
+export default function DestTab({ sa, allNames = [], initialName, initialTab, initialSpaceName, initialInstName, initialInstGuid, selectedDests, onToggleCompare, onOpenCompare, onDestDataChange, autoRefreshTrigger }: DestTabProps) {
   const auth     = useAuth();
   const username = auth.email || auth.firstName || 'admin';
 
@@ -537,7 +538,7 @@ export default function DestTab({ sa, allNames = [], initialName, initialTab, in
   const [isLoadingChangelog, setIsLoadingChangelog] = useState(false);
 
   // Per-subaccount refresh progress
-  type SubProgress = { type: 'refreshing' | 'done' | 'error'; created?: number; updated?: number; deleted?: number; received?: number; errors?: string[]; current?: number; total?: number; progressName?: string };
+  type SubProgress = { type: 'refreshing' | 'done' | 'error'; created?: number; updated?: number; deleted?: number; received?: number; aodInstalled?: number; aodUninstalled?: number; errors?: string[]; current?: number; total?: number; progressName?: string };
   const [subProgress, setSubProgress] = useState<SubProgress | null>(null);
   const subProgressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -988,7 +989,7 @@ export default function DestTab({ sa, allNames = [], initialName, initialTab, in
 
     try {
       const res  = await fetch(`/api/destinations/${enc(sa.region)}/${enc(sa.subdomain)}?force=1`);
-      const json = await res.json() as { ok: boolean; names: string[]; refreshed: boolean; errors: string[]; created?: number; updated?: number; deleted?: number; received?: number };
+      const json = await res.json() as { ok: boolean; names: string[]; refreshed: boolean; errors: string[]; created?: number; updated?: number; deleted?: number; received?: number; aodInstalled?: number; aodUninstalled?: number };
       if (!res.ok || !json.ok) {
         setSubProgress({ type: 'error', errors: json.errors?.length ? json.errors : [`HTTP ${res.status}`] });
         return;
@@ -1001,8 +1002,8 @@ export default function DestTab({ sa, allNames = [], initialName, initialTab, in
       if (selectedName) await loadDest(selectedName);
       if (activeTab === 'changelog' && selectedName) await loadChangelog(selectedName);
       if (hasSpaceDests) void loadAllSpaceInstances(true);
-      setSubProgress({ type: 'done', created: json.created ?? 0, updated: json.updated ?? 0, deleted: json.deleted ?? 0, received: json.received });
-      subProgressTimerRef.current = setTimeout(() => setSubProgress(null), 3000);
+      setSubProgress({ type: 'done', created: json.created ?? 0, updated: json.updated ?? 0, deleted: json.deleted ?? 0, received: json.received, aodInstalled: json.aodInstalled, aodUninstalled: json.aodUninstalled });
+      subProgressTimerRef.current = setTimeout(() => setSubProgress(null), 6000);
       onDestDataChange?.();
     } catch (err) {
       setSubProgress({ type: 'error', errors: [String(err)] });
@@ -1010,6 +1011,11 @@ export default function DestTab({ sa, allNames = [], initialName, initialTab, in
       sse.close();
     }
   }
+
+  useEffect(() => {
+    if (autoRefreshTrigger) void handleRefresh();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoRefreshTrigger]);
 
   const tabCls = (active: boolean) =>
     `px-4 py-2 text-xs transition-colors border-b-2 shrink-0 font-medium ${
@@ -1134,11 +1140,15 @@ export default function DestTab({ sa, allNames = [], initialName, initialTab, in
             {subProgress.type === 'refreshing' && subProgress.total != null
               ? `Refreshing ${subProgress.current ?? 0}/${subProgress.total} — ${subProgress.progressName ?? '…'}`
               : subProgress.type === 'refreshing' && 'Refreshing subaccount destinations…'}
-            {subProgress.type === 'done' && (
-              (subProgress.created ?? 0) === 0 && (subProgress.updated ?? 0) === 0 && (subProgress.deleted ?? 0) === 0
+            {subProgress.type === 'done' && (() => {
+              const base = (subProgress.created ?? 0) === 0 && (subProgress.updated ?? 0) === 0 && (subProgress.deleted ?? 0) === 0
                 ? 'Refreshed — no change'
-                : `Refreshed — created ${subProgress.created ?? 0}, updated ${subProgress.updated ?? 0}, deleted ${subProgress.deleted ?? 0} destinations since last check`
-            )}
+                : `Refreshed — created ${subProgress.created ?? 0}, updated ${subProgress.updated ?? 0}, deleted ${subProgress.deleted ?? 0} destinations`;
+              const aodParts: string[] = [];
+              if ((subProgress.aodInstalled ?? 0) > 0)   aodParts.push(`${subProgress.aodInstalled} AOD installed`);
+              if ((subProgress.aodUninstalled ?? 0) > 0) aodParts.push(`${subProgress.aodUninstalled} AOD uninstalled`);
+              return aodParts.length ? `${base} (${aodParts.join(', ')})` : base;
+            })()}
             {subProgress.type === 'error' && (subProgress.errors ?? []).join('; ')}
           </span>
           {subProgress.type !== 'refreshing' && (

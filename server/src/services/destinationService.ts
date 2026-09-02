@@ -777,6 +777,8 @@ export interface RefreshResult {
   deleted:            number;
   errors:             string[];
   skipped?:           boolean;
+  aodInstalled?:      number;
+  aodUninstalled?:    number;
 }
 
 interface DestChange { region: string; subdomain: string; name: string; action: 'created' | 'updated' | 'deleted'; spaceName?: string; instanceName?: string; instanceGuid?: string }
@@ -1399,19 +1401,21 @@ export async function refreshSubaccountDestinations(region: string, subdomain: s
     logger.warn({ errors: spaceResult.errors }, 'Some space destination refreshes failed during subaccount refresh');
   }
 
-  return { refreshed, received, created: created + spaceResult.created, updated: updated + spaceResult.updated, deleted: deleted + spaceResult.deleted, errors: [...issues, ...spaceResult.errors] };
+  return { refreshed, received, created: created + spaceResult.created, updated: updated + spaceResult.updated, deleted: deleted + spaceResult.deleted, errors: [...issues, ...spaceResult.errors], aodInstalled: spaceResult.aodInstalled, aodUninstalled: spaceResult.aodUninstalled };
 }
 
 // ─── Public: proactive subaccount destination load ────────────────────────────
 
 export interface SubaccountDestNamesResult {
-  names:     string[];
-  refreshed: boolean;
-  errors:    string[];
-  created?:  number;
-  updated?:  number;
-  deleted?:  number;
-  received?: number;
+  names:           string[];
+  refreshed:       boolean;
+  errors:          string[];
+  created?:        number;
+  updated?:        number;
+  deleted?:        number;
+  received?:       number;
+  aodInstalled?:   number;
+  aodUninstalled?: number;
 }
 
 /**
@@ -1436,7 +1440,7 @@ export async function getSubaccountDestinationNames(
     logger.info({ location: key, force, ageSec: Math.round((Date.now() - last) / 1000) }, 'Proactive destination refresh');
     const result = await refreshSubaccountDestinations(region, subdomain, username, 'auto');
     const names  = await getLocalDestinationNames(region, subdomain);
-    return { names, refreshed: true, errors: result.errors, created: result.created, updated: result.updated, deleted: result.deleted, received: result.received };
+    return { names, refreshed: true, errors: result.errors, created: result.created, updated: result.updated, deleted: result.deleted, received: result.received, aodInstalled: result.aodInstalled, aodUninstalled: result.aodUninstalled };
   }
 
   const names = await getLocalDestinationNames(region, subdomain);
@@ -1630,7 +1634,7 @@ export async function refreshSpaceDestinations(
   onInstProgress?:     (current: number, total: number, label: string) => void,
   routesTable:         Map<string, string> = new Map(),
   skipGlobalChangelog: boolean = false,
-): Promise<{ created: number; updated: number; deleted: number; errors: string[] }> {
+): Promise<{ created: number; updated: number; deleted: number; errors: string[]; aodInstalled: number; aodUninstalled: number }> {
   // Collect all (region, subdomain, spaceId, spaceName) tuples with manageDest=true
   type SpaceTodo = { region: string; subdomain: string; spaceId: string; spaceName: string; orgId: string; aod?: boolean };
   const todos: SpaceTodo[] = [];
@@ -1640,10 +1644,10 @@ export async function refreshSpaceDestinations(
       if (sp.manageDest) todos.push({ region: sa.region, subdomain: sa.subdomain, spaceId: sp.spaceId, spaceName: sp.spaceName, orgId: sa.org.orgId, aod: sp.aod });
     }
   }
-  if (todos.length === 0) return { created: 0, updated: 0, deleted: 0, errors: [] };
+  if (todos.length === 0) return { created: 0, updated: 0, deleted: 0, errors: [], aodInstalled: 0, aodUninstalled: 0 };
 
   const issues: string[] = [];
-  let created = 0, updated = 0, deleted = 0, done = 0;
+  let created = 0, updated = 0, deleted = 0, done = 0, aodInstalledCount = 0, aodUninstalledCount = 0;
 
   const { orgs: keyStore, planGuids: instancePlanGuids } = await loadKeyStore();
   const tokenStore    = await loadTokenStore();
@@ -1765,7 +1769,7 @@ export async function refreshSpaceDestinations(
 
   if (spaceInstances.length === 0) {
     logger.info({ todos: todos.length }, 'No destination service instances found in spaces with manageDest=true');
-    return { created, updated, deleted, errors: issues };
+    return { created, updated, deleted, errors: issues, aodInstalled: 0, aodUninstalled: 0 };
   }
 
   let spaceReceived = 0;
@@ -1896,8 +1900,10 @@ export async function refreshSpaceDestinations(
             // Proxy-URL update: only seed if absent. Uninstall: leave lastAccessed alone.
             const laMode = (!wasAod && isAod) ? 'always' : aodInstalled ? 'ifEmpty' : 'skip';
             void updateAppFileAod(appGuid, inst.region, inst.subdomain, destUrl, aodInstalled, laMode);
-            // Write AOD-specific changelog entries
+            // Write AOD-specific changelog entries and tally install/uninstall counts
             const aodAction = (!wasAod && isAod) ? 'installed' : (wasAod && !isAod) ? 'uninstalled' : 'updated';
+            if (aodAction === 'installed')   aodInstalledCount++;
+            if (aodAction === 'uninstalled') aodUninstalledCount++;
             void appendAodDestChangelog(instanceDir, destName, dest, updated, aodAction, username, inst);
           } else if (inst.aod) {
             // No change — dest may already be AOD-installed. Sync appGuid.json.aod and lastAccessed.
@@ -1944,7 +1950,7 @@ export async function refreshSpaceDestinations(
     emit('dest', { ts: Date.now() });
   }
 
-  return { created, updated, deleted, errors: issues };
+  return { created, updated, deleted, errors: issues, aodInstalled: aodInstalledCount, aodUninstalled: aodUninstalledCount };
 }
 
 export async function saveInstanceDestinationEntry(

@@ -190,6 +190,8 @@ export default function SubaccountModal({ sa, onClose, cockpit, cockpitMenu, isA
   const [spaceAodsOrig, setSpaceAodsOrig]   = useState<Map<string, boolean>>(new Map());
   const [spaceSaving, setSpaceSaving]       = useState(false);
   const [spaceEditing, setSpaceEditing]     = useState(false);
+  const [aodRefreshPending, setAodRefreshPending] = useState(false);
+  const [destAutoRefresh, setDestAutoRefresh]     = useState(0);
   const [overviewSplit, setOverviewSplit]   = useState(40);
   const [servicesSplit, setServicesSplit]   = useState(40);
 
@@ -295,6 +297,7 @@ export default function SubaccountModal({ sa, onClose, cockpit, cockpitMenu, isA
 
   async function handleSpaceSave() {
     if (!sa || !onSpaceSave) return;
+    const aodChanged = [...spaceAods.entries()].some(([id, v]) => spaceAodsOrig.get(id) !== v);
     setSpaceSaving(true);
     try {
       await onSpaceSave(sa.region, sa.subdomain, [...spaceDests.entries()].map(([spaceId, manageDest]) => ({
@@ -303,9 +306,17 @@ export default function SubaccountModal({ sa, onClose, cockpit, cockpitMenu, isA
       setSpaceDestsOrig(new Map(spaceDests));
       setSpaceAodsOrig(new Map(spaceAods));
       setSpaceEditing(false);
+      if (aodChanged) setAodRefreshPending(true);
     } finally {
       setSpaceSaving(false);
     }
+  }
+
+  function handleAodRefreshConfirm() {
+    setAodRefreshPending(false);
+    setMountedTabs(prev => { const next = new Set(prev); next.add('destinations'); return next; });
+    setActiveTab('destinations');
+    setDestAutoRefresh(prev => prev + 1);
   }
 
   const btnOutline = 'inline-flex items-center gap-1 px-2 py-1 rounded text-xs font-medium border border-border hover:bg-accent hover:text-accent-foreground transition-colors disabled:opacity-50 disabled:cursor-not-allowed';
@@ -947,6 +958,7 @@ export default function SubaccountModal({ sa, onClose, cockpit, cockpitMenu, isA
                       onToggleCompare={onToggleCompare}
                       onOpenCompare={onOpenCompare}
                       onDestDataChange={onDestDataChange}
+                      autoRefreshTrigger={destAutoRefresh}
                     />
                   </div>
                 )}
@@ -977,6 +989,32 @@ export default function SubaccountModal({ sa, onClose, cockpit, cockpitMenu, isA
                 )}
 
               </div>
+
+              {/* AOD refresh confirmation dialog */}
+              {aodRefreshPending && (
+                <div className="absolute inset-0 z-10 flex items-center justify-center bg-background/80 backdrop-blur-sm rounded-lg">
+                  <div className="bg-background border border-border rounded-lg p-6 max-w-sm w-full shadow-xl mx-4">
+                    <h3 className="text-sm font-semibold mb-2">Refresh Destinations?</h3>
+                    <p className="text-xs text-muted-foreground mb-5">
+                      AOD option has been changed. In order to install/uninstall the AOD proxy, the subaccount and instance destinations need to be refreshed. Proceed?
+                    </p>
+                    <div className="flex justify-end gap-2">
+                      <button
+                        onClick={() => setAodRefreshPending(false)}
+                        className="inline-flex items-center px-3 py-1.5 rounded text-xs font-medium border border-border hover:bg-accent hover:text-accent-foreground transition-colors"
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        onClick={handleAodRefreshConfirm}
+                        className="inline-flex items-center px-3 py-1.5 rounded text-xs font-medium bg-primary text-primary-foreground hover:bg-primary/90 transition-colors"
+                      >
+                        Refresh Destinations
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
             </>
           )}
         </DialogPrimitive.Content>
