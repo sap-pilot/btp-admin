@@ -320,13 +320,22 @@ export default function SubaccountModal({ sa, onClose, cockpit, cockpitMenu, isA
     || [...spaceAods.entries()].some(([id, v]) => spaceAodsOrig.get(id) !== v);
 
   async function handleSpaceSave() {
-    if (!sa || !onSpaceSave) return;
+    if (!sa) return;
     const aodChanged = [...spaceAods.entries()].some(([id, v]) => spaceAodsOrig.get(id) !== v);
+    const spaces = [...spaceDests.entries()].map(([spaceId, manageDest]) => ({
+      spaceId, manageDest, aod: spaceAods.get(spaceId) ?? false,
+    }));
     setSpaceSaving(true);
     try {
-      await onSpaceSave(sa.region, sa.subdomain, [...spaceDests.entries()].map(([spaceId, manageDest]) => ({
-        spaceId, manageDest, aod: spaceAods.get(spaceId) ?? false,
-      })));
+      if (onSpaceSave) {
+        await onSpaceSave(sa.region, sa.subdomain, spaces);
+      } else {
+        const res = await fetch(
+          `/api/config/subaccounts/${encodeURIComponent(sa.region)}/${encodeURIComponent(sa.subdomain)}/spaces`,
+          { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ spaces }) },
+        );
+        if (!res.ok) throw new Error(`Failed to save: ${res.status}`);
+      }
       setSpaceDestsOrig(new Map(spaceDests));
       setSpaceAodsOrig(new Map(spaceAods));
       setSpaceEditing(false);
@@ -342,6 +351,13 @@ export default function SubaccountModal({ sa, onClose, cockpit, cockpitMenu, isA
     setActiveTab('destinations');
     setDestAutoRefresh(prev => prev + 1);
   }
+
+  // Reset destAutoRefresh to 0 shortly after it fires so future DestTab remounts don't re-trigger
+  useEffect(() => {
+    if (destAutoRefresh === 0) return;
+    const id = setTimeout(() => setDestAutoRefresh(0), 200);
+    return () => clearTimeout(id);
+  }, [destAutoRefresh]);
 
   const btnOutline = 'inline-flex items-center gap-1 px-2 py-1 rounded text-xs font-medium border border-border hover:bg-accent hover:text-accent-foreground transition-colors disabled:opacity-50 disabled:cursor-not-allowed';
 
@@ -626,7 +642,7 @@ export default function SubaccountModal({ sa, onClose, cockpit, cockpitMenu, isA
                             <>
                               <button
                                 className={btnOutline}
-                                disabled={!spaceDestsDirty || spaceSaving || !onSpaceSave}
+                                disabled={!spaceDestsDirty || spaceSaving}
                                 onClick={() => void handleSpaceSave()}
                               >
                                 <Save className="h-3 w-3" /> {spaceSaving ? 'Saving…' : 'Save'}
