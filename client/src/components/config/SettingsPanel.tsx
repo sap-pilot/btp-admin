@@ -79,31 +79,97 @@ export default function SettingsPanel({
   const [activeNav, setActiveNav] = useState<NavItem>(validInitial);
 
   // AOD variable overrides (STOP_APPS_UNUSED_AFTER_HRS saved via /api/settings/variables)
-  const [aodVarKey]                     = useState('STOP_APPS_UNUSED_AFTER_HRS');
-  const [aodVarOverride, setAodVarOverride] = useState<string>(''); // current input value
+  const [aodVarOverride, setAodVarOverride] = useState<string>('');
+  const [aodVarInitial, setAodVarInitial]   = useState<string>('');
+  const [stopHrsDefault, setStopHrsDefault] = useState<string>('');
   const [isSavingAodVar, setIsSavingAodVar] = useState(false);
 
+  // Variables section state (lifted from VariablesSection)
+  const [vars, setVars]               = useState<VarEntry[] | null>(null);
+  const [overrides, setOverrides]     = useState<Record<string, string>>({});
+  const [shown, setShown]             = useState<Set<string>>(new Set());
+  const [isSavingVars, setIsSavingVars] = useState(false);
+  const [varsSaveStatus, setVarsSaveStatus] = useState<{ ok: boolean; message: string } | null>(null);
+  const varsSaveTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+
+  const isAodVarDirty = aodVarOverride !== aodVarInitial;
+
+  // Single fetch shared between AOD placeholder and Variables table
+  useEffect(() => {
+    void fetch('/api/settings/variables')
+      .then(r => r.json() as Promise<{ ok: boolean; vars: VarEntry[] }>)
+      .then(({ ok, vars: v }) => {
+        if (!ok) return;
+        setVars(v);
+        const init: Record<string, string> = {};
+        for (const entry of v) {
+          if (!entry.readonly) init[entry.key] = entry.settingsOverride;
+        }
+        setOverrides(init);
+        const stopEntry = v.find(e => e.key === 'STOP_APPS_UNUSED_AFTER_HRS');
+        if (stopEntry) {
+          setStopHrsDefault(stopEntry.defaultValue);
+          const ov = stopEntry.settingsOverride || '';
+          setAodVarOverride(ov);
+          setAodVarInitial(ov);
+        }
+      })
+      .catch(() => {});
+  }, []);
+
   async function handleAodSaveWithVar() {
-    // Save the variable override first, then the AOD config
-    if (aodVarOverride !== undefined) {
-      setIsSavingAodVar(true);
-      try {
-        await fetch('/api/settings/variables', {
-          method:  'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body:    JSON.stringify({ variables: { [aodVarKey]: aodVarOverride } }),
-        });
-      } catch { /* non-fatal */ } finally {
-        setIsSavingAodVar(false);
-      }
+    setIsSavingAodVar(true);
+    try {
+      await fetch('/api/settings/variables', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ variables: { STOP_APPS_UNUSED_AFTER_HRS: aodVarOverride } }),
+      });
+      setAodVarInitial(aodVarOverride);
+    } catch { /* non-fatal */ } finally {
+      setIsSavingAodVar(false);
     }
     onAodSave?.();
+  }
+
+  async function handleVarsSave() {
+    if (!vars) return;
+    setIsSavingVars(true);
+    clearTimeout(varsSaveTimerRef.current);
+    try {
+      const payload: Record<string, string> = {};
+      for (const entry of vars) {
+        if (entry.readonly) continue;
+        payload[entry.key] = overrides[entry.key] ?? '';
+      }
+      const res  = await fetch('/api/settings/variables', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ variables: payload }),
+      });
+      const json = await res.json() as { ok: boolean; error?: string };
+      if (!json.ok) throw new Error(json.error ?? 'Save failed');
+      setVarsSaveStatus({ ok: true, message: 'Variables saved' });
+      varsSaveTimerRef.current = setTimeout(() => setVarsSaveStatus(null), 4000);
+    } catch (err) {
+      setVarsSaveStatus({ ok: false, message: err instanceof Error ? err.message : 'Save failed' });
+    } finally {
+      setIsSavingVars(false);
+    }
+  }
+
+  function toggleVarShow(key: string) {
+    setShown(prev => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key); else next.add(key);
+      return next;
+    });
   }
 
   const q = search.trim().toLowerCase();
   const visibleItems = NAV_ITEMS.filter(n => !q || n.label.toLowerCase().includes(q));
 
-  const isBusy = isSavingAod || isSavingAodVar;
+  const isBusy = isSavingAod || isSavingAodVar || isSavingVars;
 
   return (
     <div className="flex flex-col sm:flex-row h-full">
@@ -167,11 +233,15 @@ export default function SettingsPanel({
               <button onClick={onAodReset} disabled={!isAodDirty || isBusy} className={btnOutline} title="Reset">
                 <RotateCcw className="h-3.5 w-3.5" /><span className="hidden sm:inline"> Reset</span>
               </button>
-              <button onClick={() => void handleAodSaveWithVar()} disabled={!isAodDirty || isBusy} className={btnPrimary} title={isBusy ? 'Saving…' : 'Save'}>
+              <button onClick={() => void handleAodSaveWithVar()} disabled={(!isAodDirty && !isAodVarDirty) || isBusy} className={btnPrimary} title={isBusy ? 'Saving…' : 'Save'}>
                 <Save className="h-3.5 w-3.5" /><span className="hidden sm:inline"> {isBusy ? 'Saving…' : 'Save'}</span>
               </button>
             </>
-          ) : activeNav === 'variables' ? null : (
+          ) : activeNav === 'variables' ? (
+            <button onClick={() => void handleVarsSave()} disabled={isSavingVars || !vars} className={btnPrimary} title={isSavingVars ? 'Saving…' : 'Save'}>
+              <Save className="h-3.5 w-3.5" /><span className="hidden sm:inline"> {isSavingVars ? 'Saving…' : 'Save'}</span>
+            </button>
+          ) : (
             <>
               <button onClick={onReset} disabled={!isDirty || isSaving} className={btnOutline} title="Reset">
                 <RotateCcw className="h-3.5 w-3.5" /><span className="hidden sm:inline"> Reset</span>
@@ -184,8 +254,8 @@ export default function SettingsPanel({
         </div>
 
         {/* Save status banner */}
-        {(activeNav === 'aod' ? aodSaveStatus : activeNav !== 'variables' ? saveStatus : null) && (() => {
-          const st = activeNav === 'aod' ? aodSaveStatus : saveStatus;
+        {(activeNav === 'aod' ? aodSaveStatus : activeNav === 'variables' ? varsSaveStatus : saveStatus) && (() => {
+          const st = activeNav === 'aod' ? aodSaveStatus : activeNav === 'variables' ? varsSaveStatus : saveStatus;
           return st ? (
             <div className="shrink-0 relative h-7 border-b border-border overflow-hidden">
               <div className={`absolute inset-y-0 left-0 w-full ${st.ok ? 'bg-green-500/50' : 'bg-destructive/50'}`} />
@@ -209,10 +279,17 @@ export default function SettingsPanel({
               onChange={onAodChange ?? (() => {})}
               stopHrsOverride={aodVarOverride}
               onStopHrsOverrideChange={setAodVarOverride}
+              stopHrsDefault={stopHrsDefault}
             />
           )}
           {activeNav === 'variables' && (
-            <VariablesSection />
+            <VariablesSection
+              vars={vars}
+              overrides={overrides}
+              onOverrideChange={(key, val) => setOverrides(prev => ({ ...prev, [key]: val }))}
+              shown={shown}
+              onToggleShow={toggleVarShow}
+            />
           )}
         </div>
       </div>
@@ -416,27 +493,11 @@ interface AodSectionProps {
   onChange: (d: AodData) => void;
   stopHrsOverride: string;
   onStopHrsOverrideChange: (val: string) => void;
+  stopHrsDefault: string;
 }
 
-function AodSection({ data, onChange, stopHrsOverride, onStopHrsOverrideChange }: AodSectionProps) {
-  const [stopHrsDefault, setStopHrsDefault] = useState<string>('');
+function AodSection({ data, onChange, stopHrsOverride, onStopHrsOverrideChange, stopHrsDefault }: AodSectionProps) {
   const patterns = data.excludeApps ?? [];
-
-  useEffect(() => {
-    void fetch('/api/settings/variables')
-      .then(r => r.json() as Promise<{ ok: boolean; vars: VarEntry[] }>)
-      .then(({ ok, vars }) => {
-        if (!ok) return;
-        const entry = vars.find(v => v.key === 'STOP_APPS_UNUSED_AFTER_HRS');
-        if (entry) {
-          setStopHrsDefault(entry.defaultValue);
-          if (entry.settingsOverride && !stopHrsOverride) {
-            onStopHrsOverrideChange(entry.settingsOverride);
-          }
-        }
-      })
-      .catch(() => {});
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   function updatePattern(i: number, val: string) {
     const next = patterns.map((p, j) => j === i ? val : p);
@@ -506,64 +567,15 @@ function AodSection({ data, onChange, stopHrsOverride, onStopHrsOverrideChange }
 
 // ─── Variables section ────────────────────────────────────────────────────────
 
-function VariablesSection() {
-  const [vars, setVars] = useState<VarEntry[] | null>(null);
-  const [overrides, setOverrides] = useState<Record<string, string>>({});
-  const [shown, setShown] = useState<Set<string>>(new Set());
-  const [isSaving, setIsSaving] = useState(false);
-  const [saveStatus, setSaveStatus] = useState<{ ok: boolean; message: string } | null>(null);
-  const timerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+interface VariablesSectionProps {
+  vars: VarEntry[] | null;
+  overrides: Record<string, string>;
+  onOverrideChange: (key: string, val: string) => void;
+  shown: Set<string>;
+  onToggleShow: (key: string) => void;
+}
 
-  useEffect(() => {
-    void fetch('/api/settings/variables')
-      .then(r => r.json() as Promise<{ ok: boolean; vars: VarEntry[] }>)
-      .then(({ ok, vars: v }) => {
-        if (!ok) return;
-        setVars(v);
-        const initial: Record<string, string> = {};
-        for (const entry of v) {
-          if (!entry.readonly) initial[entry.key] = entry.settingsOverride;
-        }
-        setOverrides(initial);
-      })
-      .catch(() => {});
-  }, []);
-
-  function toggleShow(key: string) {
-    setShown(prev => {
-      const next = new Set(prev);
-      if (next.has(key)) next.delete(key); else next.add(key);
-      return next;
-    });
-  }
-
-  async function handleSave() {
-    if (!vars) return;
-    setIsSaving(true);
-    clearTimeout(timerRef.current);
-    try {
-      // Build payload: all non-readonly entries (empty string = remove override)
-      const payload: Record<string, string> = {};
-      for (const entry of vars) {
-        if (entry.readonly) continue;
-        payload[entry.key] = overrides[entry.key] ?? '';
-      }
-      const res  = await fetch('/api/settings/variables', {
-        method:  'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({ variables: payload }),
-      });
-      const json = await res.json() as { ok: boolean; error?: string };
-      if (!json.ok) throw new Error(json.error ?? 'Save failed');
-      setSaveStatus({ ok: true, message: 'Variables saved' });
-      timerRef.current = setTimeout(() => setSaveStatus(null), 4000);
-    } catch (err) {
-      setSaveStatus({ ok: false, message: err instanceof Error ? err.message : 'Save failed' });
-    } finally {
-      setIsSaving(false);
-    }
-  }
-
+function VariablesSection({ vars, overrides, onOverrideChange, shown, onToggleShow }: VariablesSectionProps) {
   if (!vars) {
     return <div className="flex h-full items-center justify-center text-sm text-muted-foreground">Loading…</div>;
   }
@@ -575,11 +587,16 @@ function VariablesSection() {
       </p>
 
       <div className="overflow-x-auto">
-        <table className="w-full text-xs border-collapse">
+        <table className="w-full text-xs border-collapse" style={{ tableLayout: 'fixed' }}>
+          <colgroup>
+            <col style={{ width: '25%' }} />
+            <col style={{ width: '37.5%' }} />
+            <col style={{ width: '37.5%' }} />
+          </colgroup>
           <thead>
             <tr className="border-b border-border">
-              <th className="text-left py-2 pr-3 font-medium text-muted-foreground w-48">Variable</th>
-              <th className="text-left py-2 pr-3 font-medium text-muted-foreground w-48">Default Value</th>
+              <th className="text-left py-2 pr-3 font-medium text-muted-foreground">Variable</th>
+              <th className="text-left py-2 pr-3 font-medium text-muted-foreground">Default Value</th>
               <th className="text-left py-2 font-medium text-muted-foreground">Override</th>
             </tr>
           </thead>
@@ -625,14 +642,14 @@ function VariablesSection() {
                         <input
                           type={showVal ? 'text' : 'password'}
                           value={overrides[entry.key] ?? ''}
-                          onChange={e => setOverrides(prev => ({ ...prev, [entry.key]: e.target.value }))}
+                          onChange={e => onOverrideChange(entry.key, e.target.value)}
                           placeholder="Leave blank to use default"
                           className={`${inpCls} flex-1 font-mono`}
                           autoComplete="off"
                         />
                         <button
                           type="button"
-                          onClick={() => toggleShow(entry.key)}
+                          onClick={() => onToggleShow(entry.key)}
                           className="p-1 text-muted-foreground hover:text-foreground transition-colors"
                           title={showVal ? 'Hide' : 'Show'}
                         >
@@ -643,7 +660,7 @@ function VariablesSection() {
                       <input
                         type="text"
                         value={overrides[entry.key] ?? ''}
-                        onChange={e => setOverrides(prev => ({ ...prev, [entry.key]: e.target.value }))}
+                        onChange={e => onOverrideChange(entry.key, e.target.value)}
                         placeholder="Leave blank to use default"
                         className={`${inpCls} max-w-xs font-mono`}
                       />
@@ -654,22 +671,6 @@ function VariablesSection() {
             })}
           </tbody>
         </table>
-      </div>
-
-      <div className="flex items-center gap-3">
-        <button
-          onClick={() => void handleSave()}
-          disabled={isSaving}
-          className={btnPrimary}
-        >
-          <Save className="h-3.5 w-3.5" />
-          {isSaving ? 'Saving…' : 'Save Variables'}
-        </button>
-        {saveStatus && (
-          <span className={`text-xs ${saveStatus.ok ? 'text-green-600 dark:text-green-400' : 'text-destructive'}`}>
-            {saveStatus.message}
-          </span>
-        )}
       </div>
     </div>
   );

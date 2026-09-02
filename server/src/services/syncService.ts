@@ -88,6 +88,14 @@ export function registerOnAccessLogSynced(fn: (saPaths: string[]) => void): void
   onAccessLogSynced = fn;
 }
 
+// Called when conf/settings.json is included in a synced batch so the local
+// variables cache and downstream callbacks (CF login, scheduler) can be refreshed.
+let onSettingsSynced: (() => void) | null = null;
+
+export function registerOnSettingsSynced(fn: () => void): void {
+  onSettingsSynced = fn;
+}
+
 // Called by executeSync with deduplicated SA keys when any users/{region}/{subdomain}/*
 // files are included in a sync batch — lets userService refresh per-SA cache and emit.
 let onUsersSynced: ((saPaths: string[]) => void) | null = null;
@@ -715,6 +723,9 @@ async function executeSync(
     if (updatedFolders.has('conf') || updatedFolders.has('apps')) {
       emit('config', { ts });
       void refreshLastUpdated(); // re-read file mtimes set by utimes() during sync
+    }
+    if (missing.includes('conf/settings.json') && onSettingsSynced) {
+      onSettingsSynced();
     }
     if (updatedFolders.has('apps')) {
       invalidateTopAppsCache();

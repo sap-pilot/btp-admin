@@ -23,8 +23,9 @@ import appsRouter from './routes/apps.js';
 import { startAppsScheduler, stopAppsScheduler } from './services/appService.js';
 import { initRequestLog, mergeAccessLogFromSync } from './services/aodAnalyticsService.js';
 import { warmSettingsVarsCache } from './services/variablesService.js';
-import { registerSettingsVarsChangedCallback } from './services/settingsService.js';
+import { registerSettingsVarsChangedCallback, triggerSettingsVarsChanged } from './services/settingsService.js';
 import { resetCfLoginCache } from './services/cfLoginService.js';
+import { registerOnSettingsSynced } from './services/syncService.js';
 import { requireSessionGlobal } from './middleware/requireAuth.js';
 import { errorHandler } from './middleware/errorHandler.js';
 import { compress } from './middleware/compress.js';
@@ -40,6 +41,15 @@ logger.info({ configFile: config.CONFIG_FILE, services: cfg.services.length }, '
 // Register settings-change callbacks (CF login cache + apps scheduler)
 registerSettingsVarsChangedCallback(resetCfLoginCache);
 registerSettingsVarsChangedCallback(startAppsScheduler);
+
+// When conf/settings.json arrives via remote sync, re-warm the vars cache and
+// trigger the same callbacks so credentials and job intervals take effect immediately.
+registerOnSettingsSynced(() => {
+  void warmSettingsVarsCache().then(() => {
+    logger.debug('Settings vars cache refreshed after remote sync');
+    triggerSettingsVarsChanged();
+  });
+});
 
 app.use('/health', healthRouter);
 app.use(authRouter);

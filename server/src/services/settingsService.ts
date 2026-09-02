@@ -34,6 +34,11 @@ function notifyVarsChanged(): void {
   for (const fn of varsChangedCallbacks) fn();
 }
 
+/** Call all registered vars-changed callbacks (e.g. after a remote sync rewrites settings.json). */
+export function triggerSettingsVarsChanged(): void {
+  notifyVarsChanged();
+}
+
 function parseSettings(raw: string): SettingsData {
   const parsed = JSON.parse(raw) as Record<string, unknown>;
   const hp = (parsed['homepage'] ?? {}) as Record<string, unknown>;
