@@ -6,7 +6,9 @@ import DateRangePicker from '@/components/DateRangePicker';
 import { fmtDateRange } from '@/hooks/useTimeRange';
 import type { SubaccountEntry } from '@/components/config/SubaccountsTable';
 import type { TabEntry, TabSection } from '@/components/config/TabsTable';
-import SubaccountAppsModal from './SubaccountAppsModal';
+import SubaccountDetailModal from '@/components/SubaccountModal';
+import type { CockpitMenuItem } from '@/components/home/HomepageContent';
+import { openSubaccountModal } from '@/lib/openSubaccountPopup';
 import UsageAnalyticsView from './UsageAnalyticsView';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -90,9 +92,19 @@ function fmtMB(mb: number): string {
 }
 
 function fmtTime(unixSecs: number): string {
-  return new Date(unixSecs * 1000).toLocaleTimeString(undefined, {
-    hour: '2-digit', minute: '2-digit', second: '2-digit',
-  });
+  const d = new Date(unixSecs * 1000);
+  const now = new Date();
+  const isToday = d.getFullYear() === now.getFullYear()
+    && d.getMonth() === now.getMonth()
+    && d.getDate() === now.getDate();
+  if (isToday) {
+    return d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
+  }
+  const m   = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  const hh  = String(d.getHours()).padStart(2, '0');
+  const mm  = String(d.getMinutes()).padStart(2, '0');
+  return `${m}/${day} ${hh}:${mm}`;
 }
 
 function toYMD(d: Date): string {
@@ -212,7 +224,7 @@ function InfoBlock({ label, value, sub, accent }: { label: string; value: string
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
 export default function AppsPage() {
-  const { view: viewParam }  = useParams<{ view: string }>();
+  const { view: viewParam, region: regionParam, subdomain: subdomainParam } = useParams<{ view?: string; region?: string; subdomain?: string }>();
   const navigate             = useNavigate();
   const location             = useLocation();
   const { toggle }           = useSidebar();
@@ -232,6 +244,9 @@ export default function AppsPage() {
   const [topApps, setTopApps]               = useState<SubaccountTopApps[]>([]);
   const [tabEntries, setTabEntries]         = useState<TabEntry[]>([]);
   const [saData, setSaData]                 = useState<SubaccountEntry[]>([]);
+  const [isAdmin, setIsAdmin]               = useState(false);
+  const [cockpit, setCockpit]               = useState<{ idp: string; host: string }>({ idp: '', host: '' });
+  const [cockpitMenu, setCockpitMenu]       = useState<CockpitMenuItem | null>(null);
   const [activeTab, setActiveTab]           = useState('');
 
   const [searchInput, setSearchInput]         = useState('');
@@ -240,6 +255,7 @@ export default function AppsPage() {
   const [searchResults, setSearchResults]     = useState<SubaccountTopApps[] | null>(null);
   const [modalState, setModalState]           = useState<{ region: string; subdomain: string; guid: string; spaceName: string; appName: string } | null>(null);
   const savedPath                             = useRef<string>('');
+  const deepLinkRef                           = useRef<string>('');
 
   // ── Navigation helpers ────────────────────────────────────────────────────
 
@@ -288,9 +304,15 @@ export default function AppsPage() {
     void Promise.all([
       fetch('/api/config/tabs').then(r => r.json() as Promise<{ ok: boolean; data: TabEntry[] }>),
       fetch('/api/config/subaccounts').then(r => r.json() as Promise<{ ok: boolean; data: SubaccountEntry[] }>),
-    ]).then(([tabs, sas]) => {
-      if (tabs.ok) setTabEntries(tabs.data);
-      if (sas.ok)  setSaData(sas.data);
+      fetch('/api/me').then(r => r.json() as Promise<{ isAdmin?: boolean }>),
+      fetch('/api/settings').then(r => r.json() as Promise<{ ok: boolean; data: { homepage?: { cockpit?: { idp: string; host: string } } } }>),
+      fetch('/api/config/cockpit-menu').then(r => r.json() as Promise<CockpitMenuItem | null>),
+    ]).then(([tabs, sas, me, settings, menu]) => {
+      if (tabs.ok)     setTabEntries(tabs.data);
+      if (sas.ok)      setSaData(sas.data);
+      setIsAdmin(me.isAdmin ?? false);
+      if (settings.ok) setCockpit(settings.data?.homepage?.cockpit ?? { idp: '', host: '' });
+      setCockpitMenu(menu);
     }).catch(() => {});
 
     void fetchTopApps();
@@ -403,6 +425,18 @@ export default function AppsPage() {
     setSearchResults(null);
     setCommittedSearch('');
   }
+
+  // Deep-link: /apps/:region/:subdomain — reopen modal on refresh
+  useEffect(() => {
+    if (!regionParam || !subdomainParam) { deepLinkRef.current = ''; return; }
+    const key = `${regionParam}/${subdomainParam}`;
+    if (deepLinkRef.current === key) return;
+    if (!saData.length) return;
+    const sa = saData.find(s => !s.restricted && s.region === regionParam && s.subdomain === subdomainParam);
+    if (!sa) return;
+    deepLinkRef.current = key;
+    setModalState({ region: sa.region, subdomain: sa.subdomain, guid: '', spaceName: '', appName: '' });
+  }, [regionParam, subdomainParam, saData]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Modal URL sync ────────────────────────────────────────────────────────
 
@@ -573,16 +607,16 @@ export default function AppsPage() {
           {/* View mode toggle */}
           <div className="flex h-8 rounded-md border border-input overflow-hidden text-sm">
             <button
-              onClick={() => navigateTo('all', duration)}
-              className={`px-3 transition-colors ${viewMode === 'all' ? 'bg-primary text-primary-foreground' : 'bg-background text-foreground hover:bg-accent hover:text-accent-foreground'}`}
-            >
-              Memory Usage
-            </button>
-            <button
               onClick={() => navigateTo('analytics', duration)}
-              className={`px-3 transition-colors border-l border-input ${viewMode === 'analytics' ? 'bg-primary text-primary-foreground' : 'bg-background text-foreground hover:bg-accent hover:text-accent-foreground'}`}
+              className={`px-3 transition-colors ${viewMode === 'analytics' ? 'bg-primary text-primary-foreground' : 'bg-background text-foreground hover:bg-accent hover:text-accent-foreground'}`}
             >
               Analytics
+            </button>
+            <button
+              onClick={() => navigateTo('all', duration)}
+              className={`px-3 transition-colors border-l border-input ${viewMode === 'all' ? 'bg-primary text-primary-foreground' : 'bg-background text-foreground hover:bg-accent hover:text-accent-foreground'}`}
+            >
+              Memory Usage
             </button>
           </div>
 
@@ -661,7 +695,7 @@ export default function AppsPage() {
       {/* Usage Analytics view */}
       {viewMode === 'analytics' && (
         <div className="flex-1 overflow-auto min-h-0">
-          <UsageAnalyticsView isDarkMap durationHours={durationToHours(duration)} onOpenModal={openModal} />
+          <UsageAnalyticsView isDarkMap durationHours={durationToHours(duration)} onOpenModal={(e, region, subdomain, guid, spaceName, appName) => openSubaccountModal(e, region, subdomain, 'apps', () => openModal(region, subdomain, guid, spaceName, appName), guid ? { appGuid: guid } : undefined)} />
 
           {/* Latest Requested Apps — tabs → groups → subaccounts table */}
           {analyticsDisplayedTabs.length > 0 && <div className="p-6 space-y-6">
@@ -706,7 +740,7 @@ export default function AppsPage() {
                                   className="text-center text-xs font-medium px-3 py-2 min-w-[260px] border-l border-b border-border first:border-l-0"
                                 >
                                   <button
-                                    onClick={() => openModal(sa.region, sa.subdomain, '')}
+                                    onClick={(e) => { openSubaccountModal(e, sa.region, sa.subdomain, 'apps', () => openModal(sa.region, sa.subdomain, '')) }}
                                     className="flex flex-col gap-0.5 items-center w-full text-muted-foreground hover:text-primary transition-colors"
                                   >
                                     <span>{sa.alias || sa.subaccountName}</span>
@@ -730,7 +764,7 @@ export default function AppsPage() {
                                           ? <button
                                               className="truncate block w-full text-left hover:text-primary transition-colors"
                                               title={`${app.name} (${app.spaceName})`}
-                                              onClick={() => openModal(sa.region, sa.subdomain, app.guid, app.spaceName, app.name)}
+                                              onClick={(e) => { openSubaccountModal(e, sa.region, sa.subdomain, 'apps', () => openModal(sa.region, sa.subdomain, app.guid, app.spaceName, app.name), { appGuid: app.guid }) }}
                                             >
                                               {app.name}
                                               <span className="text-muted-foreground/50 ml-1">({app.spaceName})</span>
@@ -845,7 +879,7 @@ export default function AppsPage() {
                               className="text-center text-xs font-medium px-3 py-2 min-w-[260px] border-l border-b border-border first:border-l-0"
                             >
                               <button
-                                onClick={() => openModal(sa.region, sa.subdomain, '')}
+                                onClick={(e) => { openSubaccountModal(e, sa.region, sa.subdomain, 'apps', () => openModal(sa.region, sa.subdomain, '')) }}
                                 className="flex flex-col gap-0.5 items-center w-full text-muted-foreground hover:text-primary transition-colors"
                               >
                                 <span>{sa.alias || sa.subaccountName}</span>
@@ -869,7 +903,7 @@ export default function AppsPage() {
                                       ? <button
                                           className="truncate block w-full text-left hover:text-primary transition-colors"
                                           title={`${app.name} (${app.spaceName})`}
-                                          onClick={() => openModal(sa.region, sa.subdomain, app.guid, app.spaceName, app.name)}
+                                          onClick={(e) => { openSubaccountModal(e, sa.region, sa.subdomain, 'apps', () => openModal(sa.region, sa.subdomain, app.guid, app.spaceName, app.name), { appGuid: app.guid }) }}
                                         >
                                           {app.name}
                                           <span className="text-muted-foreground/50 ml-1">({app.spaceName})</span>
@@ -896,11 +930,16 @@ export default function AppsPage() {
 
       {/* Subaccount apps modal */}
       {modalState && (
-        <SubaccountAppsModal
-          initialRegion={modalState.region}
-          initialSubdomain={modalState.subdomain}
-          initialGuid={modalState.guid}
-          allSubaccounts={allSas}
+        <SubaccountDetailModal
+          sa={allSas.find(s => s.region === modalState.region && s.subdomain === modalState.subdomain) ?? null}
+          initialTab="apps"
+          initialAppGuid={modalState.guid || undefined}
+          isAdmin={isAdmin}
+          cockpit={cockpit}
+          cockpitMenu={cockpitMenu}
+          subaccounts={allSas}
+          onSelectSubaccount={s => setModalState({ region: s.region, subdomain: s.subdomain, guid: '', spaceName: '', appName: '' })}
+          tabs={tabEntries}
           onClose={closeModal}
         />
       )}

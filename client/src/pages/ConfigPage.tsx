@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { useNavigate, useParams, useSearchParams } from 'react-router';
+import { useNavigate, useParams, useSearchParams, useLocation } from 'react-router';
 import { Building2, Clock, Download, Eye, Layers, PanelLeft, Search, Settings, Upload, X } from 'lucide-react';
 import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
@@ -8,9 +8,9 @@ import {
 import { useSidebar, useSettings } from '@/components/AppLayout';
 import { useAuth } from '@/hooks/useAuth';
 import SubaccountsTable, { type SubaccountEntry, type RefreshProgress } from '@/components/config/SubaccountsTable';
-import SubaccountDetailModal from '@/components/config/SubaccountDetailModal';
+import SubaccountDetailModal from '@/components/SubaccountModal';
 import TabsTable, { type TabEntry } from '@/components/config/TabsTable';
-import SettingsPanel, { type SettingsData, type AodData } from '@/components/config/SettingsPanel';
+import SettingsPanel, { type SettingsData } from '@/components/config/SettingsPanel';
 import HomePreviewPanel from '@/components/config/HomePreviewPanel';
 import type { CockpitMenuItem } from '@/components/home/HomepageContent';
 
@@ -18,14 +18,16 @@ type Tab = 'subaccounts' | 'tabs' | 'settings' | 'changelog';
 const VALID_TABS = new Set<Tab>(['subaccounts', 'tabs', 'settings', 'changelog']);
 
 export default function ConfigPage() {
-  const { tab: tabParam } = useParams<{ tab: string }>();
+  const { tab: tabParam, region: regionParam, subdomain: subdomainParam, section: sectionParam } = useParams<{ tab?: string; region?: string; subdomain?: string; section?: string }>();
   const navigate          = useNavigate();
+  const location          = useLocation();
   const [searchParams]    = useSearchParams();
   const { toggle, collapsed } = useSidebar();
   const { refreshSettings } = useSettings();
   const { isAdmin }       = useAuth();
-  const activeTab: Tab    = VALID_TABS.has(tabParam as Tab) ? (tabParam as Tab) : 'subaccounts';
-  const initialSection    = searchParams.get('section') ?? undefined;
+  // When on /config/settings/:section, tabParam is undefined but sectionParam is set
+  const activeTab: Tab    = sectionParam ? 'settings' : (VALID_TABS.has(tabParam as Tab) ? (tabParam as Tab) : 'subaccounts');
+  const initialSection    = sectionParam ?? searchParams.get('section') ?? undefined;
 
   // Subaccounts state
   const [sasData,        setSasData]       = useState<SubaccountEntry[]>([]);
@@ -35,7 +37,15 @@ export default function ConfigPage() {
   const [isSavingSas,    setIsSavingSas]  = useState(false);
   const [refreshProgress, setRefreshProgress] = useState<RefreshProgress | null>(null);
   const [selectedSa,     setSelectedSa]   = useState<SubaccountEntry | null>(null);
-  const progressTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const progressTimerRef  = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const autoOpenedRef     = useRef(false);
+
+  const autoOpenTab: 'info' | 'services' | null = (() => {
+    if (!regionParam || !subdomainParam) return null;
+    if (location.pathname.startsWith('/subaccount/')) return 'info';
+    if (location.pathname.startsWith('/services/')) return 'services';
+    return null;
+  })();
 
   // Tabs state
   const [tabsData,        setTabsData]        = useState<TabEntry[]>([]);
@@ -53,13 +63,6 @@ export default function ConfigPage() {
   const [settingsSaveStatus, setSettingsSaveStatus] = useState<{ message: string; ok: boolean } | null>(null);
   const settingsSaveTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
-  // AOD state
-  const [aodData,        setAodData]       = useState<AodData | null>(null);
-  const [originalAod,    setOriginalAod]   = useState<AodData | null>(null);
-  const [isAodDirty,     setIsAodDirty]    = useState(false);
-  const [isSavingAod,    setIsSavingAod]   = useState(false);
-  const [aodSaveStatus,  setAodSaveStatus] = useState<{ message: string; ok: boolean } | null>(null);
-  const aodSaveTimerRef  = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
   // Changelog state (lazy-loaded)
   const [changelog,            setChangelog]        = useState<string | null>(null);
@@ -139,11 +142,16 @@ export default function ConfigPage() {
 
     void fetchSettings();
 
-    void fetch('/api/aod/config')
-      .then(r => r.json() as Promise<{ ok: boolean; data: AodData }>)
-      .then(({ data }) => { setAodData(data); setOriginalAod(data); })
-      .catch(() => {});
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Auto-open modal for /subaccount/:region/:subdomain and /services/:region/:subdomain
+  useEffect(() => {
+    if (!autoOpenTab || !sasData.length || autoOpenedRef.current) return;
+    const sa = sasData.find(s => s.region === regionParam && s.subdomain === subdomainParam);
+    if (!sa) return;
+    autoOpenedRef.current = true;
+    setSelectedSa(sa);
+  }, [sasData, autoOpenTab]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const configStateRef = useRef({
     sasDirty: false, tabsDirty: false, settingsDirty: false,
@@ -198,7 +206,9 @@ export default function ConfigPage() {
     return () => es.close();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  function goTab(t: Tab) { navigate(`/config/${t}`, { replace: true }); }
+  function goTab(t: Tab) {
+    navigate(t === 'settings' ? '/config/settings/homepage' : `/config/${t}`, { replace: true });
+  }
 
   // ── Subaccounts handlers ──────────────────────────────────────────────────────
 
@@ -331,40 +341,6 @@ export default function ConfigPage() {
         sa.region === json.data!.region && sa.subdomain === json.data!.subdomain ? json.data! : sa,
       ));
       setSelectedSa(json.data);
-    }
-  }
-
-  function handleAodChange(d: AodData) {
-    setAodData(d);
-    setIsAodDirty(JSON.stringify(d) !== JSON.stringify(originalAod));
-  }
-
-  function handleAodReset() {
-    setAodData(originalAod);
-    setIsAodDirty(false);
-  }
-
-  async function handleAodSave() {
-    if (!aodData) return;
-    clearTimeout(aodSaveTimerRef.current);
-    setIsSavingAod(true);
-    try {
-      const res  = await fetch('/api/aod/config/save', {
-        method:  'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify(aodData),
-      });
-      const json = await res.json() as { ok: boolean; error?: string };
-      if (!json.ok) throw new Error(json.error ?? 'Save failed');
-      setOriginalAod(aodData);
-      setIsAodDirty(false);
-      setAodSaveStatus({ message: 'AOD config saved', ok: true });
-      aodSaveTimerRef.current = setTimeout(() => setAodSaveStatus(null), 3000);
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : 'Save failed';
-      setAodSaveStatus({ message: `AOD config not saved: ${msg}`, ok: false });
-    } finally {
-      setIsSavingAod(false);
     }
   }
 
@@ -630,13 +606,6 @@ export default function ConfigPage() {
             onSave={() => void handleSettingsSave()}
             saveStatus={settingsSaveStatus}
             initialSection={initialSection}
-            aodData={aodData}
-            onAodChange={handleAodChange}
-            isAodDirty={isAodDirty}
-            isSavingAod={isSavingAod}
-            onAodReset={handleAodReset}
-            onAodSave={() => void handleAodSave()}
-            aodSaveStatus={aodSaveStatus}
           />
         )}
         {activeTab === 'settings' && !settingsData && (
@@ -753,10 +722,14 @@ export default function ConfigPage() {
       <SubaccountDetailModal
         sa={selectedSa}
         onClose={() => setSelectedSa(null)}
+        initialTab={autoOpenTab ?? undefined}
         cockpit={settingsData?.homepage.cockpit}
         cockpitMenu={cockpitMenu}
         isAdmin={isAdmin}
         onSpaceSave={handleSpaceSave}
+        subaccounts={sasData}
+        onSelectSubaccount={setSelectedSa}
+        tabs={tabsData}
       />
 
       {/* Subaccounts refresh confirm dialog */}

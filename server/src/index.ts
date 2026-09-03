@@ -22,6 +22,10 @@ import aodRouter, { aodProxyHandler } from './routes/aod.js';
 import appsRouter from './routes/apps.js';
 import { startAppsScheduler, stopAppsScheduler } from './services/appService.js';
 import { initRequestLog, mergeAccessLogFromSync } from './services/aodAnalyticsService.js';
+import { warmSettingsVarsCache } from './services/variablesService.js';
+import { registerSettingsVarsChangedCallback, triggerSettingsVarsChanged, warmSettingsDataCache } from './services/settingsService.js';
+import { resetCfLoginCache } from './services/cfLoginService.js';
+import { registerOnSettingsSynced } from './services/syncService.js';
 import { requireSessionGlobal } from './middleware/requireAuth.js';
 import { errorHandler } from './middleware/errorHandler.js';
 import { compress } from './middleware/compress.js';
@@ -34,10 +38,28 @@ app.use(express.json({ limit: '5mb' }));
 const cfg = loadConfig();
 logger.info({ configFile: config.CONFIG_FILE, services: cfg.services.length }, 'Config initialized');
 
+// Register settings-change callbacks
+registerSettingsVarsChangedCallback(resetCfLoginCache);
+registerSettingsVarsChangedCallback(startAppsScheduler);
+// Restart status probe scheduler when statusPage.services override changes
+registerSettingsVarsChangedCallback(startScheduler);
+
+// When conf/settings.json arrives via remote sync, re-warm both caches and
+// trigger all callbacks so credentials, job intervals, sites, and status page
+// definitions take effect immediately.
+registerOnSettingsSynced(() => {
+  void Promise.all([warmSettingsVarsCache(), warmSettingsDataCache()]).then(() => {
+    logger.debug('Settings caches refreshed after remote sync');
+    triggerSettingsVarsChanged();
+  });
+});
+
 app.use('/health', healthRouter);
 app.use(authRouter);
 // AOD proxy: no auth — must be mounted before requireSessionGlobal
-app.use('/aod', aodProxyHandler);
+// Raw body parser for the AOD proxy — must run before express.json() consumes the stream.
+// body-parser sets req._body=true so express.json() skips re-parsing afterwards.
+app.use('/aod', express.raw({ type: '*/*', limit: '50mb' }), aodProxyHandler);
 // API responses must never be cached — prevents 304s on repeated /api/view requests
 app.use('/api', (_req, res, next) => { res.setHeader('Cache-Control', 'no-store'); next(); });
 // Global session auth: all /api/* require login when XSUAA is bound (exceptions in requireSessionGlobal)
@@ -69,6 +91,9 @@ const server = app.listen(config.PORT, () => {
   void refreshLastUpdated();
   void initGeo();
   void initRequestLog();
+  void Promise.all([warmSettingsVarsCache(), warmSettingsDataCache()]).then(() => {
+    logger.debug('Settings caches warmed');
+  });
   registerOnAccessLogSynced(saPaths => {
     for (const key of saPaths) {
       const slash = key.indexOf('/');

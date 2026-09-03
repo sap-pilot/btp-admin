@@ -207,7 +207,7 @@ export default function WorldMap({ cities, isDark, selectedCity, onCityClick }: 
               `font-size:10px;line-height:1.45;padding:2px 6px;border-radius:3px;`,
               `white-space:nowrap;pointer-events:${ptrEvt};cursor:${cursor};`,
               `display:flex;flex-direction:column;align-items:center;">`,
-              `<span>${flag ? flag + ' ' : ''}${city.city}</span>`,
+              `<span>${flag ? `<span style="font-family:'Noto Color Emoji',sans-serif;">${flag}</span> ` : ''}${city.city}</span>`,
               `<span style="color:${reqColor}">Req: ${city.count.toLocaleString()}</span>`,
               `</div>`,
             ].join(''),

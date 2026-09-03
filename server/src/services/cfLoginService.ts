@@ -2,8 +2,8 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { config } from '../config.js';
-import { getConfig } from './configService.js';
 import { logger } from '../logger.js';
+import { getVar } from './variablesService.js';
 
 const TOKEN_DIR  = join(homedir(), '.ba');
 const TOKEN_PATH = join(TOKEN_DIR, 'cf_login_tokens.json');
@@ -45,22 +45,25 @@ function cfApiUrl(region: string): string {
 }
 
 export function getCfCredentials(): { username: string; password: string; origin: string } {
-  const vars = getConfig().variables ?? {};
   return {
-    username: process.env.CF_USERNAME ?? vars['CF_USERNAME'] ?? '',
-    password: process.env.CF_PASSWORD ?? vars['CF_PASSWORD'] ?? '',
-    origin:   process.env.CF_ORIGIN   ?? vars['CF_ORIGIN']   ?? '',
+    username: getVar('CF_USERNAME') ?? '',
+    password: getVar('CF_PASSWORD') ?? '',
+    origin:   getVar('CF_ORIGIN')   ?? '',
   };
 }
 
-/** Returns configured CF regions; env takes precedence over config.json->variables. */
+/** Returns configured CF regions; settings/env take precedence over config.json->variables. */
 export function getCfRegions(): string[] {
-  if (process.env.CF_REGIONS) {
-    return process.env.CF_REGIONS.split(',').map(s => s.trim()).filter(Boolean);
-  }
-  const vars = getConfig().variables ?? {};
-  const fromVars = typeof vars['CF_REGIONS'] === 'string' ? vars['CF_REGIONS'] : '';
-  return fromVars.split(',').map(s => s.trim()).filter(Boolean);
+  const raw = getVar('CF_REGIONS') ?? '';
+  return raw.split(',').map(s => s.trim()).filter(Boolean);
+}
+
+/** Clears cached credentials so next getOrRefreshToken() re-reads from current settings/env. */
+export function resetCfLoginCache(): void {
+  cachedUsername = '';
+  cachedPassword = '';
+  cachedOrigin   = '';
+  initPromise    = null;
 }
 
 const RATE_LIMIT_MAX_RETRIES = 3;

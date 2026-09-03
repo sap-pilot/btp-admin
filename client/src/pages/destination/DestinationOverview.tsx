@@ -1,11 +1,13 @@
 import { useEffect, useRef, useState } from 'react';
 import { useParams, useNavigate, useLocation, Link } from 'react-router';
 import { ChevronDown, GitCompare, Globe, History, PanelLeft, RefreshCw, Search, X } from 'lucide-react';
-import { useSidebar } from '@/components/AppLayout';
+import { useSidebar, useSettings } from '@/components/AppLayout';
+import { useAuth } from '@/hooks/useAuth';
 import type { SubaccountEntry } from '@/components/config/SubaccountsTable';
 import type { TabEntry, TabSection } from '@/components/config/TabsTable';
-import SubaccountDestModal from './SubaccountDestModal';
-import type { SelectedDest } from './SubaccountDestModal';
+import SubaccountDetailModal from '@/components/SubaccountModal';
+import { openSubaccountModal } from '@/lib/openSubaccountPopup';
+import type { SelectedDest } from '@/components/config/tabs/DestTab';
 import CompareModal from './CompareModal';
 import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
@@ -132,6 +134,8 @@ function renderGlobalChangelog(text: string, highlight?: string): React.ReactNod
 
 export default function DestinationOverview() {
   const { toggle, collapsed } = useSidebar();
+  const { settings, cockpitMenu } = useSettings();
+  const { isAdmin } = useAuth();
   const { tab: tabParam, region: regionParam, subdomain: subdomainParam, name: nameParam, destTab, spaceName: spaceNameParam, instanceName: instanceNameParam, instanceGuid: instanceGuidParam } = useParams<{
     tab?: string; region?: string; subdomain?: string; name?: string; destTab?: string; spaceName?: string; instanceName?: string; instanceGuid?: string;
   }>();
@@ -162,8 +166,7 @@ export default function DestinationOverview() {
   const [showCompareModal,   setShowCompareModal]   = useState(false);
   const [showCompareDropdown, setShowCompareDropdown] = useState(false);
   const compareDropdownRef = useRef<HTMLDivElement>(null);
-  // Ephemeral compare: instant compare from SubaccountDestModal Compare(N) — not added to basket
-  const [ephemeralCompareDests, setEphemeralCompareDests] = useState<SelectedDest[] | null>(null);
+  // Ephemeral compare is now handled inside SubaccountModal (within Radix focus scope)
 
   // Global changelog (Change History tab)
   const [globalChangelog,        setGlobalChangelog]        = useState('');
@@ -778,7 +781,7 @@ export default function DestinationOverview() {
                             <th
                               key={sa.subaccountId}
                               className="text-center text-xs font-medium px-3 py-2 min-w-[160px] border-l border-b border-border text-muted-foreground cursor-pointer hover:bg-muted/40 transition-colors"
-                              onClick={() => setModal({ sa, allNames: (destData[saOrgId(sa)] ?? []).map(d => d.name).sort(), initialShowList: true })}
+                              onClick={(e) => { openSubaccountModal(e, sa.region, sa.subdomain, 'destinations', () => setModal({ sa, allNames: (destData[saOrgId(sa)] ?? []).map(d => d.name).sort(), initialShowList: true }), { destShowList: true }) }}
                             >
                               <div className="flex flex-col gap-0.5 items-center">
                                 <span><Highlight text={sa.alias || sa.subaccountName} query={activeFilter} /></span>
@@ -838,15 +841,7 @@ export default function DestinationOverview() {
                                       ? (
                                         <button
                                           className="font-mono text-[11px] hover:underline text-left text-foreground"
-                                          onClick={() => setModal({
-                                            sa,
-                                            allNames: allDests.map(d => d.name).sort(),
-                                            initialName: r.name,
-                                            initialShowList: !r.spaceName,
-                                            initialSpaceName:    r.spaceName    || undefined,
-                                            initialInstanceName: r.instanceName || undefined,
-                                            initialInstanceGuid: r.instanceGuid || undefined,
-                                          })}
+                                          onClick={(e) => { openSubaccountModal(e, sa.region, sa.subdomain, 'destinations', () => setModal({ sa, allNames: allDests.map(d => d.name).sort(), initialName: r.name, initialShowList: !r.spaceName, initialSpaceName: r.spaceName || undefined, initialInstanceName: r.instanceName || undefined, initialInstanceGuid: r.instanceGuid || undefined }), { destName: r.name, destShowList: !r.spaceName, destSpaceName: r.spaceName || undefined, destInstName: r.instanceName || undefined, destInstGuid: r.instanceGuid || undefined }) }}
                                         >
                                           <Highlight text={r.name} query={activeFilter} />
                                         </button>
@@ -889,7 +884,7 @@ export default function DestinationOverview() {
                                             ? (
                                               <button
                                                 className="font-mono text-[11px] hover:underline text-left text-foreground"
-                                                onClick={() => setModal({ sa, allNames: allDests.map(d => d.name).sort(), initialName: name, initialShowList: false })}
+                                                onClick={(e) => { openSubaccountModal(e, sa.region, sa.subdomain, 'destinations', () => setModal({ sa, allNames: allDests.map(d => d.name).sort(), initialName: name, initialShowList: false }), { destName: name, destShowList: false }) }}
                                               >
                                                 <Highlight text={name} query={activeFilter} />
                                               </button>
@@ -920,7 +915,7 @@ export default function DestinationOverview() {
                                     {others.length > 0
                                       ? (
                                         <button
-                                          onClick={() => setModal({ sa, allNames: allSaNames, initialName: others[0], initialShowList: true })}
+                                          onClick={(e) => { openSubaccountModal(e, sa.region, sa.subdomain, 'destinations', () => setModal({ sa, allNames: allSaNames, initialName: others[0], initialShowList: true }), { destName: others[0], destShowList: true }) }}
                                           className="w-full flex items-center justify-between px-2 py-1 rounded bg-muted/60 text-muted-foreground hover:bg-accent hover:text-accent-foreground text-[11px] font-medium transition-colors"
                                         >
                                           <span>{others.length} destinations</span>
@@ -945,22 +940,29 @@ export default function DestinationOverview() {
       </div>}
 
       {modal && (
-        <SubaccountDestModal
-          org={modal.sa}
-          allNames={modal.allNames}
-          initialName={modal.initialName}
-          initialTab={modal.initialTab}
-          initialShowList={modal.initialShowList}
-          initialSpaceName={modal.initialSpaceName}
-          initialInstanceName={modal.initialInstanceName}
-          initialInstanceGuid={modal.initialInstanceGuid}
+        <SubaccountDetailModal
+          sa={modal.sa}
+          initialTab="destinations"
+          allDestNames={modal.allNames}
+          initialDestName={modal.initialName}
+          initialDestTab={modal.initialTab}
+          initialDestShowList={modal.initialShowList}
+          initialDestSpaceName={modal.initialSpaceName}
+          initialDestInstName={modal.initialInstanceName}
+          initialDestInstGuid={modal.initialInstanceGuid}
           onClose={() => {
             setModal(null);
             navigate(returnUrl.current, { replace: true });
           }}
+          subaccounts={saData}
+          tabs={tabEntries}
+          onSelectSubaccount={newSa => setModal(prev => prev ? { ...prev, sa: newSa } : null)}
+          cockpit={settings?.homepage.cockpit}
+          cockpitMenu={cockpitMenu}
+          isAdmin={isAdmin}
           selectedDests={selectedDests}
           onToggleCompare={toggleCompare}
-          onOpenCompare={dests => { setEphemeralCompareDests(dests); }}
+          onOpenCompare={() => { /* handled internally by SubaccountModal */ }}
         />
       )}
 
@@ -971,12 +973,7 @@ export default function DestinationOverview() {
         />
       )}
 
-      {ephemeralCompareDests && ephemeralCompareDests.length > 0 && (
-        <CompareModal
-          selected={ephemeralCompareDests}
-          onClose={() => setEphemeralCompareDests(null)}
-        />
-      )}
+      {/* ephemeralCompareDests is now handled inside SubaccountModal to stay within Radix focus scope */}
 
       {/* Refresh confirmation dialog */}
       <AlertDialog open={showRefreshDialog}>

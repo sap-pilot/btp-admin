@@ -2,31 +2,31 @@
   "variables": {
     "MONITOR_USERNAME": "monitor@example.com",
     "MONITOR_PASSWORD": "your-monitor-password",
-    "SYNC_KEY": "your-secret-sync-key"
+    "SYNC_KEY": "your-secret-sync-key",
+    "CF_USERNAME": "techuser@example.com",
+    "CF_PASSWORD": "your-techuser-ppassword",
+    "CF_REGIONS": "us10,us10-001,us20,eu10"
   },
   "sites": [
     {
-      "name": "BTP Status (Region A)",
-      "url": "https://btp-status-instance-a.cfapps.us10.hana.ondemand.com",
-      "legacyUrls": [
-        "https://btp-status-old.cfapps.us10.hana.ondemand.com"
-      ]
+      "name": "us10-btp-admin",
+      "url": "https://mycompany-admin.cfapps.us10.hana.ondemand.com"
     },
     {
-      "name": "BTP Status (Region B)",
-      "url": "https://btp-status-instance-b.cfapps.us20.hana.ondemand.com"
+      "name": "us20-btp-admin",
+      "url": "https://mycompany-admin.cfapps.us20.hana.ondemand.com"
     }
   ],
   "landscapes": [
     {
-      "name": "production",
+      "name": "sandbox",
       "diagram": "flowchart LR\n    subgraph Azure [Microsoft Azure]\n        TR[Traffic Manager]\n    end\n    subgraph BTP [BTP Landscape]\n        subgraph org-us10 [US East Subaccount]\n            wz-us10[Workzone]\n            cf-us10[Cloud Foundry]\n        end\n        subgraph org-us20 [US West Subaccount]\n            wz-us20[Workzone]\n            cf-us20[Cloud Foundry]\n        end\n    end\n    User --> TR\n    TR --> wz-us10\n    wz-us10 --> cf-us10\n    TR --> wz-us20\n    wz-us20 --> cf-us20\n    "
     }
   ],
   "services": [
     {
       "group": "workzone",
-      "landscapes": ["production"],
+      "landscapes": ["sandbox"],
       "name": "wz-us10",
       "homepage": "https://your-launchpad.cfapps.us10.hana.ondemand.com/sites",
       "enabled": true,
@@ -48,7 +48,7 @@
     },
     {
       "group": "workzone",
-      "landscapes": ["production"],
+      "landscapes": ["sandbox"],
       "name": "wz-us20",
       "homepage": "https://your-launchpad.cfapps.us20.hana.ondemand.com/sites",
       "enabled": true,
@@ -70,7 +70,7 @@
     },
     {
       "group": "integration-suite",
-      "landscapes": ["production"],
+      "landscapes": ["sandbox"],
       "name": "int-us10",
       "homepage": "https://your-integration-suite.cfapps.us10.hana.ondemand.com/",
       "enabled": true,
@@ -94,7 +94,7 @@
     },
     {
       "group": "cockpit",
-      "landscapes": ["production"],
+      "landscapes": ["sandbox"],
       "name": "btp-cockpit",
       "homepage": "https://cockpit.btp.cloud.sap/",
       "enabled": true,

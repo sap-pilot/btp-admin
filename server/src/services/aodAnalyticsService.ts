@@ -345,6 +345,150 @@ export async function getAnalytics(durationHours: number): Promise<AnalyticsPayl
   return payload;
 }
 
+// ─── Top Apps API — aggregated by app name within a duration window ───────────
+
+export interface TopAppEntry  { appName: string; count: number; percent: number; region: string; subdomain: string; appGuid: string; spaceName: string; }
+export interface TopUserEntry { userId: string;  count: number; percent: number; }
+
+function applyFilter(rows: RawRow[], opts: { city?: string; countryCode?: string }): RawRow[] {
+  return (opts.city || opts.countryCode)
+    ? rows.filter(r => (!opts.countryCode || r.countryCode === opts.countryCode) && (!opts.city || r.city === opts.city))
+    : rows;
+}
+
+export async function getTopApps(
+  durationHours: number,
+  opts: { city?: string; countryCode?: string } = {},
+): Promise<TopAppEntry[]> {
+  const filtered = applyFilter(await readAccessLogs(durationHours), opts);
+
+  const perSaAppMaps = new Map<string, Map<string, { name: string; spaceName: string }>>();
+  const countMap     = new Map<string, Omit<TopAppEntry, 'percent'>>();
+
+  for (const row of filtered) {
+    const saKey = `${row.region}/${row.subdomain}`;
+    let am = perSaAppMaps.get(saKey);
+    if (!am) { am = await getAppMap(row.region, row.subdomain); perSaAppMaps.set(saKey, am); }
+    const meta  = am.get(row.appId);
+    const name  = meta?.name || row.appId;
+    const entry = countMap.get(name);
+    if (entry) { entry.count++; }
+    else countMap.set(name, { appName: name, count: 1, region: row.region, subdomain: row.subdomain, appGuid: row.appId, spaceName: meta?.spaceName ?? '' });
+  }
+
+  const sorted = [...countMap.values()].sort((a, b) => b.count - a.count);
+  const total  = sorted.reduce((s, e) => s + e.count, 0) || 1;
+  return sorted.map(e => ({ ...e, percent: Math.round(e.count / total * 1000) / 10 }));
+}
+
+export async function getTopUsers(
+  durationHours: number,
+  opts: { city?: string; countryCode?: string } = {},
+): Promise<TopUserEntry[]> {
+  const filtered = applyFilter(await readAccessLogs(durationHours), opts);
+
+  const countMap = new Map<string, number>();
+  for (const row of filtered) {
+    if (!row.userId) continue;
+    countMap.set(row.userId, (countMap.get(row.userId) ?? 0) + 1);
+  }
+
+  const sorted = [...countMap.entries()].sort((a, b) => b[1] - a[1]);
+  const total  = sorted.reduce((s, [, c]) => s + c, 0) || 1;
+  return sorted.map(([userId, count]) => ({ userId, count, percent: Math.round(count / total * 1000) / 10 }));
+}
+
+// ─── Requests API (paginated, filtered, sorted — reads all CSV files) ─────────
+
+export interface RequestItem {
+  ts: number; region: string; subdomain: string; alias: string;
+  spaceName: string; appName: string; appGuid: string;
+  country: string; countryCode: string; city: string; userId: string;
+}
+export interface RequestsResult { total: number; page: number; pageSize: number; items: RequestItem[]; }
+
+async function readAllRows(opts: { region?: string; subdomain?: string }): Promise<RequestItem[]> {
+  const rows: RequestItem[] = [];
+  let regions: string[];
+  try { regions = await readdir(AOD_APPS_DIR); } catch { return rows; }
+  const aliasMap = await getAliasMap();
+  for (const region of regions) {
+    if (opts.region && !region.toLowerCase().includes(opts.region.toLowerCase())) continue;
+    let subdomains: string[];
+    try { subdomains = await readdir(join(AOD_APPS_DIR, region)); } catch { continue; }
+    for (const subdomain of subdomains) {
+      if (opts.subdomain && !subdomain.toLowerCase().includes(opts.subdomain.toLowerCase())) continue;
+      const saDir = join(AOD_APPS_DIR, region, subdomain);
+      let files: string[];
+      try { files = await readdir(saDir); } catch { continue; }
+      const csvFiles = files.filter(f => f === 'accesslog.csv' || /^accesslog\.\d{8}\.csv$/.test(f));
+      const am    = await getAppMap(region, subdomain);
+      const alias = aliasMap.get(`${region}/${subdomain}`) ?? subdomain;
+      for (const csvFile of csvFiles) {
+        let content: string;
+        try { content = await readFile(join(saDir, csvFile), 'utf-8'); } catch { continue; }
+        const lines = content.split('\n');
+        let parsedHdr = false;
+        const idx: Record<string, number> = {};
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (!trimmed) continue;
+          if (!parsedHdr) { parseCsvLine(trimmed).forEach((f, i) => { idx[f] = i; }); parsedHdr = true; continue; }
+          const fields = parseCsvLine(trimmed);
+          if (fields.length < 2) continue;
+          const ts = Number(fields[idx['requestTime'] ?? 0] ?? 0);
+          if (!ts) continue;
+          const appId = fields[idx['appId'] ?? 2] ?? '';
+          const meta  = am.get(appId);
+          rows.push({
+            ts, region, subdomain, alias,
+            appGuid:     appId,
+            appName:     meta?.name      ?? '',
+            spaceName:   meta?.spaceName ?? '',
+            country:     fields[idx['country']     ?? 99] ?? '',
+            countryCode: fields[idx['countryCode'] ?? 99] ?? '',
+            city:        fields[idx['city']        ?? 6]  ?? '',
+            userId:      fields[idx['userId']      ?? 9]  ?? '',
+          });
+        }
+      }
+    }
+  }
+  return rows;
+}
+
+const VALID_SORT_KEYS = new Set<string>(['ts', 'region', 'subdomain', 'alias', 'spaceName', 'appName', 'appGuid', 'country', 'countryCode', 'city', 'userId']);
+
+export async function getRequests(params: {
+  page?: number; pageSize?: number;
+  sortBy?: string; sortDir?: 'asc' | 'desc';
+  countryCode?: string; city?: string; country?: string; alias?: string;
+  region?: string; subdomain?: string; spaceName?: string; appName?: string; userId?: string;
+}): Promise<RequestsResult> {
+  const page     = Math.max(1, params.page     ?? 1);
+  const pageSize = Math.min(500, Math.max(1, params.pageSize ?? 50));
+  const si = (s: string) => s.toLowerCase();
+  const match = (field: string, filter?: string) => !filter || si(field).includes(si(filter));
+  const allRows = await readAllRows({ region: params.region, subdomain: params.subdomain });
+  const filtered = allRows.filter(r =>
+    match(r.countryCode, params.countryCode) &&
+    match(r.country,     params.country) &&
+    match(r.city,        params.city) &&
+    match(r.alias,       params.alias) &&
+    match(r.spaceName,   params.spaceName) &&
+    match(r.appName,     params.appName) &&
+    match(r.userId,      params.userId),
+  );
+  const dir = params.sortDir === 'asc' ? 1 : -1;
+  const by  = (VALID_SORT_KEYS.has(params.sortBy ?? 'ts') ? (params.sortBy ?? 'ts') : 'ts') as keyof RequestItem;
+  filtered.sort((a, b) => {
+    const va = a[by]; const vb = b[by];
+    if (typeof va === 'number' && typeof vb === 'number') return dir * (va - vb);
+    return dir * String(va ?? '').localeCompare(String(vb ?? ''));
+  });
+  return { total: filtered.length, page, pageSize, items: filtered.slice((page - 1) * pageSize, page * pageSize) };
+}
+
 // Incrementally update all cached analytics payloads with one new request, then emit SSE.
 // Called fire-and-forget from aodProxyHandler after each proxied request.
 export function recordAodRequest(data: {

@@ -5,7 +5,8 @@ import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator,
   DropdownMenuSub, DropdownMenuSubContent, DropdownMenuSubTrigger, DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
-import SubaccountDetailModal from '@/components/config/SubaccountDetailModal';
+import SubaccountDetailModal from '@/components/SubaccountModal';
+import { openSubaccountModal } from '@/lib/openSubaccountPopup';
 import type { TabEntry, BannerColor } from '@/components/config/TabsTable';
 import type { SubaccountEntry, SpaceEntry } from '@/components/config/SubaccountsTable';
 import type { MainSubscription } from '@/components/config/SettingsPanel';
@@ -25,6 +26,7 @@ export interface HomepageData {
   cockpit:           { idp: string; host: string };
   cockpitMenu:       CockpitMenuItem | null;
   mainSubscriptions: MainSubscription[];
+  isAdmin?:          boolean;
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -329,7 +331,7 @@ function SubaccountGroupSection({ section, subaccounts, cockpitMenu, cockpit, ma
                     )}
                     <div className="flex flex-col items-center gap-0.5">
                       <button
-                        onClick={() => onOpenDetail(sa)}
+                        onClick={(e) => openSubaccountModal(e, sa.region, sa.subdomain, 'info', () => onOpenDetail(sa))}
                         className="whitespace-nowrap hover:underline hover:text-foreground transition-colors cursor-pointer"
                       >
                         <Highlight text={label} query={filterQuery ?? ''} />
@@ -528,6 +530,10 @@ export default function HomepageContent({ data, activeTab, onTabChange, filterQu
         onClose={() => setDetailSa(null)}
         cockpit={data.cockpit}
         cockpitMenu={data.cockpitMenu}
+        isAdmin={data.isAdmin}
+        subaccounts={data.subaccounts}
+        onSelectSubaccount={setDetailSa}
+        tabs={data.tabs}
       />
     </>
   );

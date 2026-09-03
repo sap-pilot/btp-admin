@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import * as DialogPrimitive from '@radix-ui/react-dialog';
 import { X } from 'lucide-react';
 import SubaccountsTable, { type SubaccountEntry } from './SubaccountsTable';
-import SubaccountDetailModal from './SubaccountDetailModal';
+import SubaccountDetailModal from '../SubaccountModal';
 import TabsTable, { type TabEntry } from './TabsTable';
 
 interface Props {

@@ -1,10 +1,12 @@
 import { Fragment, useEffect, useRef, useState } from 'react';
 import { useParams, useNavigate, useLocation, Link } from 'react-router';
 import { History, Loader2, PanelLeft, RefreshCw, Search, ShieldCheck, X } from 'lucide-react';
-import { useSidebar } from '@/components/AppLayout';
+import { useSidebar, useSettings } from '@/components/AppLayout';
+import { useAuth } from '@/hooks/useAuth';
 import type { SubaccountEntry } from '@/components/config/SubaccountsTable';
 import type { TabEntry, TabSection } from '@/components/config/TabsTable';
-import SubaccountRCModal from './SubaccountRCModal';
+import SubaccountDetailModal from '@/components/SubaccountModal';
+import { openSubaccountModal } from '@/lib/openSubaccountPopup';
 import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
@@ -130,6 +132,8 @@ function renderGlobalChangelog(text: string, highlight?: string): React.ReactNod
 
 export default function RoleCollectionsOverview() {
   const { toggle, collapsed } = useSidebar();
+  const { settings, cockpitMenu } = useSettings();
+  const { isAdmin } = useAuth();
   const { tab: tabParam, region: regionParam, subdomain: subdomainParam, name: nameParam, rcTab } = useParams<{
     tab?: string; region?: string; subdomain?: string; name?: string; rcTab?: string;
   }>();
@@ -647,7 +651,7 @@ export default function RoleCollectionsOverview() {
                                 key={sa.subaccountId}
                                 colSpan={2}
                                 className="text-center text-xs font-medium px-3 py-2 min-w-[220px] border-l border-b border-border text-muted-foreground cursor-pointer hover:bg-muted/40 transition-colors"
-                                onClick={() => openModal(sa, true)}
+                                onClick={(e) => { openSubaccountModal(e, sa.region, sa.subdomain, 'roles', () => openModal(sa, true), { rcShowList: true }) }}
                               >
                                 <div className="flex flex-col gap-0.5 items-center">
                                   <span>{sa.alias || sa.subaccountName}</span>
@@ -683,7 +687,7 @@ export default function RoleCollectionsOverview() {
                                             <button
                                               className="font-mono text-[11px] hover:underline text-left truncate block w-full text-foreground"
                                               title={rc.name}
-                                              onClick={() => openModal(sa, false, rc.name)}
+                                              onClick={(e) => { openSubaccountModal(e, sa.region, sa.subdomain, 'roles', () => openModal(sa, false, rc.name), { rcName: rc.name, rcShowList: false }) }}
                                             >
                                               {committedSearch
                                                 ? highlightText(rc.name, committedSearch)
@@ -707,7 +711,7 @@ export default function RoleCollectionsOverview() {
                             {visibleBuckets.map(({ sa, total, matchCount }) => (
                               <td key={sa.subaccountId} colSpan={2} className="px-2 py-1.5 text-xs border-l border-border">
                                 <button
-                                  onClick={() => openModal(sa, true)}
+                                  onClick={(e) => { openSubaccountModal(e, sa.region, sa.subdomain, 'roles', () => openModal(sa, true), { rcShowList: true }) }}
                                   className="w-full text-center text-[11px] text-muted-foreground hover:text-foreground hover:bg-accent/50 py-1 px-2 rounded transition-colors"
                                 >
                                   {searchActive
@@ -728,16 +732,23 @@ export default function RoleCollectionsOverview() {
       )}
 
       {modal && (
-        <SubaccountRCModal
+        <SubaccountDetailModal
           sa={modal.sa}
-          allNames={modal.allNames}
-          initialName={modal.initialName}
-          initialTab={modal.initialTab}
-          initialShowList={modal.initialShowList}
+          initialTab="roles"
+          allRcNames={modal.allNames}
+          initialRcName={modal.initialName}
+          initialRcTab={modal.initialTab}
+          initialRcShowList={modal.initialShowList}
           onClose={() => {
             setModal(null);
             navigate(returnUrl.current, { replace: true });
           }}
+          subaccounts={saData}
+          tabs={tabEntries}
+          onSelectSubaccount={newSa => setModal(prev => prev ? { ...prev, sa: newSa } : null)}
+          cockpit={settings?.homepage.cockpit}
+          cockpitMenu={cockpitMenu}
+          isAdmin={isAdmin}
           onRcDataChange={() => void loadData()}
         />
       )}

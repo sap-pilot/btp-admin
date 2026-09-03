@@ -1,5 +1,29 @@
 # Changelog
 
+## [v1.8.0] - 2026-09-02
+
+### Added
+- **Subaccount Detail Modal — complete restructure** — split-pane layout with a subaccount switcher on the left and detail tabs on the right; URL routing per tab (`/home/:subdomain/overview`, `/dest/:subdomain/properties`, etc.); shift-click on a subaccount row opens in a new browser tab; deep-linking from sidebar entries and entity hints in the modal title bar; popup/tab mode with `SubaccountPopup` for compact contexts
+- **Subaccount Detail Modal — admin tabs** — Apps, Destinations, Role Collections, and Users management tabs embedded directly in the modal; Cockpit deep-link button; admin tabs hidden for non-admin users
+- **Settings — Runtime Variables section** — 13 runtime variables configurable via Config → Settings → Variables; 4-level override chain: `settings.json → variables` (highest) → individual `process.env` → `CONFIG_JSON env var → variables` → `config.json → variables`; sensitive variables masked in the UI; changes take effect immediately (CF scheduler restarted, CF login cache cleared, monitor credentials updated); propagated to remote peers via sync
+- **Settings — 2-pane overrides** — AOD, Sites, and Status Page settings each use a two-pane layout with active values on the left and per-section overrides on the right; standalone nav sections for each
+- **AOD — access log modal** — `/api/aod/requests` endpoint; access log viewer modal with per-subaccount request history, timestamps, user IDs, geo info, and startup/total latency
+- **Destinations — OAuth2ClientCredentials test support** — Test tab now supports `OAuth2ClientCredentials` auth type; right-panel UX polished
+
+### Changed
+- `RESTRICTED_SUBACCOUNT_IDS` syntax changed to `{guid}:{label}` (colon-separated) — update any existing config entries
+- World-map flag emoji now self-hosted via Noto Color Emoji (fixes missing flags on Windows)
+- Modals (subaccount detail, compare, etc.) close only on the X button or Escape, not on outside click
+- Apps page sidebar link points to `/apps/analytics` (analytics view is now the default)
+
+### Fixed
+- **AOD: detect stopped apps** — proxied requests to stopped CF apps now correctly detected via `X-Cf-Routerror` header, in addition to the connection-refused path
+- **AOD: content-length on POST** — incorrect content-length forwarded on proxied POST requests; now recalculated from actual body
+- **AOD: appGuid sync** — `appGuid.json` was not updated when AOD was re-installed on an already-installed destination; fixed so re-installs always write the current GUID
+- **Modal: spaces editing from any page** — Edit / Save for CF spaces now works from any page (Homepage, Destinations, Apps, Users, Role Collections) without requiring the Config page; the modal issues the `POST /api/config/…/spaces` call internally when the `onSpaceSave` prop is absent
+- **Modal: preserve tab state** — active tab selection no longer resets when switching subaccounts within the same modal session
+
+
 ## [v1.7.0] - 2026-08-27
 
 ### Added

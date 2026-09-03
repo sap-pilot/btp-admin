@@ -6,6 +6,8 @@ import { notifyCallbacks } from './syncService.js';
 import { emit } from './liveEvents.js';
 import { appendConfigChangelog } from './configChangelogService.js';
 import { touchLastUpdated } from './lastUpdatedService.js';
+import { updateSettingsVarsCache } from './variablesService.js';
+import { updateSettingsDataCache, type CachedSettingsData } from './settingsDataCache.js';
 
 const CONFIG_DIR     = join(config.LOCAL_STORE_DIR, 'conf');
 const SETTINGS_PATH  = join(CONFIG_DIR, 'settings.json');
@@ -20,12 +22,95 @@ export interface SettingsData {
     mainSubscriptions: MainSubscription[];
   };
   menus: MenuEntry[];
+  variables?: Record<string, string>;
+  aod?: {
+    regionalEndpoints?: Record<string, string>;
+    excludeApps?: string[];
+  };
+  sites?: Array<{ name: string; url: string; legacyUrls?: string[] }>;
+  statusPage?: {
+    landscapes?: Array<{ name: string; diagram: string }>;
+    services?: unknown[];
+  };
+}
+
+const varsChangedCallbacks: Array<() => void> = [];
+
+export function registerSettingsVarsChangedCallback(fn: () => void): void {
+  varsChangedCallbacks.push(fn);
+}
+
+function notifyVarsChanged(): void {
+  for (const fn of varsChangedCallbacks) fn();
+}
+
+/** Call all registered vars-changed callbacks (e.g. after a remote sync rewrites settings.json). */
+export function triggerSettingsVarsChanged(): void {
+  notifyVarsChanged();
 }
 
 function parseSettings(raw: string): SettingsData {
   const parsed = JSON.parse(raw) as Record<string, unknown>;
   const hp = (parsed['homepage'] ?? {}) as Record<string, unknown>;
   const cockpit = (hp['cockpit'] ?? {}) as Record<string, unknown>;
+
+  const rawVars = parsed['variables'];
+  const variables: Record<string, string> | undefined = (rawVars && typeof rawVars === 'object' && !Array.isArray(rawVars))
+    ? Object.fromEntries(
+        Object.entries(rawVars as Record<string, unknown>)
+          .filter(([, v]) => typeof v === 'string' && v !== '')
+          .map(([k, v]) => [k, v as string]),
+      )
+    : undefined;
+
+  // ── aod overrides ────────────────────────────────────────────────────────────
+  const rawAod = parsed['aod'];
+  let aod: SettingsData['aod'];
+  if (rawAod && typeof rawAod === 'object' && !Array.isArray(rawAod)) {
+    const ra = rawAod as Record<string, unknown>;
+    const re = ra['regionalEndpoints'];
+    const ea = ra['excludeApps'];
+    const aodObj: NonNullable<SettingsData['aod']> = {};
+    if (re && typeof re === 'object' && !Array.isArray(re))
+      aodObj.regionalEndpoints = re as Record<string, string>;
+    if (Array.isArray(ea))
+      aodObj.excludeApps = (ea as unknown[]).filter((x): x is string => typeof x === 'string');
+    if (aodObj.regionalEndpoints || aodObj.excludeApps) aod = aodObj;
+  }
+
+  // ── sites override ────────────────────────────────────────────────────────────
+  const rawSites = parsed['sites'];
+  const sites: SettingsData['sites'] = Array.isArray(rawSites)
+    ? (rawSites as unknown[]).flatMap(s => {
+        const site = s as Record<string, unknown>;
+        if (!site['name'] || !site['url']) return [];
+        return [{
+          name: String(site['name']),
+          url:  String(site['url']),
+          ...(Array.isArray(site['legacyUrls']) ? { legacyUrls: (site['legacyUrls'] as unknown[]).map(String) } : {}),
+        }];
+      })
+    : undefined;
+
+  // ── statusPage override ───────────────────────────────────────────────────────
+  const rawSp = parsed['statusPage'];
+  let statusPage: SettingsData['statusPage'];
+  if (rawSp && typeof rawSp === 'object' && !Array.isArray(rawSp)) {
+    const sp = rawSp as Record<string, unknown>;
+    const rawLands = sp['landscapes'];
+    const rawSvcs  = sp['services'];
+    const spObj: NonNullable<SettingsData['statusPage']> = {};
+    if (Array.isArray(rawLands))
+      spObj.landscapes = (rawLands as unknown[]).flatMap(l => {
+        const lm = l as Record<string, unknown>;
+        if (!lm['name'] || !lm['diagram']) return [];
+        return [{ name: String(lm['name']), diagram: String(lm['diagram']) }];
+      });
+    if (Array.isArray(rawSvcs) && rawSvcs.length > 0)
+      spObj.services = rawSvcs;
+    if (spObj.landscapes?.length || spObj.services?.length) statusPage = spObj;
+  }
+
   return {
     homepage: {
       cockpit: {
@@ -55,6 +140,10 @@ function parseSettings(raw: string): SettingsData {
           return { text: String(menu['text'] ?? ''), icon: String(menu['icon'] ?? ''), submenus };
         })
       : [],
+    ...(variables !== undefined && Object.keys(variables).length > 0 ? { variables } : {}),
+    ...(aod ? { aod } : {}),
+    ...(sites && sites.length > 0 ? { sites } : {}),
+    ...(statusPage ? { statusPage } : {}),
   };
 }
 
@@ -72,12 +161,26 @@ export async function readSettings(): Promise<SettingsData> {
   }
 }
 
+function toDataCacheEntry(data: SettingsData): CachedSettingsData {
+  return { aod: data.aod, sites: data.sites, statusPage: data.statusPage };
+}
+
 export async function writeSettings(data: SettingsData): Promise<void> {
   await mkdir(CONFIG_DIR, { recursive: true });
   await writeFile(SETTINGS_PATH, JSON.stringify(data, null, 2), 'utf-8');
+  updateSettingsVarsCache(data.variables ?? {});
+  updateSettingsDataCache(toDataCacheEntry(data));
+  notifyVarsChanged();
   touchLastUpdated();
   notifyCallbacks();
   emit('config', { ts: Date.now() });
+}
+
+export async function warmSettingsDataCache(): Promise<void> {
+  try {
+    const data = await readSettings();
+    updateSettingsDataCache(toDataCacheEntry(data));
+  } catch { /* ignore — cache stays empty */ }
 }
 
 export async function settingsFileExists(): Promise<boolean> {
@@ -86,6 +189,21 @@ export async function settingsFileExists(): Promise<boolean> {
 
 function diffSettings(before: SettingsData, after: SettingsData): string {
   const lines: string[] = [];
+
+  // ── Variables ─────────────────────────────────────────────────────────────────
+  const bv = before.variables ?? {};
+  const av = after.variables ?? {};
+  const allVarKeys = new Set([...Object.keys(bv), ...Object.keys(av)]);
+  for (const k of allVarKeys) {
+    const bVal = bv[k] ?? '';
+    const aVal = av[k] ?? '';
+    if (bVal !== aVal) {
+      const SENSITIVE = new Set(['CF_PASSWORD', 'MONITOR_PASSWORD', 'SYNC_KEY']);
+      const bShow = SENSITIVE.has(k) && bVal ? '****' : bVal || '(unset)';
+      const aShow = SENSITIVE.has(k) && aVal ? '****' : aVal || '(unset)';
+      lines.push(`~ variables.${k}: ${bShow} → ${aShow}`);
+    }
+  }
 
   // ── Cockpit ───────────────────────────────────────────────────────────────
   const bc = before.homepage.cockpit;

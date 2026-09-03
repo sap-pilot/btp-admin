@@ -1,5 +1,6 @@
 import { useRef, useState } from 'react';
 import { GripVertical, RefreshCw, RotateCcw, Save, ShieldBan, X } from 'lucide-react';
+import { openSubaccountModal } from '@/lib/openSubaccountPopup';
 
 export interface SpaceEntry {
   spaceId:    string;
@@ -405,7 +406,7 @@ export default function SubaccountsTable({
                   <td className={`${tdCls} font-mono text-muted-foreground truncate`}>{sa.region}</td>
                   <td className={`${tdCls} font-mono text-[11px] truncate`}>
                     <button
-                      onClick={() => onOpenDetail(sa)}
+                      onClick={(e) => openSubaccountModal(e, sa.region, sa.subdomain, 'info', () => onOpenDetail(sa))}
                       className="text-primary hover:underline text-left block w-full truncate"
                     >
                       {sa.subdomain}
@@ -466,19 +467,19 @@ export default function SubaccountsTable({
                   </td>
                   <td className={`${tdCls} text-center`}>
                     {sa.subscriptions.length > 0
-                      ? <button onClick={() => onOpenDetail(sa)} className="inline-flex items-center justify-center rounded-full bg-primary/10 text-primary text-[10px] font-semibold px-1.5 min-w-[18px] hover:bg-primary/20 transition-colors">{sa.subscriptions.length}</button>
+                      ? <button onClick={(e) => openSubaccountModal(e, sa.region, sa.subdomain, 'info', () => onOpenDetail(sa))} className="inline-flex items-center justify-center rounded-full bg-primary/10 text-primary text-[10px] font-semibold px-1.5 min-w-[18px] hover:bg-primary/20 transition-colors">{sa.subscriptions.length}</button>
                       : <span className="text-muted-foreground/30">—</span>}
                   </td>
                   <td className={`${tdCls} text-center`}>
                     {sa.serviceInstances.length > 0
-                      ? <button onClick={() => onOpenDetail(sa)} className="inline-flex items-center justify-center rounded-full bg-primary/10 text-primary text-[10px] font-semibold px-1.5 min-w-[18px] hover:bg-primary/20 transition-colors">{sa.serviceInstances.length}</button>
+                      ? <button onClick={(e) => openSubaccountModal(e, sa.region, sa.subdomain, 'info', () => onOpenDetail(sa))} className="inline-flex items-center justify-center rounded-full bg-primary/10 text-primary text-[10px] font-semibold px-1.5 min-w-[18px] hover:bg-primary/20 transition-colors">{sa.serviceInstances.length}</button>
                       : <span className="text-muted-foreground/30">—</span>}
                   </td>
                   <td className={`${tdCls} text-center`}>
                     {(() => {
                       const n = sa.org?.spaces.filter(sp => sp.manageDest).length ?? 0;
                       return n > 0
-                        ? <button onClick={() => onOpenDetail(sa)} className="inline-flex items-center justify-center rounded-full bg-primary/10 text-primary text-[10px] font-semibold px-1.5 min-w-[18px] hover:bg-primary/20 transition-colors">{n}</button>
+                        ? <button onClick={(e) => openSubaccountModal(e, sa.region, sa.subdomain, 'info', () => onOpenDetail(sa))} className="inline-flex items-center justify-center rounded-full bg-primary/10 text-primary text-[10px] font-semibold px-1.5 min-w-[18px] hover:bg-primary/20 transition-colors">{n}</button>
                         : <span className="text-muted-foreground/30">—</span>;
                     })()}
                   </td>
@@ -486,7 +487,7 @@ export default function SubaccountsTable({
                     {(() => {
                       const n = sa.org?.spaces.filter(sp => sp.aod).length ?? 0;
                       return n > 0
-                        ? <button onClick={() => onOpenDetail(sa)} className="inline-flex items-center justify-center rounded-full bg-primary/10 text-primary text-[10px] font-semibold px-1.5 min-w-[18px] hover:bg-primary/20 transition-colors">{n}</button>
+                        ? <button onClick={(e) => openSubaccountModal(e, sa.region, sa.subdomain, 'info', () => onOpenDetail(sa))} className="inline-flex items-center justify-center rounded-full bg-primary/10 text-primary text-[10px] font-semibold px-1.5 min-w-[18px] hover:bg-primary/20 transition-colors">{n}</button>
                         : <span className="text-muted-foreground/30">—</span>;
                     })()}
                   </td>

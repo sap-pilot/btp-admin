@@ -1,6 +1,7 @@
 import { appendFile, mkdir, rename, stat } from 'node:fs/promises';
+import { Readable } from 'node:stream';
 import { touchAppLastAccessed, updateAppFileState } from '../services/appService.js';
-import { getAnalytics, recordAodRequest } from '../services/aodAnalyticsService.js';
+import { getAnalytics, getRequests, getTopApps, getTopUsers, recordAodRequest } from '../services/aodAnalyticsService.js';
 import { join } from 'node:path';
 import type { Request, Response, NextFunction } from 'express';
 import { Router } from 'express';
@@ -38,6 +39,45 @@ router.get('/analytics', async (req, res, next) => {
     const hours = typeof raw === 'string' ? Math.max(1, Math.min(168, Number(raw) || 24)) : 24;
     const data  = await getAnalytics(hours);
     res.json({ ok: true, data });
+  } catch (err) { next(err); }
+});
+
+router.get('/top-apps', async (req, res, next) => {
+  try {
+    const raw   = req.query['duration'];
+    const hours = typeof raw === 'string' ? Math.max(1, Math.min(168, Number(raw) || 24)) : 24;
+    const city        = typeof req.query['city']        === 'string' ? req.query['city']        : undefined;
+    const countryCode = typeof req.query['countryCode'] === 'string' ? req.query['countryCode'] : undefined;
+    const data = await getTopApps(hours, { city, countryCode });
+    res.json({ ok: true, data });
+  } catch (err) { next(err); }
+});
+
+router.get('/top-users', async (req, res, next) => {
+  try {
+    const raw   = req.query['duration'];
+    const hours = typeof raw === 'string' ? Math.max(1, Math.min(168, Number(raw) || 24)) : 24;
+    const city        = typeof req.query['city']        === 'string' ? req.query['city']        : undefined;
+    const countryCode = typeof req.query['countryCode'] === 'string' ? req.query['countryCode'] : undefined;
+    const data = await getTopUsers(hours, { city, countryCode });
+    res.json({ ok: true, data });
+  } catch (err) { next(err); }
+});
+
+router.get('/requests', async (req, res, next) => {
+  try {
+    const page     = Math.max(1, Number(req.query['page'])     || 1);
+    const pageSize = Math.min(500, Math.max(1, Number(req.query['pageSize']) || 50));
+    const sortBy   = typeof req.query['sortBy']  === 'string' ? req.query['sortBy']  : 'ts';
+    const sortDir  = req.query['sortDir'] === 'asc' ? 'asc' as const : 'desc' as const;
+    const str      = (k: string) => typeof req.query[k] === 'string' ? (req.query[k] as string) : '';
+    const result   = await getRequests({
+      page, pageSize, sortBy, sortDir,
+      countryCode: str('countryCode'), city:      str('city'),      country:   str('country'),
+      alias:       str('alias'),       region:    str('region'),    subdomain: str('subdomain'),
+      spaceName:   str('spaceName'),   appName:   str('appName'),   userId:    str('userId'),
+    });
+    res.json({ ok: true, data: result });
   } catch (err) { next(err); }
 });
 
@@ -119,7 +159,7 @@ function extractUserId(req: Request): string {
     const parts = m[1]!.split('.');
     if (parts.length < 2) return '';
     const decoded = JSON.parse(Buffer.from(parts[1]!, 'base64url').toString('utf-8')) as Record<string, unknown>;
-    return String(decoded['user_name'] ?? decoded['email'] ?? decoded['sub'] ?? '');
+    return String(decoded['email'] ?? decoded['user_name'] ?? decoded['sub'] ?? '');
   } catch {
     return '';
   }
@@ -183,11 +223,15 @@ async function checkAppUp(appUrl: string): Promise<boolean> {
     const res    = await fetch(origin, { signal: ctrl.signal }).finally(() => clearTimeout(id));
     // CF GoRouter returns 502/503 when the app process is down
     if (res.status === 502 || res.status === 503) return false;
-    // CF GoRouter returns 404 with "Requested route ('...') does not exist" when the app is
-    // stopped or scaled to zero and the route is no longer routable
+    // CF GoRouter sets X-Cf-Routererror on any routing failure:
+    //   endpoint_failure → app stopped/crashed (502)
+    //   unknown_route    → route not registered (404)
+    // This is more reliable than body-sniffing and covers both cases.
+    if (res.headers.get('x-cf-routererror')) return false;
+    // Fallback body check for older CF versions that may not set the header
     if (res.status === 404) {
       const body = await res.text();
-      return !body.includes('Requested route (');
+      if (/Requested route \('[^']*'\) does not exist\./i.test(body) || body.includes('CF-RouteNotFound')) return false;
     }
     return true;
   } catch {
@@ -254,8 +298,6 @@ export async function aodProxyHandler(req: Request, res: Response, next: NextFun
   const region     = typeof hRegion    === 'string' ? hRegion    : (extractRegion(appUrl) ?? 'unknown');
   const subdomain  = typeof hSubdomain === 'string' ? hSubdomain : 'unknown';
 
-  logger.debug({ appUrl, appId, region, subdomain, path: req.path, method: req.method }, 'AOD: incoming request');
-
   const userId = extractUserId(req);
 
   // Start geo lookup early so it can run concurrently with the app check / proxy
@@ -289,39 +331,65 @@ export async function aodProxyHandler(req: Request, res: Response, next: NextFun
       void updateAppFileState(appId, region, subdomain, 'STARTED');
     }
 
-    // Build proxy headers — strip host and x-aod-* headers
+    // Build proxy headers — strip host and x-aod-* only.
+    // content-length is forwarded as-is: express.raw() captured the exact client bytes so the
+    // original value is correct. accept-encoding is forwarded as-is: for 2xx we pipe raw bytes
+    // so the client handles decompression itself; for errors we buffer and strip content-encoding.
     const proxyHeaders: Record<string, string> = {};
     for (const [k, v] of Object.entries(req.headers)) {
-      if (k.toLowerCase() === 'host') continue;
-      if (k.toLowerCase().startsWith('x-aod-')) continue;
+      const lk = k.toLowerCase();
+      if (lk === 'host') continue;
+      if (lk.startsWith('x-aod-')) continue;
       if (typeof v === 'string') proxyHeaders[k] = v;
       else if (Array.isArray(v)) proxyHeaders[k] = v.join(', ');
     }
 
     const hasBody = req.method !== 'GET' && req.method !== 'HEAD';
-    const bodyBuf = hasBody ? JSON.stringify(req.body) : undefined;
+    // req.body is a raw Buffer captured by express.raw() — forward as-is for any content type
+    const rawBody: Buffer | undefined = hasBody && Buffer.isBuffer(req.body) && req.body.length > 0
+      ? req.body
+      : undefined;
 
     // Upstream request and geo lookup run concurrently
     const [upstream, geo] = await Promise.all([
-      fetch(targetUrl, { method: req.method, headers: proxyHeaders, body: bodyBuf }),
+      fetch(targetUrl, { method: req.method, headers: proxyHeaders, body: rawBody as BodyInit | undefined }),
       geoPromise,
     ]);
 
     const totalMs = Date.now() - t0;
 
+    logger.debug({ appUrl, appId, region, subdomain, path: req.path, method: req.method, status: upstream.status, totalMs }, 'AOD: proxy response');
+
     res.status(upstream.status);
-    upstream.headers.forEach((v, k) => {
-      if (k.toLowerCase() === 'transfer-encoding') return;
-      res.setHeader(k, v);
-    });
-    const upBuf = await upstream.arrayBuffer();
-    res.end(Buffer.from(upBuf));
 
     // Write access log + fire analytics event + touch lastAccessed — all non-blocking
     const reqTs = Math.floor(t0 / 1000);
     void appendCsvLog(region, subdomain, reqTs, appUrl, appId, clientIp, geo.country, geo.countryCode, geo.city, geo.lat, geo.lon, userId, startupMs, totalMs);
     recordAodRequest({ region, subdomain, appId, userId, country: geo.country, countryCode: geo.countryCode, city: geo.city, lat: geo.lat, lon: geo.lon, ts: reqTs });
     void touchAppLastAccessed(appId, region, subdomain, reqTs);
+
+    if (upstream.status < 300 && upstream.body) {
+      // Forward headers as-is and pipe raw bytes — accept-encoding was forwarded so the
+      // upstream may compress; we relay those bytes directly and the client decompresses.
+      upstream.headers.forEach((v, k) => {
+        if (k.toLowerCase() === 'transfer-encoding') return;
+        res.setHeader(k, v);
+      });
+      Readable.fromWeb(upstream.body as Parameters<typeof Readable.fromWeb>[0]).pipe(res);
+    } else {
+      // Buffer error responses. undici decompresses transparently, so strip encoding
+      // headers and recalculate content-length from the actual (decoded) buffer.
+      upstream.headers.forEach((v, k) => {
+        const lk = k.toLowerCase();
+        if (lk === 'transfer-encoding') return;
+        if (lk === 'content-encoding') return;
+        if (lk === 'content-length') return;
+        res.setHeader(k, v);
+      });
+      const upBuf = Buffer.from(await upstream.arrayBuffer());
+      res.setHeader('content-length', upBuf.length);
+      res.end(upBuf);
+    }
   } catch (err) {
     logger.error({ err, appUrl, targetUrl }, 'AOD proxy error');
     next(err);

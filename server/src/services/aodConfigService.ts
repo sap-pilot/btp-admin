@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { config } from '../config.js';
 import { logger } from '../logger.js';
 import { getConfig } from './configService.js';
+import { getCachedSettingsOverrides } from './settingsDataCache.js';
 import { notifyCallbacks } from './syncService.js';
 import { emit } from './liveEvents.js';
 import { touchLastUpdated } from './lastUpdatedService.js';
@@ -26,13 +27,19 @@ function getConfigFileAod(): AodConfig {
 
 export async function readAodConfig(): Promise<AodConfig> {
   const base = getConfigFileAod();
+  let merged: AodConfig;
   try {
-    const raw     = await readFile(AOD_CONFIG_PATH, 'utf-8');
-    const local   = JSON.parse(raw) as AodConfig;
-    return { ...base, ...local };
+    const raw   = await readFile(AOD_CONFIG_PATH, 'utf-8');
+    const local = JSON.parse(raw) as AodConfig;
+    merged = { ...base, ...local };
   } catch {
-    return base;
+    merged = { ...base };
   }
+  // settings.json->aod is highest priority
+  const settingsAod = getCachedSettingsOverrides().aod;
+  if (settingsAod?.regionalEndpoints) merged.regionProxyEndpoint = settingsAod.regionalEndpoints;
+  if (settingsAod?.excludeApps)       merged.excludeApps         = settingsAod.excludeApps;
+  return merged;
 }
 
 export async function writeAodConfig(data: AodConfig): Promise<void> {

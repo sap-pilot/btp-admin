@@ -18,6 +18,7 @@ export default function Home() {
   const [lastUpdated, setLastUpdated] = useState<number | null>(null);
   const [loading,     setLoading]     = useState(true);
   const [filterQuery, setFilterQuery] = useState('');
+  const [isAdmin,     setIsAdmin]     = useState(false);
 
   const loadingRef = useRef(true);
 
@@ -27,11 +28,13 @@ export default function Home() {
       fetch('/api/config/subaccounts').then(r => r.json() as Promise<{ ok: boolean; data: SubaccountEntry[] }>),
       fetch('/api/config/cockpit-menu').then(r => r.json() as Promise<CockpitMenuItem | null>),
       fetch('/api/config/last-updated').then(r => r.json() as Promise<{ ok: boolean; ts: number | null }>),
-    ]).then(([tabsRes, sasRes, menuRes, luRes]) => {
+      fetch('/api/me').then(r => r.json() as Promise<{ isAdmin?: boolean }>),
+    ]).then(([tabsRes, sasRes, menuRes, luRes, meRes]) => {
       if (tabsRes.ok)  setTabs(tabsRes.data);
       if (sasRes.ok)   setSubaccounts(sasRes.data);
       setCockpitMenu(menuRes);
       if (luRes.ok && luRes.ts != null) setLastUpdated(luRes.ts);
+      setIsAdmin(meRes.isAdmin ?? false);
     }).catch(() => null)
       .finally(() => {
         if (loadingRef.current) { loadingRef.current = false; setLoading(false); }
@@ -80,7 +83,7 @@ export default function Home() {
     : (visibleTabs[0]?.tab ?? activeTab);
 
   const homepage: HomepageData | null = tabs.length
-    ? { tabs: visibleTabs, subaccounts, cockpit, cockpitMenu, mainSubscriptions }
+    ? { tabs: visibleTabs, subaccounts, cockpit, cockpitMenu, mainSubscriptions, isAdmin }
     : null;
 
   // Count matching subaccounts across ALL tabs (unique by SA)

@@ -179,19 +179,55 @@ function joinPath(base: string, suffix: string): string {
   return base + suffix;
 }
 
+async function fetchOAuth2ClientCredentialsToken(destData: Record<string, unknown>): Promise<string> {
+  const tokenUrl  = (destData['tokenServiceURL'] as string | undefined) ?? '';
+  const clientId  = (destData['clientId'] as string | undefined) ?? '';
+  const clientSecret = (destData['clientSecret'] as string | undefined) ?? '';
+  if (!tokenUrl)  throw new Error('OAuth2ClientCredentials: missing tokenServiceURL in destination');
+  if (!clientId)  throw new Error('OAuth2ClientCredentials: missing clientId in destination');
+  if (!clientSecret) throw new Error('OAuth2ClientCredentials: missing clientSecret in destination');
+  const basic = Buffer.from(`${clientId}:${clientSecret}`).toString('base64');
+  const res = await fetch(tokenUrl, {
+    method:  'POST',
+    headers: { 'Authorization': `Basic ${basic}`, 'Content-Type': 'application/x-www-form-urlencoded' },
+    body:    new URLSearchParams({ grant_type: 'client_credentials' }).toString(),
+    signal:  AbortSignal.timeout(15_000),
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    throw new Error(`OAuth2 token request failed: HTTP ${res.status}${text ? ` — ${text.slice(0, 300)}` : ''}`);
+  }
+  const json = await res.json() as { access_token?: string };
+  if (!json.access_token) throw new Error('OAuth2 token response did not contain access_token');
+  return json.access_token;
+}
+
 async function runInternetTest(destData: Record<string, unknown>, req: TestRequest): Promise<TestResult> {
   const destUrl = (destData['URL'] as string | undefined) ?? '';
   const fullUrl = joinPath(destUrl, req.path);
 
   const auth = destData['Authentication'] as string | undefined;
-  if (auth && auth !== 'NoAuthentication' && auth !== 'BasicAuthentication') {
-    return { ok: false, error: `Authentication type "${auth}" is not supported for testing`, detail: 'Only NoAuthentication and BasicAuthentication are supported.', source: 'config' };
+  if (auth && auth !== 'NoAuthentication' && auth !== 'BasicAuthentication' && auth !== 'OAuth2ClientCredentials') {
+    return { ok: false, error: `Authentication type "${auth}" is not supported for testing`, detail: 'Only NoAuthentication, BasicAuthentication, and OAuth2ClientCredentials are supported.', source: 'config' };
   }
 
   const headers: Record<string, string> = {};
   for (const h of req.headers) { if (h.key) headers[h.key] = h.value; }
-  const authHeader = buildAuthHeader(destData);
-  if (authHeader) headers['Authorization'] = authHeader;
+
+  if (auth === 'OAuth2ClientCredentials') {
+    let token: string;
+    try {
+      token = await fetchOAuth2ClientCredentialsToken(destData);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      return { ok: false, error: 'OAuth2 authentication failed', detail: msg, source: 'auth' };
+    }
+    headers['Authorization'] = `Bearer ${token}`;
+  } else {
+    const authHeader = buildAuthHeader(destData);
+    if (authHeader) headers['Authorization'] = authHeader;
+  }
+
   const sapClient = destData['sap-client'] as string | undefined;
   if (sapClient) headers['sap-client'] = sapClient;
 

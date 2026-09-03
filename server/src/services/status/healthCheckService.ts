@@ -1,4 +1,5 @@
 import { getService } from '../configService.js';
+import { getSettingsVar } from '../variablesService.js';
 import { evaluateCondition } from './conditionEvaluator.js';
 import { saveResponse } from '../localStoreService.js';
 import { getEvaluationMode } from './overrideService.js';
@@ -73,9 +74,15 @@ export async function checkService(serviceName: string, requestHost?: string, on
   const details: EndpointCheckResult[] = [];
   const hostRegion = requestHost ? extractRegion(requestHost) : null;
 
+  // Apply any settings-level MONITOR credential overrides at probe time
+  const monitorUser = getSettingsVar('MONITOR_USERNAME');
+  const monitorPass = getSettingsVar('MONITOR_PASSWORD');
+
   for (let i = 0; i < service.endpoints.length; i++) {
     if (onlyEpIdx !== undefined && i !== onlyEpIdx) continue;
-    const ep = service.endpoints[i];
+    let ep = service.endpoints[i];
+    if (monitorUser !== undefined && ep.username !== undefined) ep = { ...ep, username: monitorUser };
+    if (monitorPass !== undefined && ep.password !== undefined) ep = { ...ep, password: monitorPass };
     const epName = ep.name ?? `Endpoint ${i}`;
 
     // ── Region filter ───────────────────────────────────────────────────────
