@@ -29,12 +29,29 @@ interface AnalyticsUpdateMsg {
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
+function isToday(d: Date): boolean {
+  const now = new Date();
+  return d.getFullYear() === now.getFullYear()
+    && d.getMonth() === now.getMonth()
+    && d.getDate() === now.getDate();
+}
+function fmtTimestamp(ts: number, includeSeconds: boolean): string {
+  const d = new Date(ts * 1000);
+  if (isToday(d)) {
+    return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', ...(includeSeconds ? { second: '2-digit' } : {}), hour12: false });
+  }
+  const mm  = String(d.getMonth() + 1).padStart(2, '0');
+  const dd  = String(d.getDate()).padStart(2, '0');
+  const hh  = String(d.getHours()).padStart(2, '0');
+  const min = String(d.getMinutes()).padStart(2, '0');
+  return `${mm}/${dd} ${hh}:${min}`;
+}
 function fmtTime(ts: number): string {
-  return new Date(ts * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
+  return fmtTimestamp(ts, true);
 }
 function fmtLatestRequest(ts: number): string {
   if (!ts) return '—';
-  return new Date(ts * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true });
+  return fmtTimestamp(ts, false);
 }
 
 const geoKey  = (lat: number, lon: number) => `${lat.toFixed(2)},${lon.toFixed(2)}`;

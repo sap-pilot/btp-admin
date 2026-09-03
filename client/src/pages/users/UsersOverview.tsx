@@ -662,6 +662,7 @@ export default function UsersOverview() {
             navigate(returnUrl.current, { replace: true });
           }}
           subaccounts={saData}
+          tabs={tabEntries}
           onSelectSubaccount={newSa => setModal(prev => prev ? { ...prev, sa: newSa } : null)}
           cockpit={settings?.homepage.cockpit}
           cockpitMenu={cockpitMenu}

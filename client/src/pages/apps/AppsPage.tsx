@@ -92,9 +92,19 @@ function fmtMB(mb: number): string {
 }
 
 function fmtTime(unixSecs: number): string {
-  return new Date(unixSecs * 1000).toLocaleTimeString(undefined, {
-    hour: '2-digit', minute: '2-digit', second: '2-digit',
-  });
+  const d = new Date(unixSecs * 1000);
+  const now = new Date();
+  const isToday = d.getFullYear() === now.getFullYear()
+    && d.getMonth() === now.getMonth()
+    && d.getDate() === now.getDate();
+  if (isToday) {
+    return d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
+  }
+  const m   = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  const hh  = String(d.getHours()).padStart(2, '0');
+  const mm  = String(d.getMinutes()).padStart(2, '0');
+  return `${m}/${day} ${hh}:${mm}`;
 }
 
 function toYMD(d: Date): string {
