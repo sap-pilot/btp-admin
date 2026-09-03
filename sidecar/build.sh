@@ -23,6 +23,16 @@ fi
 
 rm -rf WEB-INF/classes
 mkdir -p WEB-INF/classes META-INF
+
+# Bundle BTP egress IPs for sidecar IP filtering
+BTP_ENDPOINTS="../server/config/btp-endpoints.json"
+if [ -f "$BTP_ENDPOINTS" ]; then
+    cp "$BTP_ENDPOINTS" WEB-INF/btp-endpoints.json
+    echo "Copied btp-endpoints.json into WEB-INF/"
+else
+    echo "WARNING: $BTP_ENDPOINTS not found — AOD IP filtering will be inactive in the sidecar"
+fi
+
 javac -cp "$SERVLET_JAR:$JCO_JAR" -source 11 -target 11 \
       -d WEB-INF/classes \
       SidecarServlet.java

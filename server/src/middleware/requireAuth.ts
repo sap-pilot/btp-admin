@@ -3,7 +3,7 @@ import { createHmac, timingSafeEqual } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { getXsuaaConfig, readSessionFromRequest } from '../services/authService.js';
 import type { SessionPayload } from '../services/authService.js';
-import { getSyncKey, getSyncNoIpProtection, getSyncWhitelistIPs, getSyncInternalIpWhitelist } from '../services/configService.js';
+import { getSyncKey, getSyncNoIpProtection, getSyncWhitelistIPs, getSyncInternalIpWhitelist, getAodNoIpProtection, getAodWhitelistIPs } from '../services/configService.js';
 import { config } from '../config.js';
 import { logger } from '../logger.js';
 
@@ -172,6 +172,29 @@ export function requireSessionGlobal(req: Request, res: Response, next: NextFunc
   if (!x) { next(); return; }
   const session = readSessionFromRequest(req.headers.cookie ?? '', x.clientsecret);
   if (!session) { res.status(401).json({ error: 'Authentication required' }); return; }
+  next();
+}
+
+/**
+ * Guards the /aod proxy endpoint.
+ * Allows loopback (local dev), AOD_NO_IP_PROTECTION=true, or IPs in the BTP egress list
+ * plus any AOD_WHITELIST_IPS. When btp-endpoints.json is absent and no whitelist is set,
+ * the check is a no-op (same behaviour as sync IP filtering).
+ */
+export function requireAodIpFilter(req: Request, res: Response, next: NextFunction): void {
+  if (getAodNoIpProtection()) { next(); return; }
+
+  const ip = getClientIp(req);
+  if (ip === '127.0.0.1' || ip === '::1' || ip === '::ffff:127.0.0.1') { next(); return; }
+
+  const whitelist = [...getBtpEgressIPs(), ...getAodWhitelistIPs()];
+  if (whitelist.length > 0 && !isIpAllowed(ip, whitelist)) {
+    logger.warn({ ip, path: req.path },
+      'AOD request blocked: IP not in BTP egress whitelist — set AOD_NO_IP_PROTECTION=true to disable, or add to AOD_WHITELIST_IPS');
+    res.status(403).json({ error: 'Forbidden: request origin is not in the allowed whitelist' });
+    return;
+  }
+
   next();
 }
 

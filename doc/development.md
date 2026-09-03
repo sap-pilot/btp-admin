@@ -147,78 +147,26 @@ Every sync request carries `x-sync-ts` and `x-sync-sig: HMAC-SHA256(timestamp, S
 To pull files from a producer whose `SYNC_KEY` no longer matches yours:
 
 ```bash
-cf set-env btp-status-producer SYNC_PROTECTION_OFF true
-cf restart btp-status-producer
+cf set-env btp-admin SYNC_PROTECTION_OFF true
+cf restart btp-admin
 # ... complete initial sync on the consumer ...
-cf unset-env btp-status-producer SYNC_PROTECTION_OFF
-cf restart btp-status-producer
+cf unset-env btp-admin SYNC_PROTECTION_OFF
+cf restart btp-admin
 ```
 
 ### Sync IP Whitelisting
 
-When `server/config/btp-endpoints.json` is present, sync endpoints reject requests from IPs not in SAP BTP's published egress ranges (unless `SYNC_NO_IP_PROTECTION` is set).
+When `server/config/btp-endpoints.json` is present, sync endpoints (and the `/aod` proxy) reject requests from IPs not in SAP BTP's published egress ranges. The same file is bundled into the sidecar WAR at build time.
 
-**Generate `btp-endpoints.json`:**
-
-1. Download the SAP CF endpoints CSV from the [SAP Help Portal](https://help.sap.com/docs/btp/sap-business-technology-platform/regions-and-api-endpoints-available-for-cloud-foundry-environment) → **Download → CSV → Download all data on all pages**
-2. Run:
-   ```bash
-   npm run parse-btp-endpoints ~/Downloads/sap-cf-endpoints.csv
-   ```
-
-IP whitelisting is only active when at least one entry is contributed by `btp-endpoints.json`, `SYNC_WHITELIST_IPS`, or `SYNC_INTERNAL_IP_WHITELIST`. HMAC authentication is enforced independently.
+See [Security → `btp-endpoints.json`](security.md#btp-endpointsjson) for how to generate or update the file, and for the full IP filtering reference (variables, bypass flags, CIDR support).
 
 ---
 
 ## Authentication & Authorization
 
-By default the app runs without authentication — all endpoints and admin controls are publicly accessible. When a **XSUAA** service binding is present (`VCAP_SERVICES` contains an `xsuaa` entry), the app switches into authenticated mode automatically.
+See [Security → Authentication & Authorization](security.md#authentication--authorization) for session cookie details, protected routes, role collections, and BTP XSUAA setup.
 
-Authentication follows the **OAuth2 Authorization Code flow** via a browser popup — no `@sap/approuter`. Everything uses `node:crypto` and the Node.js standard library.
-
-### Session Cookie
-
-| Property | Value |
-|----------|-------|
-| Name | `btpauth` |
-| Signing | HMAC-SHA256 (key = XSUAA `clientsecret`); verified with `timingSafeEqual` |
-| HttpOnly | Yes |
-| Secure | Yes on BTP (`VCAP_APPLICATION` present); omitted for local HTTP dev |
-| SameSite | Lax |
-
-### Role Collections
-
-Two role collections are created automatically on first deploy:
-
-| Role Collection | Access |
-|-----------------|--------|
-| **BTP Admin** | Full admin access — Config page, Subaccounts Refresh, Destinations, Role Collections, Users, AOD, Variables settings |
-| **BTP Status Admin** | Write access to status page eval mode and schedule overrides |
-
-After deploying to BTP, assign role collections in **BTP Cockpit → Security → Role Collections**:
-- Assign **BTP Admin** to all users who should manage subaccounts, destinations, role collections, and users
-- Assign **BTP Status Admin** to users who should control health-check eval mode and schedules
-
-### Protected Routes
-
-| Route | Guard |
-|-------|-------|
-| `GET /api/check/:name` | Auth required |
-| `POST /api/sync` | Auth required |
-| `GET /api/view?path=…` | Auth required |
-| `POST /api/eval-mode/:name` | Admin required |
-| `POST /api/schedule/:name` | Admin required |
-| `GET /api/sync/browse` | HMAC sync only |
-| `POST /api/sync/batch` | HMAC sync only |
-| `GET /api/sync/trigger` | HMAC sync only |
-
-All read-only data endpoints and static assets are public regardless of auth state.
-
-### BTP Setup
-
-XSUAA is already wired in `mta.yaml` and `xs-security.json` (committed to the repo). On first deploy BTP provisions the service instance automatically — no manual steps needed beyond assigning role collections to users.
-
-When `VCAP_SERVICES` is not set (local dev), all auth middleware passes through — no login required and all controls remain fully active.
+See [Security → API Endpoint Protection Overview](security.md#api-endpoint-protection-overview) for a full table of which endpoints are protected by which mechanism.
 
 ---
 

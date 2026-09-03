@@ -26,7 +26,7 @@ import { warmSettingsVarsCache } from './services/variablesService.js';
 import { registerSettingsVarsChangedCallback, triggerSettingsVarsChanged, warmSettingsDataCache } from './services/settingsService.js';
 import { resetCfLoginCache } from './services/cfLoginService.js';
 import { registerOnSettingsSynced } from './services/syncService.js';
-import { requireSessionGlobal } from './middleware/requireAuth.js';
+import { requireSessionGlobal, requireAodIpFilter } from './middleware/requireAuth.js';
 import { errorHandler } from './middleware/errorHandler.js';
 import { compress } from './middleware/compress.js';
 import { serveStatic } from './static.js';
@@ -56,10 +56,10 @@ registerOnSettingsSynced(() => {
 
 app.use('/health', healthRouter);
 app.use(authRouter);
-// AOD proxy: no auth — must be mounted before requireSessionGlobal
-// Raw body parser for the AOD proxy — must run before express.json() consumes the stream.
+// AOD proxy: IP-filtered but no session auth — must be mounted before requireSessionGlobal.
+// Raw body parser must run before express.json() consumes the stream.
 // body-parser sets req._body=true so express.json() skips re-parsing afterwards.
-app.use('/aod', express.raw({ type: '*/*', limit: '50mb' }), aodProxyHandler);
+app.use('/aod', requireAodIpFilter, express.raw({ type: '*/*', limit: '50mb' }), aodProxyHandler);
 // API responses must never be cached — prevents 304s on repeated /api/view requests
 app.use('/api', (_req, res, next) => { res.setHeader('Cache-Control', 'no-store'); next(); });
 // Global session auth: all /api/* require login when XSUAA is bound (exceptions in requireSessionGlobal)

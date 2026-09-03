@@ -26,6 +26,7 @@ Work-Zone Apps Usage Analytis: <br />
 | [**Role Collections**](doc/role-collection-management.md) | Cross-subaccount role collection management — browse, edit, assign/remove users, change history |
 | [**User Management**](doc/user-management.md) | Cross-subaccount XSUAA user view — detail, global access tree, change history, full-text search |
 | [**Application on Demand**](doc/application-on-demand.md) | CF app scanning, auto-stop idle apps, per-space AOD toggle |
+| [**Security**](doc/security.md) | XSUAA OAuth2 session auth, HMAC peer-sync, BTP egress IP filtering for AOD and sync endpoints, sidecar JWT guard |
 
 ---
 
@@ -91,3 +92,5 @@ After deploying, assign role collections in **BTP Cockpit → Security → Role 
 - **BTP Admin** — grants access to the Config page and all admin features (Destinations, Role Collections, Users, AOD); assign to all admin users
 
 For detailed deployment configuration (env vars, blue-green strategy, post-deploy config, RFC sidecar, auth) see [doc/development.md](doc/development.md).
+
+For XSUAA setup, session auth, BTP egress IP filtering (AOD and sync endpoints), and the full API endpoint protection reference see [doc/security.md](doc/security.md).
