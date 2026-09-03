@@ -732,7 +732,7 @@ export default function SubaccountModal({ sa, onClose, cockpit, cockpitMenu, isA
                                           />
                                         ) : aodChecked ? (
                                           <span className="inline-flex items-center gap-1 text-[10px] text-green-600 dark:text-green-400 font-medium">
-                                            <span className="w-1.5 h-1.5 rounded-full bg-green-500 shrink-0" />In Use
+                                            <span className="w-1.5 h-1.5 rounded-full bg-green-500 shrink-0" />Enabled
                                           </span>
                                         ) : null}
                                       </td>
