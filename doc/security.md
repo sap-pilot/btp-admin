@@ -15,6 +15,10 @@ When deployed to SAP BTP with a **XSUAA** service binding (`VCAP_SERVICES` conta
 
 > **!** When XSUAA is not present (e.g. running locally with `npm run dev`), all authentication and authorisation checks are bypassed — all endpoints and admin controls are openly accessible.
 
+### OAuth2 Login Flow & CSRF Protection
+
+The login popup navigates to `/login`, which generates a 16-byte random `state` token, stores it in a short-lived `btpstate` cookie (HttpOnly, SameSite=Lax, 5-minute Max-Age), and includes it in the XSUAA authorize URL. On the `/login/callback`, the `state` query parameter returned by XSUAA is compared against the cookie; a mismatch (or missing cookie) is rejected with 400 before the authorization code is exchanged. This prevents login CSRF / session fixation attacks.
+
 ### Session Cookie
 
 | Property | Value |
@@ -24,6 +28,8 @@ When deployed to SAP BTP with a **XSUAA** service binding (`VCAP_SERVICES` conta
 | HttpOnly | Yes |
 | Secure | Yes on BTP (`VCAP_APPLICATION` present); omitted for local HTTP dev |
 | SameSite | Lax |
+
+The `btpauth` cookie is never forwarded to upstream CF apps through the AOD proxy — it is stripped from the `Cookie` header before the request is forwarded.
 
 ### Role Collections
 
@@ -80,13 +86,17 @@ Different endpoints use different protection mechanisms depending on the intende
 
 ### Protection mechanisms
 
-**XSUAA session cookie** (`btpauth`) — present when the user has completed the XSUAA OAuth2 Authorization Code login flow via the browser popup. The cookie is HMAC-SHA256 signed with the XSUAA `clientsecret` and verified with `timingSafeEqual` on every request. When XSUAA is not configured (local dev, open deployment), all session guards pass through.
+**XSUAA session cookie** (`btpauth`) — present when the user has completed the XSUAA OAuth2 Authorization Code login flow. The cookie is HMAC-SHA256 signed with the XSUAA `clientsecret` and verified with `timingSafeEqual` on every request. Login CSRF is prevented by a short-lived `btpstate` cookie verified at the callback (see [OAuth2 Login Flow & CSRF Protection](#oauth2-login-flow--csrf-protection)). When XSUAA is not configured (local dev), all session guards pass through.
 
-**HMAC peer-sync** — sync endpoints require both a valid HMAC signature (`x-sync-ts` + `x-sync-sig` headers, signed with `SYNC_KEY`) and an IP from the BTP egress ranges. HMAC alone ensures only the peer instance with knowledge of `SYNC_KEY` can pull data; IP filtering ensures traffic must originate from a BTP CF egress IP. Either check failing is independently sufficient to reject the request.
+**HMAC peer-sync** — sync endpoints require both a valid HMAC signature (`x-sync-ts` + `x-sync-sig` headers, signed with `SYNC_KEY`) and an IP from the BTP egress ranges. Either check failing is independently sufficient to reject the request. The `callback` URL registered via `GET /api/sync/browse?callback=…` is validated against BTP CF app domain patterns (`*.cfapps.*.hana.ondemand.com`) and the configured `SYNC_REMOTE`/`SELF_URL` values — arbitrary URLs are rejected to prevent SSRF.
 
-**BTP egress IP filter** — a flat list of BTP Cloud Foundry egress IPs extracted from `server/config/btp-endpoints.json`. Applied to both the `/aod` proxy (destination service calls) and `/api/sync/*` (peer instance calls). Loopback (`127.0.0.1`, `::1`) is always allowed for local dev. Disable with `AOD_NO_IP_PROTECTION=true` (AOD) or `SYNC_NO_IP_PROTECTION=true` (sync). Extend with `AOD_WHITELIST_IPS` or `SYNC_WHITELIST_IPS` (comma-separated CIDRs or IPs). The filter is a no-op when neither `btp-endpoints.json` nor the whitelist variables are populated — useful in early setup phases.
+**BTP egress IP filter** — applied to `/aod` (destination service calls) and `/api/sync/*` (peer instance calls). Three IP sets are always allowed: (1) BTP CF egress IPs from `server/config/btp-endpoints.json`, (2) RFC 1918 private ranges (`10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`) — required because CF internal / container-to-container calls (e.g. Workzone → BTP Admin, BTP Admin → sidecar) arrive with a private `10.x` IP, and (3) loopback for local dev. The source IP is read from `x-cf-true-client-ip` (trusted only when `VCAP_APPLICATION` is set, i.e., running on CF) or the socket-level IP otherwise — preventing header spoofing in non-CF environments. Disable with `AOD_NO_IP_PROTECTION=true` or `SYNC_NO_IP_PROTECTION=true`; extend with `AOD_WHITELIST_IPS`, `SYNC_WHITELIST_IPS`, or `SYNC_INTERNAL_IP_WHITELIST`. The BTP egress list is a no-op when `btp-endpoints.json` is absent and no extra whitelist is configured (RFC 1918 and loopback still apply).
 
-**XSUAA JWT (sidecar)** — the sidecar (TomEE WAR) validates the JWT Bearer token passed by the btp-admin server in the `Authorization` header. The XSUAA public key is loaded from `VCAP_SERVICES` at startup. Additionally, the sidecar applies the BTP egress IP filter from its own bundled copy of `btp-endpoints.json` (copied into `WEB-INF/` at build time by `sidecar/build.sh`). The sidecar also declares `<auth-method>XSUAA</auth-method>` in `web.xml`, which enables the SAP Container Security Provider's role-based access control: the `/api/*` pattern requires the `admin` role.
+For AOD geo-location, the first entry of `x-forwarded-for` is used as the user IP (the actual browser user's public IP, prepended by the CF GoRouter chain). `x-cf-true-client-ip` identifies the CF service caller (e.g. Workzone or Destination Service) and is used only for filtering, not geo lookup.
+
+**HTTP security headers** — every response includes `X-Frame-Options: SAMEORIGIN` (clickjacking protection), `X-Content-Type-Options: nosniff` (MIME sniffing protection), and `Referrer-Policy: strict-origin-when-cross-origin`. On BTP (`VCAP_APPLICATION` present), `Strict-Transport-Security: max-age=31536000; includeSubDomains` is also set.
+
+**XSUAA JWT (sidecar)** — the sidecar (TomEE WAR) validates the JWT Bearer token in the `Authorization` header; the XSUAA public key is loaded from `VCAP_SERVICES` at startup. It also applies the BTP egress IP filter from its bundled `WEB-INF/btp-endpoints.json` (copied by `sidecar/build.sh`) and enforces the `admin` role via `<auth-method>XSUAA</auth-method>` in `web.xml`.
 
 ### `btp-endpoints.json`
 
@@ -99,4 +109,4 @@ The file at `server/config/btp-endpoints.json` contains BTP CF egress IPs for al
    ```
 3. Rebuild the sidecar WAR (`sidecar/build.sh`) so the updated file is bundled into `WEB-INF/`.
 
-IP whitelisting is only active when at least one entry is contributed by `btp-endpoints.json`, `AOD_WHITELIST_IPS`/`SYNC_WHITELIST_IPS`, or `SYNC_INTERNAL_IP_WHITELIST`. HMAC authentication is enforced independently.
+RFC 1918 private ranges and loopback are always allowed regardless of `btp-endpoints.json`. Additional entries can be contributed via `AOD_WHITELIST_IPS`, `SYNC_WHITELIST_IPS`, or `SYNC_INTERNAL_IP_WHITELIST`. HMAC authentication on sync endpoints is enforced independently of IP filtering.

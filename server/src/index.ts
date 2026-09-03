@@ -33,6 +33,16 @@ import { serveStatic } from './static.js';
 
 const app = express();
 app.use(compress);
+// Security response headers
+app.use((_req, res, next) => {
+  res.setHeader('X-Frame-Options', 'SAMEORIGIN');
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+  if (process.env.VCAP_APPLICATION) {
+    res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
+  }
+  next();
+});
 app.use(express.json({ limit: '5mb' }));
 
 const cfg = loadConfig();

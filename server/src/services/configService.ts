@@ -152,10 +152,10 @@ export function getAutoSubaccountRefreshMs(): number {
 const DEFAULT_INTERNAL_IP_WHITELIST = '';
 
 /**
- * Returns CIDRs for internal/private network ranges always allowed on sync endpoints.
+ * Returns additional CIDRs allowed on sync endpoints beyond the built-in RFC 1918 ranges.
+ * RFC 1918 private ranges (10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16) are always included
+ * automatically in requireSyncAuth — use this only to add further peer-specific CIDRs.
  * SYNC_INTERNAL_IP_WHITELIST env var takes precedence over config.variables entry.
- * Defaults to RFC 1918 private ranges: 192.168.0.0/16, 10.0.0.0/8, 172.16.0.0/12.
- * Set to empty string to disable.
  */
 export function getSyncInternalIpWhitelist(): string[] {
   const raw = process.env.SYNC_INTERNAL_IP_WHITELIST ?? getConfig().variables?.['SYNC_INTERNAL_IP_WHITELIST'] ?? DEFAULT_INTERNAL_IP_WHITELIST;

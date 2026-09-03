@@ -173,8 +173,17 @@ router.get('/browse', requireSyncAuth, async (req, res, next) => {
     if (typeof rawCallback === 'string') {
       try {
         const parsed = new URL(rawCallback);
-        if (parsed.protocol === 'https:' || parsed.protocol === 'http:') {
+        // Only register https:// callbacks whose hostname matches a known peer URL
+        // (SYNC_REMOTE or SELF_URL) or the BTP CF app domain pattern.
+        // This prevents an authenticated caller from using callback registration as SSRF.
+        const isBtpDomain = /\.cfapps\.[a-z0-9-]+\.hana\.ondemand\.com$/.test(parsed.hostname);
+        const isKnownPeer = [config.SYNC_REMOTE, config.SELF_URL]
+          .filter(Boolean)
+          .some(u => { try { return new URL(u).hostname === parsed.hostname; } catch { return false; } });
+        if (parsed.protocol === 'https:' && (isBtpDomain || isKnownPeer)) {
           registerCallback(rawCallback);
+        } else {
+          logger.warn({ callback: rawCallback, ip: getClientIp(req) }, 'Sync: callback URL rejected — not a known BTP CF hostname');
         }
       } catch { /* invalid URL — ignore */ }
     }
