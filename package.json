@@ -22,6 +22,7 @@
     "lint": "npm run lint --workspace=client && npm run lint --workspace=server",
     "typecheck": "npm run typecheck --workspace=client && npm run typecheck --workspace=server",
     "test": "npm run test --workspace=client && npm run test --workspace=server",
+    "test:e2e": "npm run build:client && npm run test:e2e --workspace=server",
     "logs": "cf logs btp-admin | grep --line-buffered -v -E '\\[RTR|\\[API|\\[CELL|\\[PROXY|\\[STG' | node scripts/format-logs.mjs",
     "logs-idle": "cf logs btp-admin-idle | grep --line-buffered -v -E '\\[RTR|\\[API|\\[CELL|\\[PROXY|\\[STG' | node scripts/format-logs.mjs",
     "logs-recent": "cf logs btp-admin --recent | grep --line-buffered -v -E '\\[RTR|\\[API|\\[CELL|\\[PROXY|\\[STG' | node scripts/format-logs.mjs",

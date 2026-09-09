@@ -11,7 +11,8 @@
     "lint": "tsc --noEmit",
     "typecheck": "tsc --noEmit",
     "postinstall": "PLAYWRIGHT_BROWSERS_PATH=./pw-browsers npx playwright install chromium",
-    "test": "tsc && node --test 'dist/**/*.test.js'"
+    "test": "tsc && LOCAL_STORE_DIR=/tmp/btp-admin-test node --test 'dist/**/*.test.js'",
+    "test:e2e": "npm run build && playwright test --config=../playwright.config.ts"
   },
   "dependencies": {
     "express": "^5.2.1",

@@ -324,7 +324,7 @@ cd client && tsx --test src/lib/parseFilename.test.ts
 
 ### What is covered
 
-**Server tests** (`server/src/`):
+**Server unit tests** (`server/src/`):
 
 | File | Feature |
 |------|---------|
@@ -334,12 +334,52 @@ cd client && tsx --test src/lib/parseFilename.test.ts
 | `services/variablesService.test.ts` | 4-level override chain (settings > env > blob > file), `maskIfSensitive`, `getEffectiveDefault` |
 | `services/status/conditionEvaluator.test.ts` | `[STATUS]`, `[RESPONSE_TIME]`, `[BODY]`, `[HEADER.x]`, `len([BODY])`, `pat()`, parse errors |
 
+**Server integration tests** (use a fake BTP/CF HTTP server + fetch interception):
+
+| File | Feature |
+|------|---------|
+| `services/cfLoginService.test.ts` | CF token acquisition, `getOrRefreshToken`, org/space listing per region |
+| `services/btpCliService.test.ts` | BTP CLI login, `btpListGlobalAccounts`, `btpListSubaccounts`, `btpListEnvInstances` |
+| `services/subaccountsService.test.ts` | `refreshSubaccounts` end-to-end: subaccounts.json written, orgs/spaces included, concurrent skip |
+| `services/appService.test.ts` | `scanSubaccountApps` against fake CF, app file persistence, URL from CF routes |
+
+The fake server (`server/src/test-helpers/fakeBtpCfServer.ts`) mimics BTP CLI, CF v3 API, XSUAA, and Destination Service endpoints. The fetch interceptor (`interceptFetch.ts`) redirects all `https://` calls to the fake server so production code needs no changes.
+
 **Client tests** (`client/src/lib/`):
 
 | File | Feature |
 |------|---------|
 | `lib/parseFilename.test.ts` | New and old history filename formats, status code validation, `.starred` flag |
 | `lib/utils.test.ts` | `cn()` class merging (clsx + tailwind-merge), conflict resolution, falsy values |
+
+### Playwright E2E tests
+
+E2E tests run a real Express server against the fake BTP/CF API server, then drive a headless Chromium browser through the full UI.
+
+```bash
+# Build client + run all E2E tests
+npm run test:e2e
+
+# Run a specific spec file
+cd server && npm run build && PLAYWRIGHT_BROWSERS_PATH=./pw-browsers npx playwright test --config=../playwright.config.ts e2e/config.spec.ts
+```
+
+**How it works:**
+
+1. `playwright.config.ts` runs `e2e/globalSetup.ts` before any tests.
+2. `globalSetup` starts the fake BTP/CF server on port 3998 and seeds `/tmp/btp-e2e-test/` with one subaccount, destination, app, role collection, and user.
+3. `playwright.config.ts` starts `server/dist/testServer.js` (the real Express app with `FAKE_API_PORT=3998` set), which installs the fetch interceptor before any Express service modules load.
+4. Playwright spec files (`e2e/*.spec.ts`) navigate the browser against `http://localhost:3099` and assert on rendered content.
+
+**E2E spec files:**
+
+| File | What is tested |
+|------|---------------|
+| `e2e/config.spec.ts` | Config/orgs page shows subaccount name, subdomain, GA name, region |
+| `e2e/destinations.spec.ts` | Destinations overview loads; per-SA page shows `TestDest`; search works |
+| `e2e/apps.spec.ts` | Apps overview loads; per-SA page shows seeded `my-app` as STARTED |
+| `e2e/rcs.spec.ts` | Role collections overview loads; per-SA page shows `TestRC` |
+| `e2e/users.spec.ts` | Users overview loads; per-SA page shows `alice@example.com` |
 
 ### Troubleshooting tests
 
