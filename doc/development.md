@@ -295,6 +295,85 @@ The pre-built `sidecar/btp-admin-sidecar.war` is committed to the repository. Yo
 
 ---
 
+## Testing
+
+### Running tests
+
+```bash
+# All tests (client + server)
+npm test
+
+# Server only (compiles TypeScript first, then runs tests)
+npm test --workspace=server
+
+# Client only
+npm test --workspace=client
+```
+
+The server test script runs `tsc` before executing tests — a compile step is always required because test files must be built to `server/dist/` before `node --test` can run them.
+
+### Running a single test file
+
+```bash
+# Server: compile first, then target one file
+cd server && npx tsc && node --test dist/services/authService.test.js
+
+# Client: tsx handles TypeScript directly, no compile step needed
+cd client && tsx --test src/lib/parseFilename.test.ts
+```
+
+### What is covered
+
+**Server tests** (`server/src/`):
+
+| File | Feature |
+|------|---------|
+| `services/authService.test.ts` | HMAC session signing/verification, token cache, `readSessionFromRequest`, `userLabel` |
+| `middleware/requireAuth.test.ts` | `getClientIp`, `requireSyncAuth` (IP filter + HMAC), `requireAodIpFilter` |
+| `services/configService.test.ts` | `loadConfig` variable substitution, `getRestrictedIds`, `getSyncExcludes`, `getSyncKey`, refresh intervals |
+| `services/variablesService.test.ts` | 4-level override chain (settings > env > blob > file), `maskIfSensitive`, `getEffectiveDefault` |
+| `services/status/conditionEvaluator.test.ts` | `[STATUS]`, `[RESPONSE_TIME]`, `[BODY]`, `[HEADER.x]`, `len([BODY])`, `pat()`, parse errors |
+
+**Client tests** (`client/src/lib/`):
+
+| File | Feature |
+|------|---------|
+| `lib/parseFilename.test.ts` | New and old history filename formats, status code validation, `.starred` flag |
+| `lib/utils.test.ts` | `cn()` class merging (clsx + tailwind-merge), conflict resolution, falsy values |
+
+### Troubleshooting tests
+
+**`Cannot find module` after editing a server test file**
+
+The server runs compiled JS, not TypeScript directly. Re-run `tsc` (or `npm test --workspace=server`, which compiles automatically):
+
+```bash
+cd server && npx tsc
+```
+
+**`not ok — Cannot find module '…/conditionEvaluator.js'`**
+
+Stale compiled file at the wrong dist path. Delete and recompile:
+
+```bash
+rm -f server/dist/services/conditionEvaluator.test.js
+cd server && npx tsc
+```
+
+**`Error: Cannot find module 'tsx/esm'`**
+
+`tsx` is installed in `server/devDependencies` and hoisted by npm workspaces. Run `npm install` from the repo root to ensure it is present:
+
+```bash
+npm install
+```
+
+**Test reads real `server/config.json` instead of test fixture**
+
+Server tests set `process.env.CONFIG_JSON` in `beforeEach` to provide an isolated config. If a test calls `getVar` or `getSyncKey` before the `beforeEach` runs (e.g. at module import time), the module-level cache in `variablesService` or `configService` may be seeded from the real file. Ensure `loadConfig()` is called in `beforeEach` after setting `CONFIG_JSON`.
+
+---
+
 ## Debugging / Troubleshooting
 
 ### Capturing outgoing HTTP/HTTPS calls with mitmproxy
