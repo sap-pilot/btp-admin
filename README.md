@@ -1,6 +1,6 @@
 # BTP Admin
 
-A lightweight, file-backed admin dashboard for SAP BTP. Provides a configurable **Homepage** for navigating subaccounts and services across global accounts, cross-subaccount management views for **Destinations**, **Role Collections**, and **Users**, an **Application on Demand** controller for CF apps, and a **Status Page** with a health checker and Azure Traffic Manager integration.
+A lightweight, file-backed admin dashboard for SAP BTP. Provides a configurable **Homepage** for navigating subaccounts and services across global accounts, cross-subaccount management views for **Destinations**, **Role Collections**, **Users**, and **Audit Logs**, an **Application on Demand** controller for CF apps, and a **Status Page** with a health checker and Azure Traffic Manager integration.
 
 <!-- SCREENSHOT PLACEHOLDER: BTP Admin Homepage — configurable navigation hub with subaccount columns and service links -->
 
@@ -26,6 +26,7 @@ Work-Zone Apps Usage Analytis: <br />
 | [**Role Collections**](doc/role-collection-management.md) | Cross-subaccount role collection management — browse, edit, assign/remove users, change history |
 | [**User Management**](doc/user-management.md) | Cross-subaccount XSUAA user view — detail, global access tree, change history, full-text search |
 | [**Application on Demand**](doc/application-on-demand.md) | CF app scanning, auto-stop idle apps, per-space AOD toggle |
+| [**Audit Log Viewer**](doc/audit-log-viewer.md) | Per-subaccount audit log retrieval from the SAP Audit Log Management API; hourly file storage; multi-keyword search, time-range filter, category filter; expandable record detail with all technical fields |
 | [**Security**](doc/security.md) | XSUAA OAuth2 session auth, HMAC peer-sync, BTP egress IP filtering for AOD and sync endpoints, sidecar JWT guard |
 
 ---

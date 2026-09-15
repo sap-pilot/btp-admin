@@ -1,5 +1,39 @@
 # Changelog
 
+## [v1.9.0-sec] - 2026-09-15
+
+### Added
+- **Audit Log Viewer** — retrieve, store, and search audit events from the SAP Audit Log Management API across multiple subaccounts; see [doc/audit-log-viewer.md](doc/audit-log-viewer.md)
+  - Enable per-subaccount via the **Aud** checkbox in Config → Subaccounts
+  - Global refresh (all enabled SAs) from the `/audit-logs` overview page; single-SA refresh from the subaccount modal → Audit Log tab
+  - Minute-based progress bar during single-SA refresh: estimates completion % from how far through the API time window the latest page has reached
+  - Hourly file storage under `localStore/audit-log/{region}/{subdomain}/YYYY-MM-DDTHH_{da}_{se}_{cfg}_{dm}.json`; counts embedded in filenames for zero-read chart rendering
+  - Four category series: Data Access (blue), Security Events (amber), Configuration (purple), Data Modification (green); interactive hour chart in the overview page and per-SA modal
+  - Multi-keyword AND search (space-separated), From / To date-time range pickers, category filter chips, configurable page size (100 / 200 / 500 / 1 000)
+  - Expandable record rows: collapsed view shows filtered 3-line preview; expanded view shows full record JSON including `uuid`, `time`, `orgId`, `spaceId`, `correlationId`, and parsed message body
+  - `MAX_AUDIT_LOG_STORAGE_DAYS` runtime variable (default 90) bounds the initial retrieval window
+  - Automatic `auditlog-management` service key management: prefer `btp-admin-sk`, create it if none exist; plan GUID cached per-region in `~/.ba/cf_login_tokens.json`; credentials cached in `~/.ba/auditlog-management-keys.json`
+  - Audit log files included in remote sync (priority 4 in the sync sequence)
+
+- **Security hardening** — XSUAA OAuth2 session auth, HMAC-signed peer-sync tokens, BTP egress IP filtering for `/aod` and sync endpoints, HTTP security headers (CSP, HSTS, X-Frame-Options, etc.); see [doc/security.md](doc/security.md)
+- **BTP egress IP filtering** — restrict `/aod` proxy and sync callback to known BTP CF egress IP ranges; configurable allowlist
+- **AOD excludeApps list** — `EXCLUDE_APPS` runtime variable prevents listed CF apps from being auto-stopped during AOD idle sweeps
+- **HTTPS_PROXY / HTTP_PROXY support** — outgoing CF API and audit log requests honour standard proxy env vars
+
+### Changed
+- Sync sequence priority enforced: `conf → apps → dest → resp → audit-log → users → rcs`; ensures critical config files arrive before bulk data during initial sync
+- Sync producer uses system `zip -q` (stdin filenames via `-@`) instead of Node.js streaming; eliminates OOM on large batches and pipe-buffer deadlocks at 2 000+ files
+- Sync consumer streams ZIP to a temp file, extracts with system `unzip -q`, then moves files to `localStore`; eliminates OOM on large incoming batches
+- Invalid sync entries skipped with a warning instead of aborting the entire batch
+- Express `compress` middleware skips `/api/sync/batch` (content is already a compressed ZIP)
+- Sidebar nav item renamed to **Audit Logs**; page URL changed from `/audit-log` to `/audit-logs`
+
+### Fixed
+- Sync deadlock at 2 000+ files: `zip` / `unzip` per-file stdout filled the OS pipe buffer (~64 KB); fixed by adding `-q` flag and draining stdout/stderr streams
+- Sync "zip exited with code 15": relative `LOCAL_STORE_DIR` caused `zip` to look for the output file in the subprocess CWD; fixed by using `resolvePath` (always absolute)
+- `resp` branch `mkdir` depth: only created one level of parent directory; fixed to `mkdir(dirname(target), { recursive: true })`
+- Audit log UTC timezone skew: `formatTimeForApi` produces timestamps without a `Z` suffix (API requirement); parsing them with bare `new Date()` treated them as local time, causing negative progress percentages; fixed by appending `Z` before parsing for calculations
+
 ## [v1.8.0] - 2026-09-02
 
 ### Added
