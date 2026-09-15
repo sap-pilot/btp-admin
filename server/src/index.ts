@@ -1,3 +1,4 @@
+import { setGlobalDispatcher, ProxyAgent } from 'undici';
 import express from 'express';
 import { config } from './config.js';
 import { loadConfig, getSyncExcludes } from './services/configService.js';
@@ -30,6 +31,17 @@ import { requireSessionGlobal, requireAodIpFilter } from './middleware/requireAu
 import { errorHandler } from './middleware/errorHandler.js';
 import { compress } from './middleware/compress.js';
 import { serveStatic } from './static.js';
+
+// ─── Outgoing proxy (HTTPS_PROXY / HTTPS_PROXY_INSECURE) ────────────────────
+// Node.js native fetch (undici) ignores system proxy env vars by default.
+// Wire them up explicitly so all outgoing HTTP/HTTPS traffic obeys the proxy.
+const _proxyUrl = process.env['HTTPS_PROXY'] ?? process.env['HTTP_PROXY'];
+if (_proxyUrl) {
+  const _insecure = ['1', 'true', 'yes'].includes((process.env['HTTPS_PROXY_INSECURE'] ?? '').toLowerCase());
+  const _tlsOpts  = _insecure ? { rejectUnauthorized: false } : undefined;
+  setGlobalDispatcher(new ProxyAgent({ uri: _proxyUrl, proxyTls: _tlsOpts, requestTls: _tlsOpts }));
+  logger.info({ proxyUrl: _proxyUrl, insecure: _insecure }, 'Outgoing HTTP routed through proxy');
+}
 
 const app = express();
 app.use(compress);
