@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Search, ChevronLeft, ChevronRight, X, Loader2, RefreshCw } from 'lucide-react';
+import { Search, ChevronLeft, ChevronRight, X, Loader2, RefreshCw, Download } from 'lucide-react';
 import type { SubaccountEntry } from '@/components/config/SubaccountsTable';
 
 interface AuditHourStat {
@@ -249,7 +249,7 @@ export default function AuditLogTab({ sa, initialFrom, initialTo, initialCategor
   );
   const [from,         setFrom]         = useState(initialFrom ?? '');
   const [to,           setTo]           = useState(initialTo ?? '');
-  const [limit,        setLimit]        = useState(100);
+  const [limit,        setLimit]        = useState(() => { try { const v = parseInt(localStorage.getItem('audit-page-size') ?? '', 10); return [100,200,500,1000].includes(v) ? v : 100; } catch { return 100; } });
   const [page,         setPage]         = useState(1);
   const [loading,      setLoading]      = useState(false);
   const [error,        setError]        = useState('');
@@ -260,16 +260,19 @@ export default function AuditLogTab({ sa, initialFrom, initialTo, initialCategor
   const [chartStats,   setChartStats]   = useState<AuditHourStat[]>([]);
   const [saRefreshing, setSaRefreshing] = useState(false);
   const [saProgress,   setSaProgress]   = useState<{ page: number; lastTime: string; pct?: number } | null>(null);
+  const [exporting,    setExporting]    = useState(false);
+  const [exportWarn,   setExportWarn]   = useState<{ message: string; fileCount: number; sizeBytes: number } | null>(null);
   const evsRef = useRef<EventSource | null>(null);
 
-  async function load(p = page, cats = selectedCats, fromOvr?: string, toOvr?: string, kwOvr?: string) {
-    const useFrom = fromOvr !== undefined ? fromOvr : from;
-    const useTo   = toOvr   !== undefined ? toOvr   : to;
-    const useKw   = kwOvr   !== undefined ? kwOvr   : committed;
+  async function load(p = page, cats = selectedCats, fromOvr?: string, toOvr?: string, kwOvr?: string, limitOvr?: number) {
+    const useFrom  = fromOvr  !== undefined ? fromOvr  : from;
+    const useTo    = toOvr    !== undefined ? toOvr    : to;
+    const useKw    = kwOvr    !== undefined ? kwOvr    : committed;
+    const useLimit = limitOvr !== undefined ? limitOvr : limit;
     setLoading(true);
     setError('');
     try {
-      const params = new URLSearchParams({ limit: String(limit), page: String(p) });
+      const params = new URLSearchParams({ limit: String(useLimit), page: String(p) });
       if (useKw.trim()) params.set('q', useKw.trim());
       if (useFrom) params.set('from', useFrom);
       if (useTo)   params.set('to', useTo);
@@ -325,6 +328,45 @@ export default function AuditLogTab({ sa, initialFrom, initialTo, initialCategor
   useEffect(() => {
     return () => { if (evsRef.current) { evsRef.current.close(); evsRef.current = null; } };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  async function handleExport(confirmed = false) {
+    if (exporting) return;
+    setExporting(true);
+    try {
+      const params = new URLSearchParams();
+      if (from)            params.set('from', from);
+      if (to)              params.set('to', to);
+      if (committed.trim()) params.set('q', committed.trim());
+      if (confirmed)       params.set('confirm', '1');
+      const res = await fetch(
+        `/api/audit-log/export/${encodeURIComponent(sa.region)}/${encodeURIComponent(sa.subdomain)}?${params}`,
+      );
+      const ct = res.headers.get('Content-Type') ?? '';
+      if (ct.includes('application/zip')) {
+        const blob = await res.blob();
+        const url  = URL.createObjectURL(blob);
+        const a    = document.createElement('a');
+        a.href     = url;
+        a.download = `audit-log_${sa.region}_${sa.subdomain}.zip`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+        setExportWarn(null);
+      } else {
+        const json = await res.json() as { ok: boolean; warning?: boolean; message?: string; error?: string; fileCount?: number; sizeBytes?: number };
+        if (json.warning) {
+          setExportWarn({ message: json.message ?? 'Export too large.', fileCount: json.fileCount ?? 0, sizeBytes: json.sizeBytes ?? 0 });
+        } else {
+          setError(json.error ?? json.message ?? 'Export failed.');
+        }
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setExporting(false);
+    }
+  }
 
   async function handleSaRefresh() {
     if (saRefreshing) return;
@@ -436,6 +478,12 @@ export default function AuditLogTab({ sa, initialFrom, initialTo, initialCategor
           </button>
         )}
 
+        {/* Export button */}
+        <button onClick={() => void handleExport()} disabled={exporting} title="Export audit logs as ZIP"
+          className="inline-flex items-center justify-center h-7 w-7 rounded border border-border hover:bg-accent hover:text-accent-foreground transition-colors disabled:opacity-50">
+          {exporting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Download className="h-3.5 w-3.5" />}
+        </button>
+
         {/* Refresh button — triggers delta sync with Audit Log API */}
         <button onClick={() => void handleSaRefresh()} disabled={loading || saRefreshing} title="Retrieve latest logs from Audit Log API"
           className="inline-flex items-center justify-center h-7 w-7 rounded border border-border hover:bg-accent hover:text-accent-foreground transition-colors disabled:opacity-50">
@@ -457,6 +505,23 @@ export default function AuditLogTab({ sa, initialFrom, initialTo, initialCategor
                 ? ` — page ${saProgress.page}${saProgress.lastTime ? ` · ${saProgress.lastTime}` : ''}${saProgress.pct != null ? ` (${saProgress.pct}%)` : ''}`
                 : '…'}
             </span>
+          </div>
+        </div>
+      )}
+
+      {/* Export size warning dialog */}
+      {exportWarn && (
+        <div className="shrink-0 border-b border-border bg-amber-500/5 px-4 py-3 flex flex-col items-center gap-2 text-center">
+          <p className="text-xs text-amber-700 dark:text-amber-400">{exportWarn.message}</p>
+          <div className="flex items-center gap-2">
+            <button onClick={() => { void handleExport(true); setExportWarn(null); }}
+              className="h-6 px-3 text-xs rounded border border-amber-500/50 bg-amber-500/10 text-amber-700 dark:text-amber-400 hover:bg-amber-500/20 transition-colors">
+              Export anyway
+            </button>
+            <button onClick={() => setExportWarn(null)}
+              className="h-6 px-3 text-xs rounded border border-border hover:bg-accent transition-colors text-muted-foreground">
+              Cancel
+            </button>
           </div>
         </div>
       )}
@@ -534,7 +599,7 @@ export default function AuditLogTab({ sa, initialFrom, initialTo, initialCategor
         <div className="flex items-center justify-between px-3 py-2 border-t border-border shrink-0 gap-2 flex-wrap">
           <div className="flex items-center gap-2">
             <span className="text-xs text-muted-foreground">{total} records — page {page} of {pages}</span>
-            <select value={limit} onChange={e => setLimit(Number(e.target.value))}
+            <select value={limit} onChange={e => { const n = Number(e.target.value); setLimit(n); setPage(1); try { localStorage.setItem('audit-page-size', String(n)); } catch { /* ignore */ } void load(1, selectedCats, from, to, committed, n); }}
               className="h-6 px-1.5 text-[11px] border border-border rounded bg-background focus:outline-none focus:ring-1 focus:ring-ring">
               {[100, 200, 500, 1000].map(n => <option key={n} value={n}>{n} / page</option>)}
             </select>

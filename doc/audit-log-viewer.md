@@ -115,6 +115,42 @@ Set variables in **Config → Settings → Variables** or in `config.json → va
 
 ---
 
+## Exporting
+
+Click the **Download** (↓) icon button in the subaccount modal Audit Log tab toolbar to export
+the currently filtered audit logs as a ZIP file.
+
+The export uses the **From / To** date-time range and any **keywords** currently entered in the
+search bar. The exported filename is `audit-log_{region}_{subdomain}.zip`.
+
+### Without keywords
+
+All matching audit log JSON files for the selected time range are packaged into the ZIP. Files
+are matched by their UTC hour key (filename prefix), rounded inclusively — so a `From` of
+`10:30` includes the `T10` file.
+
+If the matched files total more than **1 GB** (indicating the ZIP would likely exceed 100 MB),
+a warning appears:
+
+> _"The selected time range covers N file(s) totalling X.X GB. The export ZIP may exceed
+> 100 MB. Consider choosing a smaller time range or entering keywords to filter records."_
+
+You can then **Cancel** and narrow the range, or click **Export anyway** to proceed.
+
+### With keywords
+
+When one or more keywords are entered, only the individual JSON records matching **all**
+keywords (case-insensitive AND logic) are extracted from the matching files. The filtered
+records are written to a single `audit-export-*.json` file (a valid JSON array), which is
+then compressed into the ZIP. The 1 GB size check is skipped because keyword filtering
+dramatically reduces the output size.
+
+<!-- SCREENSHOT PLACEHOLDER: Subaccount modal Audit Log tab showing the Export warning banner
+     (amber background) with "Export anyway" and "Cancel" buttons.
+     Trigger by selecting a wide time range (e.g. 90 days) with no keywords and clicking Export. -->
+
+---
+
 ## Searching
 
 ### Overview page (`/audit-logs`)

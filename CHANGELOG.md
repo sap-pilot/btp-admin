@@ -1,6 +1,6 @@
 # Changelog
 
-## [v1.9.0-sec] - 2026-09-15
+## [v1.9.0] - 2026-09-15
 
 ### Added
 - **Audit Log Viewer** — retrieve, store, and search audit events from the SAP Audit Log Management API across multiple subaccounts; see [doc/audit-log-viewer.md](doc/audit-log-viewer.md)
@@ -14,6 +14,7 @@
   - `MAX_AUDIT_LOG_STORAGE_DAYS` runtime variable (default 90) bounds the initial retrieval window
   - Automatic `auditlog-management` service key management: prefer `btp-admin-sk`, create it if none exist; plan GUID cached per-region in `~/.ba/cf_login_tokens.json`; credentials cached in `~/.ba/auditlog-management-keys.json`
   - Audit log files included in remote sync (priority 4 in the sync sequence)
+  - **Export** — Download icon button in the modal Audit Log tab; exports matched files (by From/To hour range) as a ZIP; with keywords only matching records are extracted and packaged; warns when no keywords and total file size exceeds 1 GB, offering Cancel or Export anyway
 
 - **Security hardening** — XSUAA OAuth2 session auth, HMAC-signed peer-sync tokens, BTP egress IP filtering for `/aod` and sync endpoints, HTTP security headers (CSP, HSTS, X-Frame-Options, etc.); see [doc/security.md](doc/security.md)
 - **BTP egress IP filtering** — restrict `/aod` proxy and sync callback to known BTP CF egress IP ranges; configurable allowlist

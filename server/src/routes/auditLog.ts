@@ -1,10 +1,17 @@
 import { Router } from 'express';
+import { resolve as resolvePath, join, basename } from 'node:path';
+import { mkdir, readdir, readFile, stat, unlink, writeFile } from 'node:fs/promises';
+import { createReadStream } from 'node:fs';
+import { spawn } from 'node:child_process';
+import { randomBytes } from 'node:crypto';
 import { requireAdmin } from '../middleware/requireAuth.js';
 import {
   refreshAuditLogs, isAuditRefreshRunning,
   refreshSubaccountAuditLogs, isSaAuditRefreshRunning,
   getAuditStats, getAuditSaStats, getAuditRecords, getLatestAuditEntries,
+  getAuditLogDir,
 } from '../services/auditLogService.js';
+import { config } from '../config.js';
 import { logger } from '../logger.js';
 
 const router = Router();
@@ -95,6 +102,132 @@ router.get('/records/:region/:subdomain', requireAdmin, async (req, res, next) =
     const result     = await getAuditRecords(region, subdomain, { from, to, keyword, limit, page, categories });
     logger.debug({ region, subdomain, keyword, from, to, limit, page, categories: categories ? [...categories] : undefined, total: result.total, durationMs: Date.now() - t0 }, 'audit-log/records');
     res.json({ ok: true, ...result });
+  } catch (err) { next(err); }
+});
+
+// GET /api/audit-log/export/:region/:subdomain?from=...&to=...&q=...&confirm=1
+// Streams a ZIP of matching audit log files. If no keywords and total size > 1 GB,
+// returns a JSON warning instead (unless confirm=1 is passed).
+router.get('/export/:region/:subdomain', requireAdmin, async (req, res, next) => {
+  try {
+    const { region, subdomain } = req.params as { region: string; subdomain: string };
+    const from    = typeof req.query['from']    === 'string' ? req.query['from'].trim()    : '';
+    const to      = typeof req.query['to']      === 'string' ? req.query['to'].trim()      : '';
+    const kwStr   = typeof req.query['q']       === 'string' ? req.query['q'].trim()       : '';
+    const confirm = req.query['confirm'] === '1';
+
+    // Convert an ISO / datetime-local string to a UTC hour key "YYYY-MM-DDTHH"
+    // (same convention as parseHourKey in auditLogService — uses UTC methods so
+    //  the result matches the UTC-keyed filenames).
+    const toHourKey = (iso: string): string => {
+      const d = new Date(iso.includes('Z') || iso.includes('+') ? iso : iso + 'Z');
+      if (isNaN(d.getTime())) return '';
+      return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}T${String(d.getUTCHours()).padStart(2, '0')}`;
+    };
+
+    const fromHour = from ? toHourKey(from) : '';
+    const toHour   = to   ? toHourKey(to)   : '9999';
+
+    // Locate matching files by comparing the hour key embedded in the filename
+    const AUDIT_FILE_RE = /^\d{4}-\d{2}-\d{2}T\d{2}_.+\.json$/;
+    const dir = getAuditLogDir(region, subdomain);
+    let allFiles: string[];
+    try {
+      allFiles = (await readdir(dir)).filter(f => AUDIT_FILE_RE.test(f)).sort();
+    } catch {
+      res.json({ ok: false, error: 'No audit log data found for this subaccount.' });
+      return;
+    }
+
+    const matched = allFiles.filter(f => {
+      const hk = f.slice(0, 13); // "YYYY-MM-DDTHH"
+      return (!fromHour || hk >= fromHour) && hk <= toHour;
+    });
+
+    if (matched.length === 0) {
+      res.json({ ok: false, error: 'No audit log files found for the selected time range.' });
+      return;
+    }
+
+    // Sum file sizes
+    const filePaths = matched.map(f => join(dir, f));
+    let totalBytes = 0;
+    for (const fp of filePaths) {
+      const s = await stat(fp).catch(() => null);
+      if (s) totalBytes += s.size;
+    }
+
+    const ONE_GB = 1_073_741_824;
+    const hasKeywords = kwStr.length > 0;
+
+    if (!hasKeywords && !confirm && totalBytes > ONE_GB) {
+      res.json({
+        ok: false,
+        warning: true,
+        message: `The selected time range covers ${matched.length} file(s) totalling ${(totalBytes / ONE_GB).toFixed(1)} GB. The export ZIP may exceed 100 MB. Consider choosing a smaller time range or entering keywords to filter records.`,
+        fileCount: matched.length,
+        sizeBytes: totalBytes,
+      });
+      return;
+    }
+
+    const tmpBase = resolvePath(config.LOCAL_STORE_DIR, '..', 'tmp');
+    await mkdir(tmpBase, { recursive: true });
+    const hex     = randomBytes(8).toString('hex');
+    const tmpZip  = join(tmpBase, `audit-export-${hex}.zip`);
+    let   tmpJson: string | null = null;
+
+    try {
+      if (hasKeywords) {
+        // Filter records by every keyword (case-insensitive AND), write filtered JSON
+        const keywords = kwStr.split(/\s+/).filter(Boolean).map(k => k.toLowerCase());
+        const matching: string[] = [];
+        for (const fp of filePaths) {
+          const raw = await readFile(fp, 'utf-8').catch(() => '');
+          for (const line of raw.split('\n')) {
+            const stripped = line.trim().replace(/,$/, '');
+            if (!stripped.startsWith('{')) continue;
+            const lower = stripped.toLowerCase();
+            if (keywords.every(kw => lower.includes(kw))) matching.push(stripped);
+          }
+        }
+        tmpJson = join(tmpBase, `audit-export-${hex}.json`);
+        await writeFile(tmpJson, `[\n${matching.join(',\n')}\n]`, 'utf-8');
+        await new Promise<void>((resolve, reject) => {
+          const proc = spawn('zip', ['-q', tmpZip, basename(tmpJson!)], { cwd: tmpBase });
+          proc.stdout?.resume(); proc.stderr?.resume();
+          proc.on('close', code => code === 0 ? resolve() : reject(new Error(`zip exited with ${code}`)));
+          proc.on('error', reject);
+        });
+      } else {
+        // Zip matching files directly using stdin (-@) from the audit log dir
+        await new Promise<void>((resolve, reject) => {
+          const proc = spawn('zip', ['-q', tmpZip, '-@'], { cwd: dir });
+          proc.stdout?.resume(); proc.stderr?.resume();
+          proc.on('close', code => (code === 0 || code === 12) ? resolve() : reject(new Error(`zip exited with ${code}`)));
+          proc.on('error', reject);
+          proc.stdin!.on('error', () => { /* EPIPE if zip exits early */ });
+          proc.stdin!.end(matched.join('\n'));
+        });
+      }
+
+      const zipStat  = await stat(tmpZip);
+      const dlName   = `audit-log_${region}_${subdomain}${from ? `_${from.slice(0, 10)}` : ''}${to ? `_to_${to.slice(0, 10)}` : ''}.zip`;
+      logger.debug({ region, subdomain, from, to, kwStr, matched: matched.length, sizeBytes: totalBytes, zipBytes: zipStat.size }, 'audit-log/export streaming');
+      res.set('Content-Type', 'application/zip');
+      res.set('Content-Disposition', `attachment; filename="${dlName}"`);
+      res.set('Content-Length', String(zipStat.size));
+      await new Promise<void>((resolve, reject) => {
+        const rs = createReadStream(tmpZip);
+        rs.on('error', reject);
+        rs.on('end', resolve);
+        rs.pipe(res, { end: false });
+      });
+      res.end();
+    } finally {
+      await unlink(tmpZip).catch(() => { /* ignore */ });
+      if (tmpJson) await unlink(tmpJson).catch(() => { /* ignore */ });
+    }
   } catch (err) { next(err); }
 });
 
