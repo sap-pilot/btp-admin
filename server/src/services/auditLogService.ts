@@ -1,12 +1,13 @@
 import { exec } from 'node:child_process';
 import { mkdir, readdir, readFile, unlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { homedir } from 'node:os';
 import { promisify } from 'node:util';
 import { config } from '../config.js';
 import { logger } from '../logger.js';
 import { emit, emitImmediate } from './liveEvents.js';
 import { readSubaccounts, type SubaccountEntry, type ServiceInstanceEntry } from './subaccountsService.js';
-import { getOrRefreshToken, clearRegionToken, fetchWithRateLimit } from './cfLoginService.js';
+import { getOrRefreshToken, clearRegionToken, fetchWithRateLimit, getRegionAuditPlanGuid, setRegionAuditPlanGuid } from './cfLoginService.js';
 import { getVar } from './variablesService.js';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -324,14 +325,41 @@ async function cfGetAll<T>(region: string, startUrl: string): Promise<T[]> {
   return all;
 }
 
+// ─── Audit key file store ─────────────────────────────────────────────────────
+
+const AUDIT_KEY_PATH = join(homedir(), '.ba', 'auditlog-management-keys.json');
+
+interface AuditKeyEntry { keyGuid: string; credentials: AuditCredentials; cachedAt: number }
+type AuditKeyStore = Record<string, AuditKeyEntry>; // key: `${region}/${instanceId}`
+
+let auditKeyStore: AuditKeyStore | null = null;
+
+async function loadAuditKeyStore(): Promise<AuditKeyStore> {
+  if (auditKeyStore !== null) return auditKeyStore;
+  try {
+    const raw = await readFile(AUDIT_KEY_PATH, 'utf-8');
+    auditKeyStore = JSON.parse(raw) as AuditKeyStore;
+  } catch { auditKeyStore = {}; }
+  return auditKeyStore;
+}
+
+async function saveAuditKeyStore(): Promise<void> {
+  if (auditKeyStore === null) return;
+  await mkdir(join(homedir(), '.ba'), { recursive: true });
+  await writeFile(AUDIT_KEY_PATH, JSON.stringify(auditKeyStore, null, 2), 'utf-8');
+}
+
 // ─── Credentials ─────────────────────────────────────────────────────────────
 
-// Per-region cache for the auditlog-management 'default' plan GUID.
-// /v3/service_plans supports service_offering_names; /v3/service_instances does not.
+// Per-region in-memory cache for the auditlog-management 'default' plan GUID.
+// The GUID is also persisted in cf_login_tokens.json so it survives restarts.
 const auditPlanGuidCache = new Map<string, string>();
 
 async function getAuditLogPlanGuid(region: string): Promise<string | null> {
   if (auditPlanGuidCache.has(region)) return auditPlanGuidCache.get(region)!;
+  // Check what was persisted in cf_login_tokens.json on a previous run
+  const stored = getRegionAuditPlanGuid(region);
+  if (stored) { auditPlanGuidCache.set(region, stored); return stored; }
   const apiUrl  = `https://api.cf.${region}.hana.ondemand.com`;
   const planUrl = `${apiUrl}/v3/service_plans?per_page=5000&service_offering_names=auditlog-management&names=default`;
   logger.debug({ region, planUrl }, 'Querying auditlog-management default plan GUID');
@@ -340,7 +368,66 @@ async function getAuditLogPlanGuid(region: string): Promise<string | null> {
   if (plans.length === 0) return null;
   const guid = plans[0]!.guid;
   auditPlanGuidCache.set(region, guid);
+  await setRegionAuditPlanGuid(region, guid).catch(err =>
+    logger.warn({ region, err }, 'Failed to persist audit plan GUID to token store'),
+  );
   return guid;
+}
+
+async function cfPost<T>(region: string, url: string, body: unknown): Promise<{ status: number; data: T; location?: string }> {
+  const doReq = (tok: Awaited<ReturnType<typeof getOrRefreshToken>>) =>
+    fetch(url, {
+      method: 'POST',
+      headers: { Authorization: `${tok.token_type} ${tok.access_token}`, 'Content-Type': 'application/json', Accept: 'application/json' },
+      body: JSON.stringify(body),
+    });
+  const token = await getOrRefreshToken(region);
+  let res = await doReq(token);
+  if (res.status === 401) {
+    clearRegionToken(region);
+    res = await doReq(await getOrRefreshToken(region));
+  }
+  if (res.status !== 201 && res.status !== 202) {
+    const text = await res.text().catch(() => '');
+    throw new Error(`CF API POST ${url} → ${res.status}: ${text.slice(0, 200)}`);
+  }
+  const data = await res.json() as T;
+  return { status: res.status, data, location: res.headers.get('Location') ?? undefined };
+}
+
+async function pollCfJob(region: string, jobUrl: string): Promise<void> {
+  const apiUrl = `https://api.cf.${region}.hana.ondemand.com`;
+  const fullUrl = jobUrl.startsWith('http') ? jobUrl : `${apiUrl}${jobUrl}`;
+  for (let i = 0; i < 30; i++) {
+    await new Promise(r => setTimeout(r, 2000));
+    // eslint-disable-next-line no-await-in-loop
+    const job = await cfGet<{ state: string; errors?: unknown[] }>(region, fullUrl);
+    if (job.state === 'COMPLETE') return;
+    if (job.state === 'FAILED') throw new Error(`CF job failed: ${JSON.stringify(job.errors)}`);
+  }
+  throw new Error('CF job timed out after 60s');
+}
+
+async function createAuditLogServiceKey(region: string, instanceId: string): Promise<{ guid: string; name: string } | null> {
+  const apiUrl = `https://api.cf.${region}.hana.ondemand.com`;
+  const keyName = 'btp-admin-sk';
+  logger.debug({ region, instanceId, keyName }, 'Creating auditlog-management service key');
+  try {
+    const result = await cfPost<{ guid?: string }>(region, `${apiUrl}/v3/service_credential_bindings`, {
+      type: 'key', name: keyName,
+      relationships: { service_instance: { data: { guid: instanceId } } },
+    });
+    if (result.status === 201 && result.data.guid) return { guid: result.data.guid, name: keyName };
+    if (result.status === 202 && result.location) await pollCfJob(region, result.location);
+    const found = await cfGetAll<{ guid: string; name: string }>(
+      region,
+      `${apiUrl}/v3/service_credential_bindings?type=key&name=${encodeURIComponent(keyName)}&service_instance_guids=${instanceId}`,
+    );
+    return found[0] ?? null;
+  } catch (err) {
+    logger.warn({ region, instanceId, err }, 'Failed to create auditlog-management service key');
+    return null;
+  }
 }
 
 async function getAuditLogCredentials(
@@ -389,7 +476,16 @@ async function getAuditLogCredentials(
     }
   }
 
-  // 3. Get service credential bindings (keys)
+  // 3. Check persisted key cache
+  const keyCacheKey = `${region}/${instanceId}`;
+  const keyStore = await loadAuditKeyStore();
+  const cachedKey = keyStore[keyCacheKey];
+  if (cachedKey?.credentials?.uaa?.url && cachedKey.credentials.url) {
+    logger.debug({ label, keyCacheKey }, 'Using cached auditlog-management service key');
+    return cachedKey.credentials;
+  }
+
+  // 4. Discover or create service key
   try {
     const apiUrl = `https://api.cf.${region}.hana.ondemand.com`;
 
@@ -397,19 +493,38 @@ async function getAuditLogCredentials(
     logger.debug({ label, instanceId, bindingsUrl }, 'Looking up auditlog-management service key bindings');
     const bindings = await cfGetAll<{ guid: string; name: string }>(region, bindingsUrl);
     logger.debug({ label, count: bindings.length, names: bindings.map(b => b.name) }, 'auditlog-management service key bindings found');
+
+    let binding: { guid: string; name: string } | undefined;
     if (bindings.length === 0) {
-      warnings.push(`${label} — no service key found for auditlog-management instance ${instanceId}`);
-      return null;
+      logger.debug({ label, instanceId }, 'No service keys — creating btp-admin-sk');
+      const created = await createAuditLogServiceKey(region, instanceId);
+      if (!created) {
+        warnings.push(`${label} — no service key found and failed to create btp-admin-sk`);
+        return null;
+      }
+      binding = created;
+    } else {
+      // Prefer dedicated btp-admin-sk; fall back to first available
+      binding = bindings.find(b => b.name === 'btp-admin-sk') ?? bindings[0]!;
+      logger.debug({ label, chosen: binding.name }, 'Selected auditlog-management service key');
     }
 
     const details = await cfGet<{ credentials: AuditCredentials }>(
       region,
-      `${apiUrl}/v3/service_credential_bindings/${bindings[0]!.guid}/details`,
+      `${apiUrl}/v3/service_credential_bindings/${binding.guid}/details`,
     );
     if (!details.credentials?.uaa?.url || !details.credentials?.url) {
       warnings.push(`${label} service key credentials are incomplete`);
       return null;
     }
+
+    // Persist to key cache
+    keyStore[keyCacheKey] = { keyGuid: binding.guid, credentials: details.credentials, cachedAt: Date.now() };
+    auditKeyStore = keyStore;
+    await saveAuditKeyStore().catch(err =>
+      logger.warn({ label, err }, 'Failed to save audit key store'),
+    );
+
     return details.credentials;
   } catch (err) {
     warnings.push(`${label} error getting service key: ${err instanceof Error ? err.message : String(err)}`);

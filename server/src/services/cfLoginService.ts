@@ -16,6 +16,7 @@ export interface CfRegionToken {
   token_type: string;
   expires_at: number;
   login_type: string;
+  auditlog_plan_guid?: string;
 }
 
 type TokenStore = Record<string, CfRegionToken>;
@@ -194,6 +195,18 @@ async function refreshToken(existing: CfRegionToken): Promise<CfRegionToken> {
     expires_at:    Date.now() + expiresIn * 1000,
     login_type:    'refresh',
   };
+}
+
+/** Returns the persisted auditlog-management plan GUID for a region, if any. */
+export function getRegionAuditPlanGuid(region: string): string | undefined {
+  return tokenStore[region]?.auditlog_plan_guid;
+}
+
+/** Persists the auditlog-management plan GUID for a region into the token store. */
+export async function setRegionAuditPlanGuid(region: string, guid: string): Promise<void> {
+  if (!tokenStore[region]) return; // no token entry yet — region not yet logged in
+  tokenStore[region] = { ...tokenStore[region]!, auditlog_plan_guid: guid };
+  await saveTokenStore(tokenStore);
 }
 
 /** Returns a valid access token for the region; refreshes or re-logins as needed. */
