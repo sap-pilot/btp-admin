@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { useParams } from 'react-router';
 import { Loader2, PanelLeft, RefreshCw, ScrollText, Search, X } from 'lucide-react';
 import { useSidebar } from '@/components/AppLayout';
 import SubaccountModal from '@/components/SubaccountModal';
@@ -297,9 +298,10 @@ const ALL_DURATIONS = [
 
 export default function AuditLogPage() {
   const { toggle, collapsed } = useSidebar();
-  const [keyword,         setKeyword]         = useState('');
-  const [committed,       setCommitted]       = useState('');
-  const [duration,        setDuration]        = useState(30);
+  const { region: urlRegion, subdomain: urlSubdomain } = useParams<{ region?: string; subdomain?: string }>();
+  const [keyword,         setKeyword]         = useState(() => { try { return new URLSearchParams(window.location.search).get('q') ?? ''; } catch { return ''; } });
+  const [committed,       setCommitted]       = useState(() => { try { return new URLSearchParams(window.location.search).get('q') ?? ''; } catch { return ''; } });
+  const [duration,        setDuration]        = useState(() => { try { const v = parseInt(new URLSearchParams(window.location.search).get('duration') ?? '', 10); return ALL_DURATIONS.some(d => d.value === v) ? v : 30; } catch { return 30; } });
   const [progress,        setProgress]        = useState<ProgressState | null>(null);
   const [stats,           setStats]           = useState<AuditHourStat[]>([]);
   const [latest,          setLatest]          = useState<SubaccountLatest[]>([]);
@@ -315,8 +317,10 @@ export default function AuditLogPage() {
   const [expandedRows,    setExpandedRows]    = useState<Set<string>>(() => new Set());
   const [chartFrom,       setChartFrom]       = useState('');
   const [chartTo,         setChartTo]         = useState('');
-  const progressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const evsRef = useRef<EventSource | null>(null);
+  const progressTimerRef   = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const evsRef             = useRef<EventSource | null>(null);
+  const autoOpenedRef      = useRef(false);
+  const savedOverviewUrl   = useRef<string | null>(null);
 
   // SSE subscription
   useEffect(() => {
@@ -390,6 +394,28 @@ export default function AuditLogPage() {
       .then(j => { if (j.ok && j.data) setAllSubaccounts(j.data); })
       .catch(() => { /* ignore */ });
   }, []);
+
+  // Keep the overview URL in sync with the current keyword + duration so a refresh
+  // restores both. Skipped while the modal is open — AuditLogTab manages the URL then.
+  useEffect(() => {
+    if (urlRegion || urlSubdomain || modalSa) return;
+    const params = new URLSearchParams();
+    if (committed.trim()) params.set('q', committed.trim());
+    if (duration !== 30)  params.set('duration', String(duration));
+    const qs = params.toString();
+    history.replaceState(null, '', qs ? `/audit-logs?${qs}` : '/audit-logs');
+  }, [committed, duration, modalSa, urlRegion, urlSubdomain]);
+
+  // Auto-open the subaccount modal when the URL contains /audit-logs/{region}/{subdomain}.
+  // AuditLogTab reads ?q= from window.location.search on mount, so the keyword is
+  // restored automatically without any extra prop plumbing.
+  useEffect(() => {
+    if (autoOpenedRef.current || !urlRegion || !urlSubdomain || allSubaccounts.length === 0) return;
+    const found = allSubaccounts.find(
+      s => s.region === urlRegion && s.subdomain.toLowerCase() === urlSubdomain.toLowerCase(),
+    );
+    if (found) { autoOpenedRef.current = true; setModalSa(found); }
+  }, [allSubaccounts, urlRegion, urlSubdomain]);
 
   useEffect(() => {
     fetch('/api/info')
@@ -576,7 +602,7 @@ export default function AuditLogPage() {
                 <div key={`${sa.region}/${sa.subdomain}`} className="rounded-lg border border-border bg-card overflow-hidden">
                   <div
                     className={`px-4 py-2 border-b border-border bg-muted/20 flex items-center gap-2 ${fullSa ? 'cursor-pointer hover:bg-muted/40 transition-colors' : ''}`}
-                    onClick={() => { if (fullSa) setModalSa(fullSa); }}
+                    onClick={() => { if (fullSa) { savedOverviewUrl.current = window.location.pathname + window.location.search; setModalSa(fullSa); } }}
                     title={fullSa ? 'Open audit log details' : undefined}
                   >
                     <span className="text-xs font-semibold">{sa.alias}</span>
@@ -651,7 +677,13 @@ export default function AuditLogPage() {
       {modalSa && (
         <SubaccountModal
           sa={modalSa}
-          onClose={() => setModalSa(null)}
+          onClose={() => {
+            setModalSa(null);
+            if (savedOverviewUrl.current) {
+              history.replaceState(null, '', savedOverviewUrl.current);
+              savedOverviewUrl.current = null;
+            }
+          }}
           isAdmin={true}
           initialTab="audit"
           subaccounts={allSubaccounts}

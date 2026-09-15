@@ -242,8 +242,8 @@ function catsParam(cats: Set<string>): string | null {
 // ─── Main tab ─────────────────────────────────────────────────────────────────
 
 export default function AuditLogTab({ sa, initialFrom, initialTo, initialCategories }: Props) {
-  const [keyword,      setKeyword]      = useState('');
-  const [committed,    setCommitted]    = useState('');
+  const [keyword,      setKeyword]      = useState(() => { try { return new URLSearchParams(window.location.search).get('q') ?? ''; } catch { return ''; } });
+  const [committed,    setCommitted]    = useState(() => { try { return new URLSearchParams(window.location.search).get('q') ?? ''; } catch { return ''; } });
   const [selectedCats, setSelectedCats] = useState<Set<string>>(() =>
     initialCategories ? new Set(initialCategories) : new Set(ALL_CATS)
   );
@@ -308,6 +308,13 @@ export default function AuditLogTab({ sa, initialFrom, initialTo, initialCategor
     void load(1);
     void fetchChartStats();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Keep the browser URL in sync so the state survives a refresh or can be shared.
+  useEffect(() => {
+    const base = `/audit-logs/${encodeURIComponent(sa.region)}/${encodeURIComponent(sa.subdomain)}`;
+    const url  = committed.trim() ? `${base}?q=${encodeURIComponent(committed.trim())}` : base;
+    history.replaceState(null, '', url);
+  }, [committed, sa.region, sa.subdomain]);
 
   function toggleCat(key: string) {
     const next = new Set(selectedCats);
