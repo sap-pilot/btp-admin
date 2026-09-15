@@ -469,7 +469,7 @@ export default function RoleCollectionsOverview() {
       {progress && (() => {
         const isDone    = progress.type === 'done';
         const hasIssues = isDone && !!progress.issues?.length;
-        const pct       = isDone ? 100 : progress.total > 0 ? Math.round(((progress.current ?? 0) / progress.total) * 100) : 0;
+        const pct       = isDone ? 100 : progress.total > 0 ? Math.round((Math.max((progress.current ?? 0) - 1, 0) / progress.total) * 100) : 0;
         const barColor  = hasIssues ? 'bg-amber-500' : isDone ? 'bg-green-500' : 'bg-primary';
         const textColor = hasIssues ? 'text-amber-600 dark:text-amber-400' : isDone ? 'text-green-600 dark:text-green-400' : 'text-foreground';
         const bgColor   = hasIssues ? 'bg-amber-500/8' : isDone ? 'bg-green-500/8' : 'bg-muted/40';

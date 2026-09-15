@@ -201,8 +201,17 @@ const tdCls = 'px-2 py-1.5 border-b border-border text-xs';
 
 const TAB_LABEL: Record<ModalTab, string> = {
   info: 'Overview', services: 'Services', apps: 'Apps',
-  destinations: 'Destinations', roles: 'Roles', users: 'Users', audit: 'Audit Log',
+  destinations: 'Destinations', roles: 'Roles', users: 'Users', audit: 'Audit Logs',
 };
+
+function TabNotEnabled({ feature, option }: { feature: string; option: string }) {
+  return (
+    <div className="flex-1 flex items-center justify-center text-sm text-muted-foreground p-8 text-center">
+      {feature} is not enabled for this subaccount.<br /><br />
+      Go to Config → Subaccounts and select the {option} option to enable it.
+    </div>
+  );
+}
 
 export default function SubaccountModal({ sa, onClose, cockpit, cockpitMenu, isAdmin, onSpaceSave, subaccounts, onSelectSubaccount, tabs, initialTab, initialAppGuid, onAppDataChange, allDestNames, initialDestName, initialDestTab, initialDestShowList, initialDestSpaceName, initialDestInstName, initialDestInstGuid, selectedDests, onToggleCompare, onOpenCompare, onDestDataChange, allRcNames, initialRcName, initialRcTab, initialRcShowList, onRcDataChange, initialUserEmail, initialUserOrigin, initialUserTab, onUserDataChange, initialAuditFrom, initialAuditTo, initialAuditCategories, isPopup }: Props) {
   const [activeTab, setActiveTab]           = useState<ModalTab>(initialTab ?? 'info');
@@ -259,12 +268,7 @@ export default function SubaccountModal({ sa, onClose, cockpit, cockpitMenu, isA
     setSpaceDestsOrig(new Map(m));
     setSpaceAods(new Map(ma));
     setSpaceAodsOrig(new Map(ma));
-    // Reset activeTab if the new SA doesn't support the current tab
-    setActiveTab(prev => {
-      if (prev === 'destinations' && !sa.manageDestinations) return 'info';
-      if ((prev === 'roles' || prev === 'users') && !sa.manageRoles) return 'info';
-      return prev;
-    });
+    // (no tab resets — disabled tabs show a placeholder instead of hiding)
   }, [sa]);
 
   useEffect(() => {
@@ -585,16 +589,10 @@ export default function SubaccountModal({ sa, onClose, cockpit, cockpitMenu, isA
                 {isAdminMode && (
                   <>
                     <button className={tabCls('apps')} onClick={() => handleTabSwitch('apps')}>Apps</button>
-                    {sa.manageDestinations && (
-                      <button className={tabCls('destinations')} onClick={() => handleTabSwitch('destinations')}>Destinations</button>
-                    )}
-                    {sa.manageRoles && (
-                      <>
-                        <button className={tabCls('roles')} onClick={() => handleTabSwitch('roles')}>Roles</button>
-                        <button className={tabCls('users')} onClick={() => handleTabSwitch('users')}>Users</button>
-                      </>
-                    )}
-                    <button className={tabCls('audit')} onClick={() => handleTabSwitch('audit')}>Audit Log</button>
+                    <button className={tabCls('destinations')} onClick={() => handleTabSwitch('destinations')}>Destinations</button>
+                    <button className={tabCls('roles')} onClick={() => handleTabSwitch('roles')}>Roles</button>
+                    <button className={tabCls('users')} onClick={() => handleTabSwitch('users')}>Users</button>
+                    <button className={tabCls('audit')} onClick={() => handleTabSwitch('audit')}>Audit Logs</button>
                   </>
                 )}
               </div>
@@ -997,52 +995,64 @@ export default function SubaccountModal({ sa, onClose, cockpit, cockpitMenu, isA
 
                 {mountedTabs.has('destinations') && isAdminMode && sa && (
                   <div className={activeTab === 'destinations' ? 'flex-1 min-h-0 flex flex-col' : 'hidden'}>
-                    <DestTab
-                      sa={sa}
-                      allNames={allDestNames}
-                      initialName={initialDestName}
-                      initialTab={initialDestTab}
-                      initialShowList={initialDestShowList}
-                      initialSpaceName={initialDestSpaceName}
-                      initialInstName={initialDestInstName}
-                      initialInstGuid={initialDestInstGuid}
-                      selectedDests={selectedDests}
-                      onToggleCompare={onToggleCompare}
-                      onOpenCompare={dests => { setInternalCompare(dests); onOpenCompare?.(dests); }}
-                      onDestDataChange={onDestDataChange}
-                      autoRefreshTrigger={destAutoRefresh}
-                    />
+                    {sa.manageDestinations ? (
+                      <DestTab
+                        sa={sa}
+                        allNames={allDestNames}
+                        initialName={initialDestName}
+                        initialTab={initialDestTab}
+                        initialShowList={initialDestShowList}
+                        initialSpaceName={initialDestSpaceName}
+                        initialInstName={initialDestInstName}
+                        initialInstGuid={initialDestInstGuid}
+                        selectedDests={selectedDests}
+                        onToggleCompare={onToggleCompare}
+                        onOpenCompare={dests => { setInternalCompare(dests); onOpenCompare?.(dests); }}
+                        onDestDataChange={onDestDataChange}
+                        autoRefreshTrigger={destAutoRefresh}
+                      />
+                    ) : (
+                      <TabNotEnabled feature="Destinations" option="Destinations" />
+                    )}
                   </div>
                 )}
 
                 {mountedTabs.has('roles') && isAdminMode && sa && (
                   <div className={activeTab === 'roles' ? 'flex-1 min-h-0 flex flex-col' : 'hidden'}>
-                    <RolesTab
-                      sa={sa}
-                      allNames={allRcNames}
-                      initialName={initialRcName}
-                      initialTab={initialRcTab}
-                      initialShowList={initialRcShowList}
-                      onRcDataChange={onRcDataChange}
-                    />
+                    {sa.manageRoles ? (
+                      <RolesTab
+                        sa={sa}
+                        allNames={allRcNames}
+                        initialName={initialRcName}
+                        initialTab={initialRcTab}
+                        initialShowList={initialRcShowList}
+                        onRcDataChange={onRcDataChange}
+                      />
+                    ) : (
+                      <TabNotEnabled feature="Roles" option="Roles" />
+                    )}
                   </div>
                 )}
 
                 {mountedTabs.has('users') && isAdminMode && sa && (
                   <div className={activeTab === 'users' ? 'flex-1 min-h-0 flex flex-col' : 'hidden'}>
-                    <UsersTab
-                      sa={sa}
-                      initialUserEmail={initialUserEmail}
-                      initialUserOrigin={initialUserOrigin}
-                      initialTab={initialUserTab}
-                      onUserDataChange={onUserDataChange}
-                    />
+                    {sa.manageRoles ? (
+                      <UsersTab
+                        sa={sa}
+                        initialUserEmail={initialUserEmail}
+                        initialUserOrigin={initialUserOrigin}
+                        initialTab={initialUserTab}
+                        onUserDataChange={onUserDataChange}
+                      />
+                    ) : (
+                      <TabNotEnabled feature="Users" option="Roles" />
+                    )}
                   </div>
                 )}
 
                 {mountedTabs.has('audit') && isAdminMode && sa && (
                   <div className={activeTab === 'audit' ? 'flex-1 min-h-0 flex flex-col' : 'hidden'}>
-                    <AuditLogTab sa={sa} initialFrom={initialAuditFrom} initialTo={initialAuditTo} initialCategories={initialAuditCategories} />
+                    <AuditLogTab key={`${sa.region}/${sa.subdomain}`} sa={sa} initialFrom={initialAuditFrom} initialTo={initialAuditTo} initialCategories={initialAuditCategories} />
                   </div>
                 )}
 

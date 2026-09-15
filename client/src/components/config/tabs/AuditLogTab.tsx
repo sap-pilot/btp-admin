@@ -237,6 +237,7 @@ function catsParam(cats: Set<string>): string | null {
 
 export default function AuditLogTab({ sa, initialFrom, initialTo, initialCategories }: Props) {
   const [keyword,      setKeyword]      = useState('');
+  const [committed,    setCommitted]    = useState('');
   const [selectedCats, setSelectedCats] = useState<Set<string>>(() =>
     initialCategories ? new Set(initialCategories) : new Set(ALL_CATS)
   );
@@ -255,14 +256,15 @@ export default function AuditLogTab({ sa, initialFrom, initialTo, initialCategor
   const [saProgress,   setSaProgress]   = useState<{ page: number; lastTime: string } | null>(null);
   const evsRef = useRef<EventSource | null>(null);
 
-  async function load(p = page, cats = selectedCats, fromOvr?: string, toOvr?: string) {
+  async function load(p = page, cats = selectedCats, fromOvr?: string, toOvr?: string, kwOvr?: string) {
     const useFrom = fromOvr !== undefined ? fromOvr : from;
     const useTo   = toOvr   !== undefined ? toOvr   : to;
+    const useKw   = kwOvr   !== undefined ? kwOvr   : committed;
     setLoading(true);
     setError('');
     try {
       const params = new URLSearchParams({ limit: String(limit), page: String(p) });
-      if (keyword.trim()) params.set('q', keyword.trim());
+      if (useKw.trim()) params.set('q', useKw.trim());
       if (useFrom) params.set('from', useFrom);
       if (useTo)   params.set('to', useTo);
       const cp = catsParam(cats);
@@ -355,7 +357,16 @@ export default function AuditLogTab({ sa, initialFrom, initialTo, initialCategor
     }
   }
 
-  const keywords = splitKeywords(keyword);
+  const keywords = splitKeywords(committed);
+
+  if (!sa.viewAuditLogs) {
+    return (
+      <div className="flex-1 flex items-center justify-center text-sm text-muted-foreground p-8 text-center">
+        Audit log is not enabled for this subaccount.<br /><br />
+        Go to Config → Subaccounts and select the Audit Logs option to enable it.
+      </div>
+    );
+  }
 
   return (
     <div className="flex flex-col h-full min-h-0">
@@ -368,15 +379,20 @@ export default function AuditLogTab({ sa, initialFrom, initialTo, initialCategor
           <input
             type="text" value={keyword}
             onChange={e => setKeyword(e.target.value)}
-            onKeyDown={e => e.key === 'Enter' && void load(1)}
+            onKeyDown={e => { if (e.key === 'Enter') { setCommitted(keyword); void load(1, selectedCats, undefined, undefined, keyword); } }}
             placeholder="Keywords (space-separated, all must match)…"
             className="w-full h-7 pl-7 pr-6 text-xs border border-border rounded bg-background focus:outline-none focus:ring-1 focus:ring-ring placeholder:text-muted-foreground/50"
           />
           {keyword && (
-            <button onClick={() => setKeyword('')} title="Clear search"
-              className="absolute right-1.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors p-0.5 rounded">
-              <X className="h-3 w-3" />
-            </button>
+            <span className="absolute right-1.5 top-1/2 -translate-y-1/2 p-0.5">
+              {committed && loading
+                ? <Loader2 className="h-3 w-3 animate-spin text-muted-foreground" />
+                : <button onClick={() => { setKeyword(''); setCommitted(''); void load(1, selectedCats, undefined, undefined, ''); }} title="Clear search"
+                    className="text-muted-foreground hover:text-foreground transition-colors rounded">
+                    <X className="h-3 w-3" />
+                  </button>
+              }
+            </span>
           )}
         </div>
 
@@ -406,6 +422,13 @@ export default function AuditLogTab({ sa, initialFrom, initialTo, initialCategor
           onChange={e => { setTo(e.target.value); setPage(1); void load(1, selectedCats, from, e.target.value); }}
           className="h-7 px-2 text-xs border border-border rounded bg-background focus:outline-none focus:ring-1 focus:ring-ring w-[10.5rem] [color-scheme:light] dark:[color-scheme:dark]"
           title="To" />
+        {(from || to) && (
+          <button onClick={() => { setFrom(''); setTo(''); setPage(1); void load(1, selectedCats, '', ''); }}
+            title="Clear time range"
+            className="inline-flex items-center justify-center h-7 w-7 rounded border border-border hover:bg-accent hover:text-accent-foreground transition-colors text-muted-foreground hover:text-foreground shrink-0">
+            <X className="h-3.5 w-3.5" />
+          </button>
+        )}
 
         {/* Refresh button — triggers delta sync with Audit Log API */}
         <button onClick={() => void handleSaRefresh()} disabled={loading || saRefreshing} title="Retrieve latest logs from Audit Log API"
@@ -469,6 +492,7 @@ export default function AuditLogTab({ sa, initialFrom, initialTo, initialCategor
                   <tr key={r.uuid ?? i} className={`hover:bg-muted/20 ${isLong ? 'cursor-pointer' : ''}`}
                     onClick={() => {
                       if (!isLong) return;
+                      if (window.getSelection()?.toString()) return;
                       setExpanded(prev => { const n = new Set(prev); n.has(i) ? n.delete(i) : n.add(i); return n; });
                     }}>
                     <td className="px-2 py-1 border-b border-border/50 font-mono text-[11px] text-muted-foreground whitespace-nowrap align-top">

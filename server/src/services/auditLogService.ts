@@ -55,6 +55,21 @@ async function grepFiles(dir: string, keywords: string[]): Promise<Set<string>> 
   } catch { return new Set(); }
 }
 
+// Grep a specific list of file paths (not a whole directory) for all keywords.
+// Used to apply keyword filter to an already time-range-narrowed file list.
+async function grepFileList(filePaths: string[], keywords: string[]): Promise<Set<string>> {
+  if (keywords.length === 0 || filePaths.length === 0) return new Set(filePaths);
+  const fileArgs = filePaths.map(shellQuote).join(' ');
+  let cmd = `grep -li ${shellQuote(keywords[0]!)} ${fileArgs}`;
+  for (let i = 1; i < keywords.length; i++) {
+    cmd += ` | xargs -r grep -li ${shellQuote(keywords[i]!)}`;
+  }
+  try {
+    const { stdout } = await execAsync(cmd, { maxBuffer: 10 * 1024 * 1024 });
+    return new Set(stdout.trim().split('\n').filter(Boolean));
+  } catch { return new Set(); }
+}
+
 // Returns lines from the given files that match ALL keywords (case-insensitive).
 // Each line is a compact JSON record (JSONL format).
 // Returns JSON record lines from files that match ALL keywords (case-insensitive).
@@ -701,25 +716,57 @@ export async function getAuditStats(
       .map(f => ({ f, m: AUDIT_FILENAME_RE.exec(f) }))
       .filter(({ m }) => m !== null && m[1]! >= cutoffKey);
 
-    // Apply grep-based keyword filter to find files containing all keywords
     const keywords = parseKeywords(keyword);
-    let matchSet: Set<string> | null = null;
-    if (keywords.length > 0 && inRange.length > 0) {
-      matchSet = await grepFiles(dir, keywords);
-    }
 
-    for (const { f, m } of inRange) {
-      if (matchSet !== null && !matchSet.has(join(dir, f))) continue;
-      stats.push({
-        hourKey:      m![1]!,
-        region:       sa.region,
-        subdomain:    sa.subdomain,
-        dataAccess:   parseInt(m![2]!, 10),
-        security:     parseInt(m![3]!, 10),
-        config:       parseInt(m![4]!, 10),
-        modification: parseInt(m![5]!, 10),
-        other:        m![6] ? parseInt(m![6], 10) : 0,
-      });
+    if (keywords.length > 0 && inRange.length > 0) {
+      // Keyword path: grep only matching files, then count matching lines by
+      // category so the chart reflects actual keyword-hit counts, not total
+      // hourly counts from filenames.
+      const inRangePaths = inRange.map(({ f }) => join(dir, f));
+      const matchSet     = await grepFileList(inRangePaths, keywords);
+      const candidatePaths = inRange
+        .filter(({ f }) => matchSet.has(join(dir, f)))
+        .map(({ f }) => join(dir, f));
+
+      if (candidatePaths.length > 0) {
+        const lines = await grepLines(candidatePaths, keywords);
+        // Group matching lines by UTC hour (extracted from "time" field) and count categories.
+        const hourCounts = new Map<string, { da: number; se: number; cfg: number; dm: number; other: number }>();
+        for (const line of lines) {
+          const timeMatch = /"time"\s*:\s*"(\d{4}-\d{2}-\d{2}T\d{2})/.exec(line);
+          if (!timeMatch) continue;
+          const hourKey = timeMatch[1]!;
+          if (!hourCounts.has(hourKey)) hourCounts.set(hourKey, { da: 0, se: 0, cfg: 0, dm: 0, other: 0 });
+          const c = hourCounts.get(hourKey)!;
+          const cat = (/"category"\s*:\s*"(audit\.[^"]+)"/.exec(line))?.[1] ?? '';
+          switch (cat) {
+            case 'audit.data-access':       c.da++;    break;
+            case 'audit.security-events':   c.se++;    break;
+            case 'audit.configuration':     c.cfg++;   break;
+            case 'audit.data-modification': c.dm++;    break;
+            default:                        c.other++; break;
+          }
+        }
+        for (const [hourKey, { da, se, cfg, dm, other }] of hourCounts) {
+          if (da + se + cfg + dm + other === 0) continue;
+          stats.push({ hourKey, region: sa.region, subdomain: sa.subdomain,
+            dataAccess: da, security: se, config: cfg, modification: dm, other });
+        }
+      }
+    } else {
+      // No keyword: fast path — read counts directly from filenames.
+      for (const { f, m } of inRange) {
+        stats.push({
+          hourKey:      m![1]!,
+          region:       sa.region,
+          subdomain:    sa.subdomain,
+          dataAccess:   parseInt(m![2]!, 10),
+          security:     parseInt(m![3]!, 10),
+          config:       parseInt(m![4]!, 10),
+          modification: parseInt(m![5]!, 10),
+          other:        m![6] ? parseInt(m![6], 10) : 0,
+        });
+      }
     }
   }
 
@@ -888,7 +935,7 @@ export interface SubaccountLatestAudit {
   entries:   AuditRecord[];
 }
 
-export async function getLatestAuditEntries(durationDays: number, keyword?: string, from?: string, to?: string): Promise<SubaccountLatestAudit[]> {
+export async function getLatestAuditEntries(durationDays: number, keyword?: string, from?: string, to?: string, categories?: Set<string>): Promise<SubaccountLatestAudit[]> {
   const cutoff    = new Date(Date.now() - durationDays * 24 * 60 * 60 * 1000);
   const cutoffKey = parseHourKey(cutoff.toISOString());
   const fromKey   = from ? (parseHourKey(from) || cutoffKey) : cutoffKey;
@@ -907,10 +954,12 @@ export async function getLatestAuditEntries(durationDays: number, keyword?: stri
     const keywords = parseKeywords(keyword);
     const inRange   = files.filter(f => { const m = AUDIT_FILENAME_RE.exec(f); return m !== null && m[1]! >= fromKey && m[1]! <= toKey; });
 
-    // Grep-based file filter, then collect latest 10 matching records
+    // Narrow to time-range files first (filename-based, instant), then grep only
+    // those files for keywords — avoids scanning the entire directory.
     let candidateFiles = inRange;
     if (keywords.length > 0 && inRange.length > 0) {
-      const matchSet = await grepFiles(dir, keywords);
+      const inRangePaths = inRange.map(f => join(dir, f));
+      const matchSet = await grepFileList(inRangePaths, keywords);
       candidateFiles = inRange.filter(f => matchSet.has(join(dir, f)));
     }
 
@@ -922,6 +971,7 @@ export async function getLatestAuditEntries(durationDays: number, keyword?: stri
         const recs = parseAuditFile(raw).reverse(); // newest first within the hour file
         for (const r of recs) {
           if (entries.length >= 10) break;
+          if (categories && !categories.has(normalizeCat(r.category))) continue;
           if (keywords.length > 0) {
             const s = JSON.stringify(r).toLowerCase();
             if (!keywords.every(kw => s.includes(kw.toLowerCase()))) continue;

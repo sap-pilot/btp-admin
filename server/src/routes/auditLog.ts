@@ -40,50 +40,60 @@ router.post('/refresh/:region/:subdomain', requireAdmin, (req, res) => {
   res.json({ ok: true, started: true });
 });
 
-// GET /api/audit-log/stats?duration=30&q=keyword — hourly chart data derived from filenames
+// GET /api/audit-log/stats?duration=30&q=keyword&categories=... — hourly chart data derived from filenames
 router.get('/stats', requireAdmin, async (req, res, next) => {
+  const t0 = Date.now();
   try {
-    const duration = parseInt(typeof req.query['duration'] === 'string' ? req.query['duration'] : '30', 10);
-    const keyword  = typeof req.query['q'] === 'string' && req.query['q'] ? req.query['q'] : undefined;
+    const duration   = parseInt(typeof req.query['duration'] === 'string' ? req.query['duration'] : '30', 10);
+    const keyword    = typeof req.query['q']          === 'string' && req.query['q']          ? req.query['q']          : undefined;
+    const categories = parseCategoriesParam(typeof req.query['categories'] === 'string' ? req.query['categories'] : undefined);
     const { stats, warnings } = await getAuditStats(Math.min(Math.max(duration, 1), 90), keyword);
+    logger.debug({ duration, keyword, categories: categories ? [...categories] : undefined, durationMs: Date.now() - t0 }, 'audit-log/stats');
     res.json({ ok: true, stats, warnings });
   } catch (err) { next(err); }
 });
 
-// GET /api/audit-log/latest?duration=30&q=keyword&from=...&to=... — latest 10 entries per subaccount
+// GET /api/audit-log/latest?duration=30&q=keyword&from=...&to=...&categories=... — latest 10 entries per subaccount
 router.get('/latest', requireAdmin, async (req, res, next) => {
+  const t0 = Date.now();
   try {
-    const duration = parseInt(typeof req.query['duration'] === 'string' ? req.query['duration'] : '30', 10);
-    const keyword  = typeof req.query['q']    === 'string' && req.query['q']    ? req.query['q']    : undefined;
-    const from     = typeof req.query['from'] === 'string' && req.query['from'] ? req.query['from'] : undefined;
-    const to       = typeof req.query['to']   === 'string' && req.query['to']   ? req.query['to']   : undefined;
-    const entries  = await getLatestAuditEntries(Math.min(Math.max(duration, 1), 90), keyword, from, to);
+    const duration   = parseInt(typeof req.query['duration'] === 'string' ? req.query['duration'] : '30', 10);
+    const keyword    = typeof req.query['q']    === 'string' && req.query['q']    ? req.query['q']    : undefined;
+    const from       = typeof req.query['from'] === 'string' && req.query['from'] ? req.query['from'] : undefined;
+    const to         = typeof req.query['to']   === 'string' && req.query['to']   ? req.query['to']   : undefined;
+    const categories = parseCategoriesParam(typeof req.query['categories'] === 'string' ? req.query['categories'] : undefined);
+    const entries    = await getLatestAuditEntries(Math.min(Math.max(duration, 1), 90), keyword, from, to, categories);
+    logger.debug({ duration, keyword, from, to, categories: categories ? [...categories] : undefined, durationMs: Date.now() - t0 }, 'audit-log/latest');
     res.json({ ok: true, entries });
   } catch (err) { next(err); }
 });
 
 // GET /api/audit-log/stats/:region/:subdomain?duration=90&categories=data-access,security-events — mini chart
 router.get('/stats/:region/:subdomain', requireAdmin, async (req, res, next) => {
+  const t0 = Date.now();
   try {
     const { region, subdomain } = req.params as { region: string; subdomain: string };
     const duration   = parseInt(typeof req.query['duration']   === 'string' ? req.query['duration']   : '90', 10);
     const categories = parseCategoriesParam(typeof req.query['categories'] === 'string' ? req.query['categories'] : undefined);
     const stats = await getAuditSaStats(region, subdomain, Math.min(Math.max(duration, 1), 365), categories);
+    logger.debug({ region, subdomain, duration, categories: categories ? [...categories] : undefined, durationMs: Date.now() - t0 }, 'audit-log/stats/:sa');
     res.json({ ok: true, stats });
   } catch (err) { next(err); }
 });
 
 // GET /api/audit-log/records/:region/:subdomain — paginated records for subaccount modal
 router.get('/records/:region/:subdomain', requireAdmin, async (req, res, next) => {
+  const t0 = Date.now();
   try {
     const { region, subdomain } = req.params as { region: string; subdomain: string };
-    const keyword = typeof req.query['q']     === 'string' ? req.query['q']     : undefined;
-    const from    = typeof req.query['from']  === 'string' ? req.query['from']  : undefined;
-    const to      = typeof req.query['to']    === 'string' ? req.query['to']    : undefined;
+    const keyword    = typeof req.query['q']     === 'string' ? req.query['q']     : undefined;
+    const from       = typeof req.query['from']  === 'string' ? req.query['from']  : undefined;
+    const to         = typeof req.query['to']    === 'string' ? req.query['to']    : undefined;
     const limit      = parseInt(typeof req.query['limit'] === 'string' ? req.query['limit'] : '100', 10);
     const page       = parseInt(typeof req.query['page']  === 'string' ? req.query['page']  : '1', 10);
     const categories = parseCategoriesParam(typeof req.query['categories'] === 'string' ? req.query['categories'] : undefined);
-    const result  = await getAuditRecords(region, subdomain, { from, to, keyword, limit, page, categories });
+    const result     = await getAuditRecords(region, subdomain, { from, to, keyword, limit, page, categories });
+    logger.debug({ region, subdomain, keyword, from, to, limit, page, categories: categories ? [...categories] : undefined, total: result.total, durationMs: Date.now() - t0 }, 'audit-log/records');
     res.json({ ok: true, ...result });
   } catch (err) { next(err); }
 });

@@ -2,14 +2,15 @@ import { get as httpGet, request as httpRequest } from 'node:http';
 import { get as httpsGet, request as httpsRequest } from 'node:https';
 import { gunzip } from 'node:zlib';
 import { promisify } from 'node:util';
-import { mkdir, writeFile, utimes, stat } from 'node:fs/promises';
-import { join, resolve as resolvePath } from 'node:path';
-import { createHmac } from 'node:crypto';
+import { mkdir, writeFile, utimes, stat, rm, rename, copyFile, readdir, unlink } from 'node:fs/promises';
+import { join, resolve as resolvePath, dirname } from 'node:path';
+import { createHmac, randomBytes } from 'node:crypto';
+import { createWriteStream } from 'node:fs';
+import { spawn } from 'node:child_process';
 import { config } from '../config.js';
 import { logger } from '../logger.js';
 import { resolveSyncDuplicates, sanitizeName, formatBrowseT } from './localStoreService.js';
 import type { BrowseFile } from './localStoreService.js';
-import { extractZip } from './zipBuilder.js';
 import { getSyncKey, getAllServices, getSyncExcludes } from './configService.js';
 import { emit } from './liveEvents.js';
 import { refreshLastUpdated } from './lastUpdatedService.js';
@@ -350,6 +351,60 @@ function fetchPost(url: string, body: string, extraHeaders: Record<string, strin
   });
 }
 
+// Like fetchPost but streams the response body directly into a file instead of
+// accumulating it in memory — avoids OOM when downloading large ZIP batches.
+function fetchPostToFile(
+  url: string,
+  body: string,
+  extraHeaders: Record<string, string>,
+  destPath: string,
+): Promise<{ transferred: number }> {
+  const isHttps = url.startsWith('https://');
+  const request = isHttps ? httpsRequest : httpRequest;
+  return new Promise((resolve, reject) => {
+    const bodyBytes = Buffer.from(body, 'utf-8');
+    const fileStream = createWriteStream(destPath);
+    let transferred = 0;
+    const req = request(
+      url,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Content-Length': bodyBytes.length,
+          ...extraHeaders,
+        },
+      },
+      (res) => {
+        if (res.statusCode === 401 || (res.statusCode && res.statusCode >= 400)) {
+          fileStream.destroy();
+          const code = res.statusCode!;
+          const errChunks: Buffer[] = [];
+          res.on('data', (c: Buffer) => errChunks.push(c));
+          res.on('end', () => {
+            (async () => {
+              const raw = Buffer.concat(errChunks);
+              const buf = res.headers['content-encoding'] === 'gzip' ? await gunzipAsync(raw) : raw;
+              const resBody = buf.toString('utf-8').slice(0, 500);
+              logger.debug({ url, statusCode: code, resBody }, 'Sync batch HTTP error');
+              reject(code === 401 ? new SyncAuthError(url) : new HttpError(code, url, resBody));
+            })().catch(() => reject(code === 401 ? new SyncAuthError(url) : new HttpError(code, url)));
+          });
+          return;
+        }
+        res.on('data', (c: Buffer) => { transferred += c.length; });
+        res.pipe(fileStream);
+        fileStream.on('finish', () => resolve({ transferred }));
+        fileStream.on('error', (err) => { fileStream.destroy(); reject(err); });
+        res.on('error',  (err) => { fileStream.destroy(); reject(err); });
+      },
+    );
+    req.on('error', (err) => { fileStream.destroy(); reject(err); });
+    req.write(bodyBytes);
+    req.end();
+  });
+}
+
 function syncKeyHeader(): Record<string, string> {
   const key = getSyncKey();
   if (!key) return {};
@@ -370,135 +425,211 @@ function resolveLocalPath(flatPath: string): string {
   return join(config.LOCAL_STORE_DIR, 'resp', flatPath);
 }
 
+// Validates a single extracted-ZIP entry name, creates the destination parent dir,
+// and moves the file from srcPath to its final location (rename; falls back to
+// copyFile+unlink across device boundaries). Returns the file size (for decompressed
+// byte accounting), or 0 if the entry is rejected.
+async function moveExtractedEntry(
+  name: string,
+  srcPath: string,
+  safeBase: string,
+  remoteMtimes: Map<string, number>,
+): Promise<number> {
+  const slash = name.indexOf('/');
+  let target: string;
+  if (slash === -1) {
+    target = resolvePath(config.LOCAL_STORE_DIR, name);
+    if (!target.startsWith(safeBase + '/')) {
+      logger.warn({ name }, 'Skipping ZIP root entry: path traversal detected');
+      return 0;
+    }
+    await mkdir(config.LOCAL_STORE_DIR, { recursive: true });
+  } else {
+    const folder   = name.slice(0, slash);
+    const filename = name.slice(slash + 1);
+    if (!folder || !filename) return 0;
+    if (folder === 'conf') {
+      target = resolvePath(config.LOCAL_STORE_DIR, 'conf', filename);
+      if (!target.startsWith(safeBase + '/')) {
+        logger.warn({ name }, 'Skipping ZIP conf entry: path traversal detected');
+        return 0;
+      }
+      await mkdir(join(config.LOCAL_STORE_DIR, 'conf'), { recursive: true });
+    } else if (folder === 'dest') {
+      target = resolvePath(config.LOCAL_STORE_DIR, 'dest', filename);
+      if (!target.startsWith(safeBase + '/')) {
+        logger.warn({ name }, 'Skipping ZIP dest entry: path traversal detected');
+        return 0;
+      }
+      const lastSlash = filename.lastIndexOf('/');
+      await mkdir(lastSlash !== -1
+        ? join(config.LOCAL_STORE_DIR, 'dest', filename.slice(0, lastSlash))
+        : join(config.LOCAL_STORE_DIR, 'dest'), { recursive: true });
+    } else if (folder === 'rcs') {
+      target = resolvePath(config.LOCAL_STORE_DIR, 'rcs', filename);
+      if (!target.startsWith(safeBase + '/')) {
+        logger.warn({ name }, 'Skipping ZIP rcs entry: path traversal detected');
+        return 0;
+      }
+      const lastSlash = filename.lastIndexOf('/');
+      await mkdir(lastSlash !== -1
+        ? join(config.LOCAL_STORE_DIR, 'rcs', filename.slice(0, lastSlash))
+        : join(config.LOCAL_STORE_DIR, 'rcs'), { recursive: true });
+    } else if (folder === 'users') {
+      target = resolvePath(config.LOCAL_STORE_DIR, 'users', filename);
+      if (!target.startsWith(safeBase + '/')) {
+        logger.warn({ name }, 'Skipping ZIP users entry: path traversal detected');
+        return 0;
+      }
+      const lastSlash = filename.lastIndexOf('/');
+      await mkdir(lastSlash !== -1
+        ? join(config.LOCAL_STORE_DIR, 'users', filename.slice(0, lastSlash))
+        : join(config.LOCAL_STORE_DIR, 'users'), { recursive: true });
+    } else if (folder === 'apps') {
+      target = resolvePath(config.LOCAL_STORE_DIR, 'apps', filename);
+      if (!target.startsWith(safeBase + '/')) {
+        logger.warn({ name }, 'Skipping ZIP apps entry: path traversal detected');
+        return 0;
+      }
+      const appParts = filename.split('/');
+      const isRoot   = filename === 'aod-config.json' || filename === 'stats.csv' || filename === 'aod-stats.csv';
+      const isLog    = appParts.length === 3 && /^accesslog(\.\d{8})?\.csv$/.test(appParts[2] ?? '');
+      const isApp    = appParts.length === 4 && /^[\w-]+(?:\.deleted)?\.json$/.test(appParts[3] ?? '');
+      if (!isRoot && !isLog && !isApp) return 0;
+      const lastSlash = filename.lastIndexOf('/');
+      await mkdir(lastSlash !== -1
+        ? join(config.LOCAL_STORE_DIR, 'apps', filename.slice(0, lastSlash))
+        : join(config.LOCAL_STORE_DIR, 'apps'), { recursive: true });
+    } else if (folder === 'audit-log') {
+      target = resolvePath(config.LOCAL_STORE_DIR, 'audit-log', filename);
+      if (!target.startsWith(safeBase + '/')) {
+        logger.warn({ name }, 'Skipping ZIP audit-log entry: path traversal detected');
+        return 0;
+      }
+      const auditParts  = filename.split('/');
+      const isAuditFile = auditParts.length === 3 && /^\d{4}-\d{2}-\d{2}T\d{2}_\d+_\d+_\d+_\d+(?:_\d+)?\.json$/.test(auditParts[2] ?? '');
+      if (!isAuditFile) return 0;
+      const maxAuditDaysRaw = getVar('MAX_AUDIT_LOG_STORAGE_DAYS');
+      const maxAuditDays    = maxAuditDaysRaw ? parseInt(maxAuditDaysRaw, 10) : 0;
+      if (maxAuditDays > 0) {
+        const cutoffKey   = new Date(Date.now() - maxAuditDays * 24 * 60 * 60 * 1000).toISOString().slice(0, 13);
+        const fileHourKey = (auditParts[2] ?? '').slice(0, 13);
+        if (fileHourKey < cutoffKey) return 0;
+      }
+      const lastSlash = filename.lastIndexOf('/');
+      const auditDir  = lastSlash !== -1
+        ? join(config.LOCAL_STORE_DIR, 'audit-log', filename.slice(0, lastSlash))
+        : join(config.LOCAL_STORE_DIR, 'audit-log');
+      await mkdir(auditDir, { recursive: true });
+      // Remove any existing file for the same hour that has stale counts in its name
+      const incomingFile = auditParts[2] ?? '';
+      const hourPrefix   = incomingFile.slice(0, 13); // YYYY-MM-DDTHH
+      try {
+        const existing = await readdir(auditDir);
+        await Promise.all(existing
+          .filter(f => f.slice(0, 13) === hourPrefix && f !== incomingFile)
+          .map(f => unlink(join(auditDir, f)).catch(() => { /* ignore */ })),
+        );
+      } catch { /* dir doesn't exist yet — fine */ }
+    } else {
+      target = resolvePath(config.LOCAL_STORE_DIR, 'resp', folder, filename);
+      if (!target.startsWith(safeBase + '/')) {
+        logger.warn({ name }, 'Skipping ZIP entry: path traversal detected');
+        return 0;
+      }
+      await mkdir(dirname(target), { recursive: true });
+    }
+  }
+
+  // Move the extracted file to its destination (same-fs rename; copyFile fallback on EXDEV)
+  try {
+    await rename(srcPath, target);
+  } catch (err: unknown) {
+    if ((err as NodeJS.ErrnoException).code === 'EXDEV') {
+      await copyFile(srcPath, target);
+      await unlink(srcPath).catch(() => { /* ignore */ });
+    } else {
+      throw err;
+    }
+  }
+
+  const mtime = remoteMtimes.get(name);
+  if (mtime) {
+    const mt = new Date(mtime);
+    try { await utimes(target, mt, mt); } catch { /* ignore — best-effort */ }
+  }
+  try { return (await stat(target)).size; } catch { return 0; }
+}
+
 async function downloadBatch(
   remoteBase: string,
   filePaths: string[],
   remoteMtimes: Map<string, number>,
 ): Promise<{ transferred: number; decompressed: number }> {
   const url = `${remoteBase}/api/sync/batch`;
-  const t0 = Date.now();
-  const { buf: zip, transferred } = await fetchPost(url, JSON.stringify({ paths: filePaths }), syncKeyHeader());
-  const t0Write = Date.now();
-  logger.debug({ url, requested: filePaths.length, durationMs: t0Write - t0 }, 'Sync batch HTTP complete');
-  const entries = extractZip(zip);
+  const t0  = Date.now();
 
-  const safeBase = resolvePath(config.LOCAL_STORE_DIR);
-  await Promise.all(
-    entries.map(async ({ name, data }) => {
-      const slash = name.indexOf('/');
-      let target: string;
-      if (slash === -1) {
-        // Root-level file
-        target = resolvePath(config.LOCAL_STORE_DIR, name);
-        if (!target.startsWith(safeBase + '/')) {
-          logger.warn({ name }, 'Skipping ZIP root entry: path traversal detected');
-          return;
-        }
-        await mkdir(config.LOCAL_STORE_DIR, { recursive: true });
-      } else {
-        const folder = name.slice(0, slash);
-        const filename = name.slice(slash + 1);
-        if (!folder || !filename) return;
-        if (folder === 'conf') {
-          target = resolvePath(config.LOCAL_STORE_DIR, 'conf', filename);
-          if (!target.startsWith(safeBase + '/')) {
-            logger.warn({ name }, 'Skipping ZIP conf entry: path traversal detected');
-            return;
-          }
-          await mkdir(join(config.LOCAL_STORE_DIR, 'conf'), { recursive: true });
-        } else if (folder === 'dest') {
-          target = resolvePath(config.LOCAL_STORE_DIR, 'dest', filename);
-          if (!target.startsWith(safeBase + '/')) {
-            logger.warn({ name }, 'Skipping ZIP dest entry: path traversal detected');
-            return;
-          }
-          const lastSlash = filename.lastIndexOf('/');
-          const parentDir = lastSlash !== -1
-            ? join(config.LOCAL_STORE_DIR, 'dest', filename.slice(0, lastSlash))
-            : join(config.LOCAL_STORE_DIR, 'dest');
-          await mkdir(parentDir, { recursive: true });
-        } else if (folder === 'rcs') {
-          target = resolvePath(config.LOCAL_STORE_DIR, 'rcs', filename);
-          if (!target.startsWith(safeBase + '/')) {
-            logger.warn({ name }, 'Skipping ZIP rcs entry: path traversal detected');
-            return;
-          }
-          const lastSlash = filename.lastIndexOf('/');
-          const parentDir = lastSlash !== -1
-            ? join(config.LOCAL_STORE_DIR, 'rcs', filename.slice(0, lastSlash))
-            : join(config.LOCAL_STORE_DIR, 'rcs');
-          await mkdir(parentDir, { recursive: true });
-        } else if (folder === 'users') {
-          target = resolvePath(config.LOCAL_STORE_DIR, 'users', filename);
-          if (!target.startsWith(safeBase + '/')) {
-            logger.warn({ name }, 'Skipping ZIP users entry: path traversal detected');
-            return;
-          }
-          const lastSlash = filename.lastIndexOf('/');
-          const parentDir = lastSlash !== -1
-            ? join(config.LOCAL_STORE_DIR, 'users', filename.slice(0, lastSlash))
-            : join(config.LOCAL_STORE_DIR, 'users');
-          await mkdir(parentDir, { recursive: true });
-        } else if (folder === 'apps') {
-          target = resolvePath(config.LOCAL_STORE_DIR, 'apps', filename);
-          if (!target.startsWith(safeBase + '/')) {
-            logger.warn({ name }, 'Skipping ZIP apps entry: path traversal detected');
-            return;
-          }
-          const appParts = filename.split('/');
-          const isRoot   = filename === 'aod-config.json' || filename === 'stats.csv' || filename === 'aod-stats.csv';
-          const isLog    = appParts.length === 3 && /^accesslog(\.\d{8})?\.csv$/.test(appParts[2] ?? '');
-          const isApp    = appParts.length === 4 && /^[\w-]+(?:\.deleted)?\.json$/.test(appParts[3] ?? '');
-          if (!isRoot && !isLog && !isApp) return;
-          const lastSlash = filename.lastIndexOf('/');
-          const parentDir = lastSlash !== -1
-            ? join(config.LOCAL_STORE_DIR, 'apps', filename.slice(0, lastSlash))
-            : join(config.LOCAL_STORE_DIR, 'apps');
-          await mkdir(parentDir, { recursive: true });
-        } else if (folder === 'audit-log') {
-          target = resolvePath(config.LOCAL_STORE_DIR, 'audit-log', filename);
-          if (!target.startsWith(safeBase + '/')) {
-            logger.warn({ name }, 'Skipping ZIP audit-log entry: path traversal detected');
-            return;
-          }
-          // Only accept: {region}/{subdomain}/{YYYY-MM-DDTHH}_{counts}.json (3-part path)
-          const auditParts = filename.split('/');
-          const isAuditFile = auditParts.length === 3 && /^\d{4}-\d{2}-\d{2}T\d{2}_\d+_\d+_\d+_\d+(?:_\d+)?\.json$/.test(auditParts[2] ?? '');
-          if (!isAuditFile) return;
-          // Skip files older than MAX_AUDIT_LOG_STORAGE_DAYS (judged by filename hourKey)
-          const maxAuditDaysRaw = getVar('MAX_AUDIT_LOG_STORAGE_DAYS');
-          const maxAuditDays    = maxAuditDaysRaw ? parseInt(maxAuditDaysRaw, 10) : 0;
-          if (maxAuditDays > 0) {
-            const cutoffKey  = new Date(Date.now() - maxAuditDays * 24 * 60 * 60 * 1000).toISOString().slice(0, 13);
-            const fileHourKey = (auditParts[2] ?? '').slice(0, 13);
-            if (fileHourKey < cutoffKey) return;
-          }
-          const lastSlash = filename.lastIndexOf('/');
-          const parentDir = lastSlash !== -1
-            ? join(config.LOCAL_STORE_DIR, 'audit-log', filename.slice(0, lastSlash))
-            : join(config.LOCAL_STORE_DIR, 'audit-log');
-          await mkdir(parentDir, { recursive: true });
+  // Stream the ZIP to a temp file to avoid accumulating it in memory
+  const tmpBase = resolvePath(config.LOCAL_STORE_DIR, '..', 'tmp');
+  await mkdir(tmpBase, { recursive: true });
+  const hex          = randomBytes(8).toString('hex');
+  const tmpZip       = join(tmpBase, `sync-batch-${hex}.zip`);
+  const tmpExtractDir = join(tmpBase, `sync-extract-${hex}`);
+
+  try {
+    logger.debug({ url, count: filePaths.length, tmpZip }, 'sync batch: requesting zip from producer');
+    const { transferred } = await fetchPostToFile(
+      url, JSON.stringify({ paths: filePaths }), syncKeyHeader(), tmpZip,
+    );
+    const t0Extract = Date.now();
+    const zipSize = await stat(tmpZip).then(s => s.size).catch(() => 0);
+    logger.debug({ url, count: filePaths.length, transferredKB: Math.round(transferred / 1024), sizeKB: Math.round(zipSize / 1024), durationMs: t0Extract - t0 }, 'sync batch: zip received, extracting');
+
+    // -q suppresses per-file output; without it the stdout pipe fills and unzip
+    // deadlocks on large batches (exit 0 = clean, 1 = warnings but still OK)
+    await new Promise<void>((resolve, reject) => {
+      const proc = spawn('unzip', ['-q', '-o', tmpZip, '-d', tmpExtractDir]);
+      proc.stdout?.resume();
+      proc.stderr?.resume();
+      proc.on('close', (code) => {
+        if (code === 0 || code === 1) resolve();
+        else reject(new Error(`unzip exited with code ${code}`));
+      });
+      proc.on('error', reject);
+    });
+
+    const safeBase = resolvePath(config.LOCAL_STORE_DIR);
+    let decompressed = 0;
+    let movedCount = 0;
+
+    async function walk(dir: string, prefix: string): Promise<void> {
+      const ents = await readdir(dir, { withFileTypes: true });
+      for (const ent of ents) {
+        const srcPath = join(dir, ent.name);
+        const entName = prefix ? `${prefix}/${ent.name}` : ent.name;
+        if (ent.isDirectory()) {
+          await walk(srcPath, entName);
         } else {
-          target = resolvePath(config.LOCAL_STORE_DIR, 'resp', folder, filename);
-          if (!target.startsWith(safeBase + '/')) {
-            logger.warn({ name }, 'Skipping ZIP entry: path traversal detected');
-            return;
+          try {
+            const bytes = await moveExtractedEntry(entName, srcPath, safeBase, remoteMtimes);
+            decompressed += bytes;
+            if (bytes > 0) movedCount++;
+          } catch (err) {
+            logger.warn({ entName, err }, 'sync extract: skipping entry due to unexpected error');
           }
-          await mkdir(join(config.LOCAL_STORE_DIR, 'resp', folder), { recursive: true });
         }
       }
-      await writeFile(target, data);
-      const mtime = remoteMtimes.get(name);
-      if (mtime) {
-        const mt = new Date(mtime);
-        try { await utimes(target, mt, mt); } catch { /* ignore — best-effort */ }
-      }
-    }),
-  );
+    }
 
-  const decompressed = entries.reduce((sum, e) => sum + e.data.length, 0);
-  logger.debug({ files: entries.length, writeMs: Date.now() - t0Write, totalMs: Date.now() - t0 }, 'Batch download chunk complete');
-  return { transferred, decompressed };
+    logger.debug({ tmpExtractDir, count: filePaths.length }, 'sync batch: moving extracted files to localStore');
+    await walk(tmpExtractDir, '');
+    logger.debug({ moved: movedCount, skipped: filePaths.length - movedCount, localStore: config.LOCAL_STORE_DIR, extractMs: Date.now() - t0Extract, totalMs: Date.now() - t0 }, 'sync batch: files moved to localStore, cleaning up tmp');
+
+    return { transferred, decompressed };
+  } finally {
+    await unlink(tmpZip).catch(() => { /* ignore */ });
+    await rm(tmpExtractDir, { recursive: true, force: true }).catch(() => { /* ignore */ });
+  }
 }
 
 async function runBatches(
@@ -656,6 +787,18 @@ async function executeSync(
       missing.push(flatPath);
     }
     logger.debug({ remoteFiles: allRemotePaths.length, excluded: excludedCount, localFound: localMtimes.size, missing: missing.length }, 'Remote/local comparison complete');
+
+    // Sort missing files by sync priority so important config lands first.
+    // conf(0) → apps(1) → dest(2) → resp/svc(3) → audit-log(4) → users(5) → rcs(6) → root(7)
+    const SYNC_PRIORITY: Record<string, number> = {
+      conf: 0, apps: 1, dest: 2, 'audit-log': 4, users: 5, rcs: 6,
+    };
+    const syncPri = (p: string): number => {
+      const slash = p.indexOf('/');
+      if (slash === -1) return 7;
+      return SYNC_PRIORITY[p.slice(0, slash)] ?? 3; // unknown = resp/service files
+    };
+    missing.sort((a, b) => syncPri(a) - syncPri(b));
 
     logger.info({ total: missing.length }, 'Files to sync from remote');
 

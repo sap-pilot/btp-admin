@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { PanelLeft, RefreshCw, ScrollText, Search, X } from 'lucide-react';
+import { Loader2, PanelLeft, RefreshCw, ScrollText, Search, X } from 'lucide-react';
 import { useSidebar } from '@/components/AppLayout';
 import SubaccountModal from '@/components/SubaccountModal';
 import type { SubaccountEntry } from '@/components/config/SubaccountsTable';
@@ -65,10 +65,16 @@ function previewMessage(msg: unknown): string {
   return typeof obj === 'string' ? obj : JSON.stringify(obj);
 }
 
-const KNOWN_SHORT_CATS = new Set(['data-access', 'security-events', 'configuration', 'data-modification']);
-function normalizeCat(cat: string): string {
-  const short = cat.replace('audit.', '');
-  return KNOWN_SHORT_CATS.has(short) ? short : 'other';
+function formatExpanded(msg: unknown): string {
+  let obj: unknown = msg;
+  if (typeof obj === 'string') {
+    const raw = obj;
+    try { obj = JSON.parse(obj); } catch { return raw; }
+  }
+  if (obj !== null && typeof obj === 'object') {
+    return JSON.stringify(obj, null, 2);
+  }
+  return typeof obj === 'string' ? obj : JSON.stringify(obj, null, 2);
 }
 
 function categoryColor(cat: string): string {
@@ -283,15 +289,16 @@ function OverviewAuditChart({ points, selectedCats, from, to, onSelect, onToggle
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
 const ALL_DURATIONS = [
-  { label: 'last 7 days',  value: 7  },
-  { label: 'last 14 days', value: 14 },
-  { label: 'last 30 days', value: 30 },
-  { label: 'last 60 days', value: 60 },
+  { label: 'Last 7 Days',  value: 7  },
+  { label: 'Last 14 Days', value: 14 },
+  { label: 'Last 30 Days', value: 30 },
+  { label: 'Last 60 Days', value: 60 },
 ];
 
 export default function AuditLogPage() {
   const { toggle, collapsed } = useSidebar();
   const [keyword,         setKeyword]         = useState('');
+  const [committed,       setCommitted]       = useState('');
   const [duration,        setDuration]        = useState(30);
   const [progress,        setProgress]        = useState<ProgressState | null>(null);
   const [stats,           setStats]           = useState<AuditHourStat[]>([]);
@@ -305,6 +312,7 @@ export default function AuditLogPage() {
   const [allSubaccounts,  setAllSubaccounts]  = useState<SubaccountEntry[]>([]);
   const [modalSa,         setModalSa]         = useState<SubaccountEntry | null>(null);
   const [selectedCats,    setSelectedCats]    = useState<Set<string>>(() => new Set(ALL_OVERVIEW_CATS));
+  const [expandedRows,    setExpandedRows]    = useState<Set<string>>(() => new Set());
   const [chartFrom,       setChartFrom]       = useState('');
   const [chartTo,         setChartTo]         = useState('');
   const progressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -344,14 +352,21 @@ export default function AuditLogPage() {
     return () => { evs.close(); };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  async function fetchData() {
+  async function fetchData(kwOvr?: string, catsOvr?: Set<string>, fromOvr?: string, toOvr?: string) {
     setLoading(true);
     try {
+      const useKw   = kwOvr   !== undefined ? kwOvr   : committed;
+      const useCats = catsOvr !== undefined ? catsOvr : selectedCats;
+      const useFrom = fromOvr !== undefined ? fromOvr : chartFrom;
+      const useTo   = toOvr   !== undefined ? toOvr   : chartTo;
       const params = new URLSearchParams({ duration: String(duration) });
-      if (keyword.trim()) params.set('q', keyword.trim());
+      if (useKw.trim()) params.set('q', useKw.trim());
       const latestParams = new URLSearchParams(params);
-      if (chartFrom) latestParams.set('from', chartFrom);
-      if (chartTo)   latestParams.set('to',   chartTo);
+      if (useFrom) latestParams.set('from', useFrom);
+      if (useTo)   latestParams.set('to',   useTo);
+      if (useCats.size > 0 && useCats.size < ALL_OVERVIEW_CATS.size) {
+        latestParams.set('categories', [...useCats].join(','));
+      }
       const [statsRes, latestRes] = await Promise.all([
         fetch(`/api/audit-log/stats?${params}`),
         fetch(`/api/audit-log/latest?${latestParams}`),
@@ -396,12 +411,11 @@ export default function AuditLogPage() {
   }
 
   function toggleCat(catKey: string) {
-    setSelectedCats(prev => {
-      const next = new Set(prev);
-      if (next.has(catKey)) { if (next.size <= 1) return prev; next.delete(catKey); }
-      else                   { next.add(catKey); }
-      return next;
-    });
+    const next = new Set(selectedCats);
+    if (next.has(catKey)) { if (next.size <= 1) return; next.delete(catKey); }
+    else                   { next.add(catKey); }
+    setSelectedCats(next);
+    void fetchData(undefined, next);
   }
 
   // Aggregate stats by hour, applying selectedCats filter
@@ -429,15 +443,9 @@ export default function AuditLogPage() {
     return [...map.values()].sort((a, b) => a.hourKey.localeCompare(b.hourKey));
   })();
 
-  const keywords = splitKeywords(keyword);
+  const keywords = splitKeywords(committed);
 
-  // Filter latest entries by active categories (time filter applied server-side)
-  const filteredLatest = latest
-    .map(sa => ({
-      ...sa,
-      entries: sa.entries.filter(r => selectedCats.has(normalizeCat(r.category))),
-    }))
-    .filter(sa => sa.entries.length > 0);
+  const filteredLatest = latest.filter(sa => sa.entries.length > 0);
 
   return (
     <div className="flex flex-col h-full min-h-0 overflow-hidden">
@@ -460,10 +468,22 @@ export default function AuditLogPage() {
           <input
             type="text" value={keyword}
             onChange={e => setKeyword(e.target.value)}
-            onKeyDown={e => e.key === 'Enter' && void fetchData()}
+            onKeyDown={e => { if (e.key === 'Enter') { setCommitted(keyword); void fetchData(keyword); } }}
             placeholder="Search audit logs (space-separated keywords, all must match)…"
-            className="w-full h-8 pl-7 pr-3 text-xs border border-border rounded bg-background focus:outline-none focus:ring-1 focus:ring-ring placeholder:text-muted-foreground/50"
+            className="w-full h-8 pl-7 pr-8 text-xs border border-border rounded bg-background focus:outline-none focus:ring-1 focus:ring-ring placeholder:text-muted-foreground/50"
           />
+          {keyword && (
+            <span className="absolute right-2 top-1/2 -translate-y-1/2 p-0.5">
+              {committed && loading
+                ? <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />
+                : <button onClick={() => { setKeyword(''); setCommitted(''); void fetchData(''); }}
+                    title="Clear search"
+                    className="text-muted-foreground hover:text-foreground transition-colors rounded">
+                    <X className="h-3.5 w-3.5" />
+                  </button>
+              }
+            </span>
+          )}
         </div>
         <select value={duration} onChange={e => setDuration(Number(e.target.value))}
           className="h-8 px-2 text-xs border border-border rounded bg-background focus:outline-none focus:ring-1 focus:ring-ring">
@@ -477,33 +497,38 @@ export default function AuditLogPage() {
         </button>
       </div>
 
-      {/* Progress banner */}
-      {progress && (
-        <div className={`relative border-b text-xs shrink-0 overflow-hidden flex items-center justify-center min-h-[26px] ${
-          progress.type === 'error' ? 'bg-amber-500/5 border-amber-500/20 text-amber-700 dark:text-amber-400'
-          : progress.type === 'done'  ? 'bg-green-500/5 border-green-500/20 text-green-700 dark:text-green-400'
-          : 'bg-muted/10 border-border text-muted-foreground'
-        }`}>
-          {progress.type === 'running' && (
-            progress.total > 0
-              ? <div className="absolute inset-y-0 left-0 bg-primary/15 transition-all duration-300" style={{ width: `${Math.round((progress.current / progress.total) * 100)}%` }} />
-              : <div className="absolute inset-y-0 left-0 right-0 bg-primary/10 animate-pulse" />
-          )}
-          <span className="relative z-10 px-8 py-1 text-center leading-none">
-            {progress.type === 'running' && (
-              `Refreshing ${progress.current}/${progress.total}${progress.alias ? ` — ${progress.alias}` : ''}${progress.phase === 'fetching' && progress.page ? ` (page ${progress.page}${progress.lastTime ? ` · ${progress.lastTime}` : ''})` : ''}`
+      {/* Progress bar */}
+      {progress && (() => {
+        const isDone     = progress.type === 'done';
+        const hasIssues  = isDone && !!progress.warnings.length;
+        const isError    = progress.type === 'error';
+        const pct        = isDone || isError ? 100 : progress.total > 0 ? Math.round((Math.max(progress.current - 1, 0) / progress.total) * 100) : 0;
+        const barColor   = hasIssues || isError ? 'bg-amber-500' : isDone ? 'bg-green-500' : 'bg-primary';
+        const textColor  = hasIssues || isError ? 'text-amber-600 dark:text-amber-400' : isDone ? 'text-green-600 dark:text-green-400' : 'text-foreground';
+        const bgColor    = hasIssues || isError ? 'bg-amber-500/8' : isDone ? 'bg-green-500/8' : 'bg-muted/40';
+        const msg = progress.type === 'running'
+          ? `Refreshing ${progress.current}/${progress.total}${progress.alias ? ` — ${progress.alias}` : ''}${progress.phase === 'fetching' && progress.page ? ` (page ${progress.page}${progress.lastTime ? ` · ${progress.lastTime}` : ''})` : ''}`
+          : progress.type === 'done'
+            ? `Refresh complete${progress.warnings.length ? ` — ${progress.warnings.length} warning(s)` : ''}`
+            : `Error: ${progress.error}`;
+        return (
+          <div className={`relative shrink-0 border-b border-border ${bgColor}`}>
+            <div className="h-1 w-full"><div className={`h-full transition-all duration-300 ${barColor}`} style={{ width: `${pct}%` }} /></div>
+            <div className={`px-4 py-1.5 text-xs text-center ${textColor} pr-8`}>{msg}</div>
+            {hasIssues && (
+              <div className="px-4 pb-2 flex flex-col gap-0.5">
+                {progress.warnings.map((w, i) => (
+                  <div key={i} className="text-[11px] text-amber-600 dark:text-amber-400 text-center">{w}</div>
+                ))}
+              </div>
             )}
-            {progress.type === 'done'  && `Refresh complete${progress.warnings.length ? ` — ${progress.warnings.length} warning(s)` : ''}`}
-            {progress.type === 'error' && `Error: ${progress.error}`}
-          </span>
-          {progress.type !== 'running' && (
             <button onClick={() => { if (progressTimerRef.current) clearTimeout(progressTimerRef.current); setProgress(null); }}
-              className="absolute right-2 p-0.5 rounded hover:opacity-70">
-              <X className="h-3 w-3" />
+              className="absolute top-1 right-1 p-0.5 rounded text-muted-foreground/60 hover:text-foreground hover:bg-black/10 dark:hover:bg-white/10 transition-colors" title="Dismiss">
+              <X className="h-3.5 w-3.5" />
             </button>
-          )}
-        </div>
-      )}
+          </div>
+        );
+      })()}
 
       {/* Main content */}
       <div className="flex-1 overflow-auto min-h-0 px-4 py-4 space-y-6">
@@ -521,17 +546,7 @@ export default function AuditLogPage() {
               to={chartTo}
               onSelect={(f, t) => {
                 setChartFrom(f); setChartTo(t);
-                void (async () => {
-                  const p = new URLSearchParams({ duration: String(duration) });
-                  if (keyword.trim()) p.set('q', keyword.trim());
-                  if (f) p.set('from', f);
-                  if (t) p.set('to', t);
-                  try {
-                    const res  = await fetch(`/api/audit-log/latest?${p}`);
-                    const json = await res.json() as { ok: boolean; entries: SubaccountLatest[] };
-                    if (json.ok) setLatest(json.entries ?? []);
-                  } catch { /* ignore */ }
-                })();
+                void fetchData(undefined, undefined, f, t);
               }}
               onToggleSeries={toggleCat}
             />
@@ -581,21 +596,41 @@ export default function AuditLogPage() {
                       </tr>
                     </thead>
                     <tbody>
-                      {sa.entries.map((r, i) => (
-                        <tr key={r.uuid ?? i} className="hover:bg-muted/20">
-                          <td className="px-3 py-1 border-b border-border/50 font-mono text-[11px] text-muted-foreground whitespace-nowrap">{r.time}</td>
-                          <td className="px-3 py-1 border-b border-border/50 overflow-hidden">
-                            <div className="truncate">
+                      {sa.entries.map((r, i) => {
+                        const rowKey = `${sa.region}/${sa.subdomain}/${r.uuid ?? String(i)}`;
+                        const prev   = previewMessage(r.message);
+                        const isLong = prev.length > 120 || prev.includes('\n');
+                        const isExp  = expandedRows.has(rowKey);
+                        return (
+                          <tr key={rowKey}
+                            className={`hover:bg-muted/20 ${isLong ? 'cursor-pointer' : ''}`}
+                            onClick={() => {
+                              if (!isLong) return;
+                              if (window.getSelection()?.toString()) return;
+                              setExpandedRows(prev => {
+                                const n = new Set(prev);
+                                n.has(rowKey) ? n.delete(rowKey) : n.add(rowKey);
+                                return n;
+                              });
+                            }}>
+                            <td className="px-3 py-1 border-b border-border/50 font-mono text-[11px] text-muted-foreground whitespace-nowrap align-top">{r.time}</td>
+                            <td className="px-3 py-1 border-b border-border/50 overflow-hidden align-top">
                               <span className={`text-[11px] font-medium ${categoryColor(r.category)}`}>{r.category.replace('audit.', '')}</span>
-                            </div>
-                          </td>
-                          <td className="px-3 py-1 border-b border-border/50 min-w-0">
-                            <div className="text-[11px] text-muted-foreground/80 font-mono truncate">
-                              <HighlightText text={previewMessage(r.message)} keywords={keywords} />
-                            </div>
-                          </td>
-                        </tr>
-                      ))}
+                            </td>
+                            <td className="px-3 py-1 border-b border-border/50 min-w-0 align-top">
+                              {isExp ? (
+                                <pre className="text-[11px] font-mono whitespace-pre-wrap break-all">
+                                  <HighlightText text={formatExpanded(r.message)} keywords={keywords} />
+                                </pre>
+                              ) : (
+                                <div className="text-[11px] text-muted-foreground/80 font-mono line-clamp-2 break-all">
+                                  <HighlightText text={prev} keywords={keywords} />
+                                </div>
+                              )}
+                            </td>
+                          </tr>
+                        );
+                      })}
                     </tbody>
                   </table>
                 </div>
