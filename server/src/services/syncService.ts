@@ -13,6 +13,7 @@ import { extractZip } from './zipBuilder.js';
 import { getSyncKey, getAllServices, getSyncExcludes } from './configService.js';
 import { emit } from './liveEvents.js';
 import { refreshLastUpdated } from './lastUpdatedService.js';
+import { getVar } from './variablesService.js';
 import { invalidateTopAppsCache } from './appService.js';
 
 const gunzipAsync = promisify(gunzip);
@@ -363,7 +364,7 @@ function resolveLocalPath(flatPath: string): string {
   const slash = flatPath.indexOf('/');
   if (slash === -1) return join(config.LOCAL_STORE_DIR, flatPath);
   const first = flatPath.slice(0, slash);
-  if (first === 'conf' || first === 'dest' || first === 'rcs' || first === 'users' || first === 'apps') {
+  if (first === 'conf' || first === 'dest' || first === 'rcs' || first === 'users' || first === 'apps' || first === 'audit-log') {
     return join(config.LOCAL_STORE_DIR, flatPath);
   }
   return join(config.LOCAL_STORE_DIR, 'resp', flatPath);
@@ -453,6 +454,29 @@ async function downloadBatch(
           const parentDir = lastSlash !== -1
             ? join(config.LOCAL_STORE_DIR, 'apps', filename.slice(0, lastSlash))
             : join(config.LOCAL_STORE_DIR, 'apps');
+          await mkdir(parentDir, { recursive: true });
+        } else if (folder === 'audit-log') {
+          target = resolvePath(config.LOCAL_STORE_DIR, 'audit-log', filename);
+          if (!target.startsWith(safeBase + '/')) {
+            logger.warn({ name }, 'Skipping ZIP audit-log entry: path traversal detected');
+            return;
+          }
+          // Only accept: {region}/{subdomain}/{YYYY-MM-DDTHH}_{counts}.json (3-part path)
+          const auditParts = filename.split('/');
+          const isAuditFile = auditParts.length === 3 && /^\d{4}-\d{2}-\d{2}T\d{2}_\d+_\d+_\d+_\d+(?:_\d+)?\.json$/.test(auditParts[2] ?? '');
+          if (!isAuditFile) return;
+          // Skip files older than MAX_AUDIT_LOG_STORAGE_DAYS (judged by filename hourKey)
+          const maxAuditDaysRaw = getVar('MAX_AUDIT_LOG_STORAGE_DAYS');
+          const maxAuditDays    = maxAuditDaysRaw ? parseInt(maxAuditDaysRaw, 10) : 0;
+          if (maxAuditDays > 0) {
+            const cutoffKey  = new Date(Date.now() - maxAuditDays * 24 * 60 * 60 * 1000).toISOString().slice(0, 13);
+            const fileHourKey = (auditParts[2] ?? '').slice(0, 13);
+            if (fileHourKey < cutoffKey) return;
+          }
+          const lastSlash = filename.lastIndexOf('/');
+          const parentDir = lastSlash !== -1
+            ? join(config.LOCAL_STORE_DIR, 'audit-log', filename.slice(0, lastSlash))
+            : join(config.LOCAL_STORE_DIR, 'audit-log');
           await mkdir(parentDir, { recursive: true });
         } else {
           target = resolvePath(config.LOCAL_STORE_DIR, 'resp', folder, filename);

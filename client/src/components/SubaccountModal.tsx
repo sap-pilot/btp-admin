@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import { Check, ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown, Copy, ExternalLink, Filter, Maximize2, Minimize2, Pencil, RotateCcw, Save, ShieldBan, X } from 'lucide-react';
 import * as DialogPrimitive from '@radix-ui/react-dialog';
 import AppsTab from '@/components/config/tabs/AppsTab';
+import AuditLogTab from '@/components/config/tabs/AuditLogTab';
 import DestTab, { type SelectedDest } from '@/components/config/tabs/DestTab';
 import RolesTab from '@/components/config/tabs/RolesTab';
 import UsersTab from '@/components/config/tabs/UsersTab';
@@ -50,13 +51,17 @@ interface Props {
   // Users tab
   initialUserEmail?:     string;
   initialUserOrigin?:    string;
-  initialUserTab?:       'detail' | 'access' | 'history';
-  onUserDataChange?:     () => void;
+  initialUserTab?:        'detail' | 'access' | 'history';
+  onUserDataChange?:      () => void;
+  // Audit tab
+  initialAuditFrom?:      string;
+  initialAuditTo?:        string;
+  initialAuditCategories?: Set<string>;
   // Popup mode
   isPopup?:              boolean;
 }
 
-export type ModalTab = 'info' | 'services' | 'apps' | 'destinations' | 'roles' | 'users';
+export type ModalTab = 'info' | 'services' | 'apps' | 'destinations' | 'roles' | 'users' | 'audit';
 
 // ─── Cockpit URL helpers ──────────────────────────────────────────────────────
 
@@ -196,10 +201,10 @@ const tdCls = 'px-2 py-1.5 border-b border-border text-xs';
 
 const TAB_LABEL: Record<ModalTab, string> = {
   info: 'Overview', services: 'Services', apps: 'Apps',
-  destinations: 'Destinations', roles: 'Roles', users: 'Users',
+  destinations: 'Destinations', roles: 'Roles', users: 'Users', audit: 'Audit Log',
 };
 
-export default function SubaccountModal({ sa, onClose, cockpit, cockpitMenu, isAdmin, onSpaceSave, subaccounts, onSelectSubaccount, tabs, initialTab, initialAppGuid, onAppDataChange, allDestNames, initialDestName, initialDestTab, initialDestShowList, initialDestSpaceName, initialDestInstName, initialDestInstGuid, selectedDests, onToggleCompare, onOpenCompare, onDestDataChange, allRcNames, initialRcName, initialRcTab, initialRcShowList, onRcDataChange, initialUserEmail, initialUserOrigin, initialUserTab, onUserDataChange, isPopup }: Props) {
+export default function SubaccountModal({ sa, onClose, cockpit, cockpitMenu, isAdmin, onSpaceSave, subaccounts, onSelectSubaccount, tabs, initialTab, initialAppGuid, onAppDataChange, allDestNames, initialDestName, initialDestTab, initialDestShowList, initialDestSpaceName, initialDestInstName, initialDestInstGuid, selectedDests, onToggleCompare, onOpenCompare, onDestDataChange, allRcNames, initialRcName, initialRcTab, initialRcShowList, onRcDataChange, initialUserEmail, initialUserOrigin, initialUserTab, onUserDataChange, initialAuditFrom, initialAuditTo, initialAuditCategories, isPopup }: Props) {
   const [activeTab, setActiveTab]           = useState<ModalTab>(initialTab ?? 'info');
   const [mountedTabs, setMountedTabs]       = useState<Set<ModalTab>>(new Set);
   const [maximized, setMaximized]           = useState(false);
@@ -306,6 +311,7 @@ export default function SubaccountModal({ sa, onClose, cockpit, cockpitMenu, isA
       destinations: `/destinations/${r}/${s}`,
       roles:        `/role-collections/${r}/${s}`,
       users:        `/users/${r}/${s}`,
+      audit:        `/audit-log/${r}/${s}`,
     };
     history.replaceState(null, '', tabUrls[tab]);
   }
@@ -588,6 +594,7 @@ export default function SubaccountModal({ sa, onClose, cockpit, cockpitMenu, isA
                         <button className={tabCls('users')} onClick={() => handleTabSwitch('users')}>Users</button>
                       </>
                     )}
+                    <button className={tabCls('audit')} onClick={() => handleTabSwitch('audit')}>Audit Log</button>
                   </>
                 )}
               </div>
@@ -615,9 +622,10 @@ export default function SubaccountModal({ sa, onClose, cockpit, cockpitMenu, isA
                         <div className="flex flex-wrap gap-4 pt-1">
                           {([
                             { label: 'In Homepage',         val: sa.inHomepage },
+                            { label: 'View Audit Logs',     val: sa.viewAuditLogs },
                             { label: 'Manage Destinations', val: sa.manageDestinations },
                             { label: 'Manage Roles',        val: sa.manageRoles },
-                          ] as const).map(({ label, val }) => (
+                          ] as Array<{ label: string; val: boolean | undefined }>).map(({ label, val }) => (
                             <div key={label} className="flex items-center gap-1.5">
                               <span className={`w-2 h-2 rounded-full ${val ? 'bg-green-500' : 'bg-muted-foreground/30'}`} />
                               <span className="text-xs text-muted-foreground">{label}</span>
@@ -1029,6 +1037,12 @@ export default function SubaccountModal({ sa, onClose, cockpit, cockpitMenu, isA
                       initialTab={initialUserTab}
                       onUserDataChange={onUserDataChange}
                     />
+                  </div>
+                )}
+
+                {mountedTabs.has('audit') && isAdminMode && sa && (
+                  <div className={activeTab === 'audit' ? 'flex-1 min-h-0 flex flex-col' : 'hidden'}>
+                    <AuditLogTab sa={sa} initialFrom={initialAuditFrom} initialTo={initialAuditTo} initialCategories={initialAuditCategories} />
                   </div>
                 )}
 

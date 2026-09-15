@@ -21,6 +21,7 @@ import usersRouter from './routes/users.js';
 import authRouter from './routes/auth.js';
 import aodRouter, { aodProxyHandler } from './routes/aod.js';
 import appsRouter from './routes/apps.js';
+import auditLogRouter from './routes/auditLog.js';
 import { startAppsScheduler, stopAppsScheduler } from './services/appService.js';
 import { initRequestLog, mergeAccessLogFromSync } from './services/aodAnalyticsService.js';
 import { warmSettingsVarsCache } from './services/variablesService.js';
@@ -94,6 +95,7 @@ app.use('/api/role-collections', rcsRouter);
 app.use('/api/users', usersRouter);
 app.use('/api/sync', syncRouter);
 app.use('/api/apps', appsRouter);
+app.use('/api/audit-log', auditLogRouter);
 app.use('/api/aod', aodRouter);
 app.use('/api', apiRouter);
 

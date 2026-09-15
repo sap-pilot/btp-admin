@@ -11,7 +11,7 @@ modules:
       npm_config_prefer_offline: true
     parameters:
       memory: 2G         # Chrome is memory-hungry — 512M is not enough
-      disk-quota: 8G     # Chrome + libs are large
+      disk-quota: 10G     # Mainly for storing audit log files
       buildpacks:
         - https://github.com/cloudfoundry/apt-buildpack
         - nodejs_buildpack

@@ -66,6 +66,11 @@ export function resetCfLoginCache(): void {
   initPromise    = null;
 }
 
+/** Evicts the stored token for a region so the next getOrRefreshToken() call re-authenticates. */
+export function clearRegionToken(region: string): void {
+  delete tokenStore[region];
+}
+
 const RATE_LIMIT_MAX_RETRIES = 3;
 
 function sleep(ms: number): Promise<void> {

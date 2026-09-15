@@ -1,0 +1,631 @@
+import { useEffect, useRef, useState } from 'react';
+import { PanelLeft, RefreshCw, ScrollText, Search, X } from 'lucide-react';
+import { useSidebar } from '@/components/AppLayout';
+import SubaccountModal from '@/components/SubaccountModal';
+import type { SubaccountEntry } from '@/components/config/SubaccountsTable';
+
+// ─── Types ────────────────────────────────────────────────────────────────────
+
+interface AuditHourStat {
+  hourKey:      string;
+  region:       string;
+  subdomain:    string;
+  dataAccess:   number;
+  security:     number;
+  config:       number;
+  modification: number;
+  other:        number;
+}
+
+interface ChartPoint {
+  hourKey:      string;
+  dataAccess:   number;
+  security:     number;
+  config:       number;
+  modification: number;
+  other:        number;
+}
+
+interface AuditRecord {
+  uuid?:     string;
+  time:      string;
+  category:  string;
+  message:   unknown;
+  [key: string]: unknown;
+}
+
+interface SubaccountLatest {
+  region:    string;
+  subdomain: string;
+  alias:     string;
+  entries:   AuditRecord[];
+}
+
+type ProgressState =
+  | { type: 'running'; current: number; total: number; alias: string; phase: string; page?: number; lastTime?: string }
+  | { type: 'done';    warnings: string[] }
+  | { type: 'error';   error: string; warnings: string[] };
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
+const PREVIEW_SKIP = new Set(['uuid', 'time', 'msgId', 'correlationId']);
+
+function previewMessage(msg: unknown): string {
+  let obj: unknown = msg;
+  if (typeof obj === 'string') {
+    const str = obj;
+    try { obj = JSON.parse(str); } catch { return str; }
+  }
+  if (obj !== null && typeof obj === 'object' && !Array.isArray(obj)) {
+    const filtered = Object.fromEntries(
+      Object.entries(obj as Record<string, unknown>).filter(([k]) => !PREVIEW_SKIP.has(k))
+    );
+    return JSON.stringify(filtered);
+  }
+  return typeof obj === 'string' ? obj : JSON.stringify(obj);
+}
+
+const KNOWN_SHORT_CATS = new Set(['data-access', 'security-events', 'configuration', 'data-modification']);
+function normalizeCat(cat: string): string {
+  const short = cat.replace('audit.', '');
+  return KNOWN_SHORT_CATS.has(short) ? short : 'other';
+}
+
+function categoryColor(cat: string): string {
+  switch (cat) {
+    case 'audit.data-access':       return 'text-blue-600 dark:text-blue-400';
+    case 'audit.security-events':   return 'text-amber-600 dark:text-amber-400';
+    case 'audit.configuration':     return 'text-purple-600 dark:text-purple-400';
+    case 'audit.data-modification': return 'text-green-600 dark:text-green-400';
+    default:                        return 'text-slate-600 dark:text-slate-400';
+  }
+}
+
+function splitKeywords(kw: string): string[] {
+  return kw.trim().split(/\s+/).filter(Boolean);
+}
+
+function HighlightText({ text, keywords }: { text: string; keywords: string[] }) {
+  if (!keywords.length) return <>{text}</>;
+  const escaped = keywords.map(k => k.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+  const re = new RegExp(`(${escaped.join('|')})`, 'gi');
+  const parts = text.split(re);
+  const lcKws = new Set(keywords.map(k => k.toLowerCase()));
+  return (
+    <>
+      {parts.map((part, i) =>
+        lcKws.has(part.toLowerCase())
+          ? <mark key={i} className="bg-yellow-200/80 dark:bg-yellow-700/50 text-inherit rounded-sm px-px">{part}</mark>
+          : <span key={i}>{part}</span>
+      )}
+    </>
+  );
+}
+
+// ─── Series definitions ───────────────────────────────────────────────────────
+
+const SERIES = [
+  { key: 'dataAccess',   label: 'Data Access',    color: '#3b82f6', cat: 'data-access'      },
+  { key: 'security',     label: 'Security Events', color: '#f59e0b', cat: 'security-events'  },
+  { key: 'config',       label: 'Configuration',  color: '#a855f7', cat: 'configuration'     },
+  { key: 'modification', label: 'Modification',   color: '#22c55e', cat: 'data-modification' },
+  { key: 'other',        label: 'Other',          color: '#64748b', cat: 'other'             },
+] as const;
+
+const ALL_OVERVIEW_CATS = new Set(SERIES.map(s => s.cat));
+
+// ─── Overview stacked area chart ─────────────────────────────────────────────
+
+function OverviewAuditChart({ points, selectedCats, from, to, onSelect, onToggleSeries }: {
+  points:         ChartPoint[];
+  selectedCats:   Set<string>;
+  from:           string;
+  to:             string;
+  onSelect:       (from: string, to: string) => void;
+  onToggleSeries: (catKey: string) => void;
+}) {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [width, setWidth]       = useState(900);
+  const [dragAnchor, setDragAnchor] = useState<number | null>(null);
+  const [dragCursor, setDragCursor] = useState<number | null>(null);
+
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver(entries => {
+      const w = entries[0]?.contentRect.width;
+      if (w && w > 0) setWidth(Math.floor(w));
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
+  const W  = width;
+  const H  = 200;
+  const pl = 48, pr = 16, pt = 16, pb = 36;
+  const cW = Math.max(W - pl - pr, 1);
+  const cH = H - pt - pb;
+  const n  = points.length;
+
+  const xOf     = (i: number) => pl + (n <= 1 ? cW / 2 : (i / (n - 1)) * cW);
+  const pxToIdx = (offset: number) => Math.max(0, Math.min(n - 1, Math.round((offset / cW) * (n - 1))));
+
+  // cumulative stacking: series order matches SERIES array
+  const cumulative = points.map(p => {
+    let s = 0;
+    return SERIES.map(sr => { s += p[sr.key]; return s; });
+  });
+  const maxTotal = Math.max(...cumulative.map(row => row[row.length - 1] ?? 0), 1);
+  const yOf      = (v: number) => pt + cH - (v / maxTotal) * cH;
+
+  function areaPath(si: number): string {
+    if (n === 0) return '';
+    const topPts = points.map((_, i) => `${i === 0 ? 'M' : 'L'}${xOf(i).toFixed(1)},${yOf(cumulative[i]![si]!).toFixed(1)}`);
+    const botPts = (si === 0
+      ? points.map((_, i) => ({ x: xOf(i), y: yOf(0) }))
+      : points.map((_, i) => ({ x: xOf(i), y: yOf(cumulative[i]![si - 1]!) }))
+    ).reverse().map(p => `L${p.x.toFixed(1)},${p.y.toFixed(1)}`);
+    return `${topPts.join(' ')} ${botPts.join(' ')} Z`;
+  }
+
+  function selRect(fStr: string, tStr: string) {
+    if (!fStr && !tStr) return null;
+    const fKey = fStr.slice(0, 13), tKey = tStr.slice(0, 13);
+    let lo = 0, hi = n - 1;
+    if (fKey) { const idx = points.findIndex(p => p.hourKey >= fKey); if (idx >= 0) lo = idx; }
+    if (tKey) { for (let i = n - 1; i >= 0; i--) { if (points[i]!.hourKey <= tKey) { hi = i; break; } } }
+    if (lo > hi) return null;
+    return { x1: xOf(lo), x2: xOf(hi) };
+  }
+
+  const existingSel = n > 0 ? selRect(from, to) : null;
+  const dragSel     = dragAnchor !== null && dragCursor !== null
+    ? { x1: xOf(Math.min(dragAnchor, dragCursor)), x2: xOf(Math.max(dragAnchor, dragCursor)) }
+    : null;
+
+  function onMD(e: React.MouseEvent<SVGRectElement>) {
+    const off = e.clientX - e.currentTarget.getBoundingClientRect().left;
+    setDragAnchor(pxToIdx(off)); setDragCursor(pxToIdx(off));
+  }
+  function onMM(e: React.MouseEvent<SVGRectElement>) {
+    if (dragAnchor === null) return;
+    setDragCursor(pxToIdx(e.clientX - e.currentTarget.getBoundingClientRect().left));
+  }
+  function onMU(e: React.MouseEvent<SVGRectElement>) {
+    if (dragAnchor === null) return;
+    const end = pxToIdx(e.clientX - e.currentTarget.getBoundingClientRect().left);
+    const lo = Math.min(dragAnchor, end), hi = Math.max(dragAnchor, end);
+    setDragAnchor(null); setDragCursor(null);
+    const fKey = points[lo]?.hourKey, tKey = points[hi]?.hourKey;
+    if (fKey && tKey) onSelect(`${fKey}:00`, `${tKey}:59`);
+  }
+
+  const yTicks     = Array.from({ length: 5 }, (_, i) => Math.round((maxTotal * i) / 4));
+  const xTickCount = Math.min(n, 6);
+  const xTicks     = Array.from({ length: xTickCount }, (_, i) => {
+    const idx = Math.round(i * (n - 1) / Math.max(xTickCount - 1, 1));
+    return { idx, label: points[idx]?.hourKey?.slice(5, 13).replace('T', ' ') ?? '' };
+  });
+
+  if (n === 0) {
+    return (
+      <div ref={containerRef} className="flex items-center justify-center h-[200px] text-muted-foreground text-sm">
+        No audit data for selected period
+      </div>
+    );
+  }
+
+  return (
+    <div ref={containerRef} className="w-full select-none">
+      {/* Clickable legend */}
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 mb-2">
+        {SERIES.map(s => {
+          const on = selectedCats.has(s.cat);
+          return (
+            <button key={s.key} onClick={() => onToggleSeries(s.cat)}
+              title={on ? `Hide ${s.label}` : `Show ${s.label}`}
+              className="inline-flex items-center gap-1.5 text-[11px] transition-opacity hover:opacity-80"
+              style={{ opacity: on ? 1 : 0.3 }}>
+              <span className="inline-block w-3 h-2.5 rounded-sm shrink-0" style={{ backgroundColor: s.color }} />
+              {s.label}
+            </button>
+          );
+        })}
+        {(from || to) && (
+          <button onClick={() => onSelect('', '')}
+            className="ml-auto inline-flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground transition-colors">
+            <X className="h-3 w-3" /> Clear selection
+          </button>
+        )}
+      </div>
+      <svg width={W} height={H} style={{ cursor: 'crosshair', display: 'block' }}>
+        {/* Grid lines */}
+        {yTicks.map((v, i) => (
+          <line key={i} x1={pl} y1={yOf(v).toFixed(1)} x2={pl + cW} y2={yOf(v).toFixed(1)}
+            stroke="currentColor" strokeOpacity={0.07} strokeWidth={1} />
+        ))}
+        {/* Stacked areas back-to-front */}
+        {[4, 3, 2, 1, 0].map(si => (
+          <path key={si} d={areaPath(si)} fill={SERIES[si]!.color} fillOpacity={0.75} />
+        ))}
+        {/* Existing selection overlay */}
+        {existingSel && !dragSel && (
+          <rect x={existingSel.x1} y={pt} width={Math.max(existingSel.x2 - existingSel.x1, 2)} height={cH}
+            fill="white" fillOpacity={0.15} stroke="white" strokeOpacity={0.5} strokeWidth={1} />
+        )}
+        {/* Active drag selection */}
+        {dragSel && (
+          <rect x={dragSel.x1} y={pt} width={Math.max(dragSel.x2 - dragSel.x1, 2)} height={cH}
+            fill="white" fillOpacity={0.25} stroke="white" strokeOpacity={0.8} strokeWidth={1} />
+        )}
+        {/* Invisible drag-capture rect */}
+        <rect x={pl} y={pt} width={cW} height={cH} fill="transparent"
+          onMouseDown={onMD} onMouseMove={onMM} onMouseUp={onMU}
+          onMouseLeave={() => { setDragAnchor(null); setDragCursor(null); }} />
+        {/* Y axis labels */}
+        {yTicks.map((v, i) => (
+          <text key={i} x={pl - 6} y={yOf(v).toFixed(1)} textAnchor="end" dominantBaseline="middle"
+            fontSize={10} fill="currentColor" opacity={0.5}>{v}</text>
+        ))}
+        {/* X axis labels */}
+        {xTicks.map(({ idx, label }) => (
+          <text key={idx} x={xOf(idx).toFixed(1)} y={H - pb + 14} textAnchor="middle"
+            fontSize={10} fill="currentColor" opacity={0.5}>{label}</text>
+        ))}
+        {/* Axes */}
+        <line x1={pl} y1={pt} x2={pl} y2={pt + cH} stroke="currentColor" strokeOpacity={0.15} />
+        <line x1={pl} y1={pt + cH} x2={pl + cW} y2={pt + cH} stroke="currentColor" strokeOpacity={0.15} />
+      </svg>
+    </div>
+  );
+}
+
+// ─── Page ─────────────────────────────────────────────────────────────────────
+
+const ALL_DURATIONS = [
+  { label: 'last 7 days',  value: 7  },
+  { label: 'last 14 days', value: 14 },
+  { label: 'last 30 days', value: 30 },
+  { label: 'last 60 days', value: 60 },
+];
+
+export default function AuditLogPage() {
+  const { toggle, collapsed } = useSidebar();
+  const [keyword,         setKeyword]         = useState('');
+  const [duration,        setDuration]        = useState(30);
+  const [progress,        setProgress]        = useState<ProgressState | null>(null);
+  const [stats,           setStats]           = useState<AuditHourStat[]>([]);
+  const [latest,          setLatest]          = useState<SubaccountLatest[]>([]);
+  const [loading,         setLoading]         = useState(false);
+  const [isRefreshing,    setIsRefreshing]    = useState(false);
+  const [lastRefreshTime, setLastRefreshTime] = useState<number | null>(() => {
+    try { const v = localStorage.getItem('auditLogLastRefresh'); return v ? Number(v) : null; } catch { return null; }
+  });
+  const [maxAuditDays,    setMaxAuditDays]    = useState(0);
+  const [allSubaccounts,  setAllSubaccounts]  = useState<SubaccountEntry[]>([]);
+  const [modalSa,         setModalSa]         = useState<SubaccountEntry | null>(null);
+  const [selectedCats,    setSelectedCats]    = useState<Set<string>>(() => new Set(ALL_OVERVIEW_CATS));
+  const [chartFrom,       setChartFrom]       = useState('');
+  const [chartTo,         setChartTo]         = useState('');
+  const progressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const evsRef = useRef<EventSource | null>(null);
+
+  // SSE subscription
+  useEffect(() => {
+    const evs = new EventSource('/api/events?audit=1');
+    evsRef.current = evs;
+    evs.addEventListener('update', (e: MessageEvent) => {
+      try {
+        const data = JSON.parse(e.data as string) as {
+          type?: string;
+          current?: number; total?: number; alias?: string; phase?: string; page?: number; lastTime?: string;
+          warnings?: string[]; error?: string;
+        };
+        if (data.type === 'audit-start') {
+          setIsRefreshing(true);
+          setProgress({ type: 'running', current: 0, total: data.total ?? 0, alias: '', phase: 'starting' });
+        } else if (data.type === 'audit-progress') {
+          setProgress({ type: 'running', current: data.current ?? 0, total: data.total ?? 0, alias: data.alias ?? '', phase: data.phase ?? '', page: data.page, lastTime: data.lastTime });
+        } else if (data.type === 'audit-done') {
+          setIsRefreshing(false);
+          setProgress({ type: 'done', warnings: data.warnings ?? [] });
+          void fetchData();
+          const now = Date.now();
+          setLastRefreshTime(now);
+          try { localStorage.setItem('auditLogLastRefresh', String(now)); } catch { /* ignore */ }
+          if (progressTimerRef.current) clearTimeout(progressTimerRef.current);
+          progressTimerRef.current = setTimeout(() => setProgress(null), 8000);
+        } else if (data.type === 'audit-error') {
+          setIsRefreshing(false);
+          setProgress({ type: 'error', error: data.error ?? 'Unknown error', warnings: data.warnings ?? [] });
+        }
+      } catch { /* ignore */ }
+    });
+    return () => { evs.close(); };
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  async function fetchData() {
+    setLoading(true);
+    try {
+      const params = new URLSearchParams({ duration: String(duration) });
+      if (keyword.trim()) params.set('q', keyword.trim());
+      const latestParams = new URLSearchParams(params);
+      if (chartFrom) latestParams.set('from', chartFrom);
+      if (chartTo)   latestParams.set('to',   chartTo);
+      const [statsRes, latestRes] = await Promise.all([
+        fetch(`/api/audit-log/stats?${params}`),
+        fetch(`/api/audit-log/latest?${latestParams}`),
+      ]);
+      const [statsJson, latestJson] = await Promise.all([
+        statsRes.json() as Promise<{ ok: boolean; stats: AuditHourStat[] }>,
+        latestRes.json() as Promise<{ ok: boolean; entries: SubaccountLatest[] }>,
+      ]);
+      if (statsJson.ok)  setStats(statsJson.stats ?? []);
+      if (latestJson.ok) setLatest(latestJson.entries ?? []);
+    } catch { /* ignore */ } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => { void fetchData(); }, [duration]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    fetch('/api/config/subaccounts')
+      .then(r => r.json() as Promise<{ ok: boolean; data: SubaccountEntry[] }>)
+      .then(j => { if (j.ok && j.data) setAllSubaccounts(j.data); })
+      .catch(() => { /* ignore */ });
+  }, []);
+
+  useEffect(() => {
+    fetch('/api/info')
+      .then(r => r.json() as Promise<{ maxAuditStorageDays?: number }>)
+      .then(j => {
+        const m = j.maxAuditStorageDays && j.maxAuditStorageDays > 0 ? j.maxAuditStorageDays : 0;
+        setMaxAuditDays(m);
+        if (m > 0) setDuration(d => {
+          if (d <= m) return d;
+          const opts = [7, 14, 30, 60].filter(v => v <= m);
+          return opts.length > 0 ? opts[opts.length - 1]! : m;
+        });
+      })
+      .catch(() => { /* ignore */ });
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  async function handleRefresh() {
+    try { await fetch('/api/audit-log/refresh', { method: 'POST' }); } catch { /* ignore */ }
+  }
+
+  function toggleCat(catKey: string) {
+    setSelectedCats(prev => {
+      const next = new Set(prev);
+      if (next.has(catKey)) { if (next.size <= 1) return prev; next.delete(catKey); }
+      else                   { next.add(catKey); }
+      return next;
+    });
+  }
+
+  // Aggregate stats by hour, applying selectedCats filter
+  const chartPoints: ChartPoint[] = (() => {
+    const map = new Map<string, ChartPoint>();
+    for (const s of stats) {
+      const existing = map.get(s.hourKey);
+      if (existing) {
+        if (selectedCats.has('data-access'))       existing.dataAccess   += s.dataAccess;
+        if (selectedCats.has('security-events'))   existing.security     += s.security;
+        if (selectedCats.has('configuration'))     existing.config       += s.config;
+        if (selectedCats.has('data-modification')) existing.modification += s.modification;
+        if (selectedCats.has('other'))             existing.other        += s.other;
+      } else {
+        map.set(s.hourKey, {
+          hourKey:      s.hourKey,
+          dataAccess:   selectedCats.has('data-access')       ? s.dataAccess   : 0,
+          security:     selectedCats.has('security-events')   ? s.security     : 0,
+          config:       selectedCats.has('configuration')     ? s.config       : 0,
+          modification: selectedCats.has('data-modification') ? s.modification : 0,
+          other:        selectedCats.has('other')             ? s.other        : 0,
+        });
+      }
+    }
+    return [...map.values()].sort((a, b) => a.hourKey.localeCompare(b.hourKey));
+  })();
+
+  const keywords = splitKeywords(keyword);
+
+  // Filter latest entries by active categories (time filter applied server-side)
+  const filteredLatest = latest
+    .map(sa => ({
+      ...sa,
+      entries: sa.entries.filter(r => selectedCats.has(normalizeCat(r.category))),
+    }))
+    .filter(sa => sa.entries.length > 0);
+
+  return (
+    <div className="flex flex-col h-full min-h-0 overflow-hidden">
+      {/* Title bar */}
+      <div className="border-b border-border bg-background px-3 flex items-center gap-2 shrink-0 min-h-[52px]">
+        <button onClick={toggle} className="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-accent/50 transition-colors" title="Toggle sidebar">
+          <PanelLeft className="h-4 w-4" />
+        </button>
+        {collapsed && <ScrollText className="h-4 w-4 sm:hidden text-muted-foreground" aria-label="Audit Log" />}
+        <div className="hidden sm:flex flex-col justify-center min-w-0">
+          <span className="text-sm font-semibold leading-tight">Audit Log</span>
+          {lastRefreshTime !== null && (
+            <span className="text-[10px] text-muted-foreground/50 leading-tight">
+              Refreshed: {new Date(lastRefreshTime).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' })}
+            </span>
+          )}
+        </div>
+        <div className="relative flex-1 min-w-0 ml-2">
+          <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground pointer-events-none" />
+          <input
+            type="text" value={keyword}
+            onChange={e => setKeyword(e.target.value)}
+            onKeyDown={e => e.key === 'Enter' && void fetchData()}
+            placeholder="Search audit logs (space-separated keywords, all must match)…"
+            className="w-full h-8 pl-7 pr-3 text-xs border border-border rounded bg-background focus:outline-none focus:ring-1 focus:ring-ring placeholder:text-muted-foreground/50"
+          />
+        </div>
+        <select value={duration} onChange={e => setDuration(Number(e.target.value))}
+          className="h-8 px-2 text-xs border border-border rounded bg-background focus:outline-none focus:ring-1 focus:ring-ring">
+          {ALL_DURATIONS.filter(d => maxAuditDays <= 0 || d.value <= maxAuditDays).map(d => <option key={d.value} value={d.value}>{d.label}</option>)}
+        </select>
+        <button onClick={() => void handleRefresh()} disabled={isRefreshing}
+          className="inline-flex items-center gap-1.5 h-8 px-3 rounded text-xs font-medium border border-border hover:bg-accent hover:text-accent-foreground transition-colors disabled:opacity-50"
+          title="Refresh audit logs from BTP">
+          <RefreshCw className={`h-3.5 w-3.5 ${isRefreshing ? 'animate-spin' : ''}`} />
+          {isRefreshing ? 'Refreshing…' : 'Refresh'}
+        </button>
+      </div>
+
+      {/* Progress banner */}
+      {progress && (
+        <div className={`relative border-b text-xs shrink-0 overflow-hidden flex items-center justify-center min-h-[26px] ${
+          progress.type === 'error' ? 'bg-amber-500/5 border-amber-500/20 text-amber-700 dark:text-amber-400'
+          : progress.type === 'done'  ? 'bg-green-500/5 border-green-500/20 text-green-700 dark:text-green-400'
+          : 'bg-muted/10 border-border text-muted-foreground'
+        }`}>
+          {progress.type === 'running' && (
+            progress.total > 0
+              ? <div className="absolute inset-y-0 left-0 bg-primary/15 transition-all duration-300" style={{ width: `${Math.round((progress.current / progress.total) * 100)}%` }} />
+              : <div className="absolute inset-y-0 left-0 right-0 bg-primary/10 animate-pulse" />
+          )}
+          <span className="relative z-10 px-8 py-1 text-center leading-none">
+            {progress.type === 'running' && (
+              `Refreshing ${progress.current}/${progress.total}${progress.alias ? ` — ${progress.alias}` : ''}${progress.phase === 'fetching' && progress.page ? ` (page ${progress.page}${progress.lastTime ? ` · ${progress.lastTime}` : ''})` : ''}`
+            )}
+            {progress.type === 'done'  && `Refresh complete${progress.warnings.length ? ` — ${progress.warnings.length} warning(s)` : ''}`}
+            {progress.type === 'error' && `Error: ${progress.error}`}
+          </span>
+          {progress.type !== 'running' && (
+            <button onClick={() => { if (progressTimerRef.current) clearTimeout(progressTimerRef.current); setProgress(null); }}
+              className="absolute right-2 p-0.5 rounded hover:opacity-70">
+              <X className="h-3 w-3" />
+            </button>
+          )}
+        </div>
+      )}
+
+      {/* Main content */}
+      <div className="flex-1 overflow-auto min-h-0 px-4 py-4 space-y-6">
+
+        {/* Chart */}
+        <div className="rounded-lg border border-border bg-card p-4">
+          <h2 className="text-sm font-semibold mb-3">Audit Events Over Time</h2>
+          {loading && chartPoints.length === 0 ? (
+            <div className="flex items-center justify-center h-[200px] text-xs text-muted-foreground">Loading…</div>
+          ) : (
+            <OverviewAuditChart
+              points={chartPoints}
+              selectedCats={selectedCats}
+              from={chartFrom}
+              to={chartTo}
+              onSelect={(f, t) => {
+                setChartFrom(f); setChartTo(t);
+                void (async () => {
+                  const p = new URLSearchParams({ duration: String(duration) });
+                  if (keyword.trim()) p.set('q', keyword.trim());
+                  if (f) p.set('from', f);
+                  if (t) p.set('to', t);
+                  try {
+                    const res  = await fetch(`/api/audit-log/latest?${p}`);
+                    const json = await res.json() as { ok: boolean; entries: SubaccountLatest[] };
+                    if (json.ok) setLatest(json.entries ?? []);
+                  } catch { /* ignore */ }
+                })();
+              }}
+              onToggleSeries={toggleCat}
+            />
+          )}
+          {(chartFrom || chartTo) && (
+            <p className="text-[11px] text-muted-foreground mt-1.5">
+              Showing entries from {chartFrom || '—'} to {chartTo || '—'} · entries table filtered below
+            </p>
+          )}
+        </div>
+
+        {/* Latest entries by subaccount */}
+        {latest.length > 0 && (
+          <div className="space-y-4">
+            <h2 className="text-sm font-semibold">
+              Latest Audit Entries by Subaccount
+              {(chartFrom || chartTo || selectedCats.size < ALL_OVERVIEW_CATS.size) && (
+                <span className="ml-2 text-[11px] font-normal text-muted-foreground">(filtered)</span>
+              )}
+            </h2>
+            {filteredLatest.length === 0 && (
+              <p className="text-xs text-muted-foreground py-4">No entries match the current filter / time selection.</p>
+            )}
+            {filteredLatest.map(sa => {
+              const fullSa = allSubaccounts.find(s => s.region === sa.region && s.subdomain === sa.subdomain);
+              return (
+                <div key={`${sa.region}/${sa.subdomain}`} className="rounded-lg border border-border bg-card overflow-hidden">
+                  <div
+                    className={`px-4 py-2 border-b border-border bg-muted/20 flex items-center gap-2 ${fullSa ? 'cursor-pointer hover:bg-muted/40 transition-colors' : ''}`}
+                    onClick={() => { if (fullSa) setModalSa(fullSa); }}
+                    title={fullSa ? 'Open audit log details' : undefined}
+                  >
+                    <span className="text-xs font-semibold">{sa.alias}</span>
+                    <span className="text-[10px] text-muted-foreground font-mono">{sa.region}/{sa.subdomain}</span>
+                  </div>
+                  <table className="w-full border-collapse text-xs">
+                    <colgroup>
+                      <col style={{ width: '160px' }} />
+                      <col style={{ width: '123px' }} />
+                      <col />
+                    </colgroup>
+                    <thead>
+                      <tr className="bg-muted/10">
+                        <th className="px-3 py-1.5 text-left text-[10px] font-medium text-muted-foreground border-b border-border">Time</th>
+                        <th className="px-3 py-1.5 text-left text-[10px] font-medium text-muted-foreground border-b border-border">Category</th>
+                        <th className="px-3 py-1.5 text-left text-[10px] font-medium text-muted-foreground border-b border-border">Message</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {sa.entries.map((r, i) => (
+                        <tr key={r.uuid ?? i} className="hover:bg-muted/20">
+                          <td className="px-3 py-1 border-b border-border/50 font-mono text-[11px] text-muted-foreground whitespace-nowrap">{r.time}</td>
+                          <td className="px-3 py-1 border-b border-border/50 overflow-hidden">
+                            <div className="truncate">
+                              <span className={`text-[11px] font-medium ${categoryColor(r.category)}`}>{r.category.replace('audit.', '')}</span>
+                            </div>
+                          </td>
+                          <td className="px-3 py-1 border-b border-border/50 min-w-0">
+                            <div className="text-[11px] text-muted-foreground/80 font-mono truncate">
+                              <HighlightText text={previewMessage(r.message)} keywords={keywords} />
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        {!loading && latest.length === 0 && stats.length === 0 && (
+          <div className="flex flex-col items-center justify-center py-16 text-center gap-3">
+            <p className="text-sm text-muted-foreground">No audit log data found.</p>
+            <p className="text-xs text-muted-foreground">Enable &quot;View Audit Logs&quot; for subaccounts in Config, then click Refresh.</p>
+          </div>
+        )}
+      </div>
+
+      {/* Subaccount modal opened from SA header click — inherits chart selection and categories */}
+      {modalSa && (
+        <SubaccountModal
+          sa={modalSa}
+          onClose={() => setModalSa(null)}
+          isAdmin={true}
+          initialTab="audit"
+          subaccounts={allSubaccounts}
+          onSelectSubaccount={s => setModalSa(s)}
+          initialAuditFrom={chartFrom}
+          initialAuditTo={chartTo}
+          initialAuditCategories={selectedCats}
+        />
+      )}
+    </div>
+  );
+}
