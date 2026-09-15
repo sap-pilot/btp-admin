@@ -91,8 +91,8 @@ export default function App() {
               <Route path="/users/:region/:subdomain" element={<UsersOverview />} />
               <Route path="/users/:region/:subdomain/:origin/:email" element={<UsersOverview />} />
               <Route path="/users/:region/:subdomain/:origin/:email/:userTab" element={<UsersOverview />} />
-              <Route path="/audit-log" element={<AuditLogPage />} />
-              <Route path="/audit-log/:region/:subdomain" element={<AuditLogPage />} />
+              <Route path="/audit-logs" element={<AuditLogPage />} />
+              <Route path="/audit-logs/:region/:subdomain" element={<AuditLogPage />} />
               <Route path="/subaccount/:region/:subdomain" element={<ConfigPage />} />
               <Route path="/services/:region/:subdomain" element={<ConfigPage />} />
               <Route path="/config" element={<Navigate to="/config/orgs" replace />} />

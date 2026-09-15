@@ -315,7 +315,7 @@ export default function SubaccountModal({ sa, onClose, cockpit, cockpitMenu, isA
       destinations: `/destinations/${r}/${s}`,
       roles:        `/role-collections/${r}/${s}`,
       users:        `/users/${r}/${s}`,
-      audit:        `/audit-log/${r}/${s}`,
+      audit:        `/audit-logs/${r}/${s}`,
     };
     history.replaceState(null, '', tabUrls[tab]);
   }

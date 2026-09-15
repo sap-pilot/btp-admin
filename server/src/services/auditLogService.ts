@@ -607,7 +607,12 @@ export async function refreshSubaccountAuditLogs(region: string, subdomain: stri
 
     const dir = getAuditLogDir(sa.region, sa.subdomain);
     const { from, to } = await getTimeRange(dir);
-    emit(topic, { type: 'audit-sa-progress', phase: 'fetching', page: 0, lastTime: '' });
+    // from/to come from formatTimeForApi which always uses UTC values but omits the
+    // Z suffix (the Audit Log API rejects the Z). Parse with explicit UTC to avoid
+    // local-timezone skew that would make diffMinutes wildly negative.
+    const fromTs       = new Date((from.endsWith('Z') ? from : from + 'Z')).getTime();
+    const totalMinutes = Math.max((Date.now() - fromTs) / 60000, 1);
+    emit(topic, { type: 'audit-sa-progress', phase: 'fetching', page: 0, lastTime: '', pct: 0 });
 
     let url: string | null = `${creds.url}/auditlog/v2/auditlogrecords?time_from=${encodeURIComponent(from)}&time_to=${encodeURIComponent(to)}`;
     let pendingRecords: AuditRecord[] = [];
@@ -616,12 +621,14 @@ export async function refreshSubaccountAuditLogs(region: string, subdomain: stri
     let page        = 0;
 
     while (url) {
-      const delayMs = getRateLimitDelayMs(sa.region);
+      const delayMs  = getRateLimitDelayMs(sa.region);
+      const pageUrl  = url;
+      const t0Page   = Date.now();
       let res: Response;
       let attempts = 0;
       // eslint-disable-next-line no-constant-condition
       while (true) {
-        res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+        res = await fetch(pageUrl, { headers: { Authorization: `Bearer ${token}` } });
         if (res.status !== 429 || attempts >= 3) break;
         const retryAfter = res.headers.get('Retry-After');
         const wait = retryAfter ? parseFloat(retryAfter) * 1000 : delayMs * 4;
@@ -635,8 +642,17 @@ export async function refreshSubaccountAuditLogs(region: string, subdomain: stri
 
       const records = await res.json() as AuditRecord[];
       page++;
-      const lastTime = records[records.length - 1]?.time ?? '';
-      emit(topic, { type: 'audit-sa-progress', phase: 'fetching', page, lastTime });
+      const lastTime    = records[records.length - 1]?.time ?? '';
+      // API returns UTC ISO times; guard against missing Z just in case
+      const lastTimeMs  = lastTime ? new Date(lastTime.endsWith('Z') ? lastTime : lastTime + 'Z').getTime() : 0;
+      const diffMinutes = lastTimeMs ? (lastTimeMs - fromTs) / 60000 : 0;
+      const pct         = Math.min(100, Math.round(diffMinutes / totalMinutes * 100));
+      const queryStr    = (() => { try { return new URL(pageUrl).search.slice(1); } catch { return pageUrl; } })();
+      logger.debug(
+        { target: `${sa.region}.${sa.subdomain}`, alias, page, records: records.length, lastTime, pct, query: queryStr, durationMs: Date.now() - t0Page },
+        'audit-sa: page received',
+      );
+      emit(topic, { type: 'audit-sa-progress', phase: 'fetching', page, lastTime, pct });
 
       const firstHourKey = records[0]?.time ? parseHourKey(records[0].time) : '';
       const newHour = firstHourKey !== '' && firstHourKey !== lastHourKey && lastHourKey !== '';

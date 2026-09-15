@@ -39,7 +39,7 @@ const NAV_ITEMS: NavItem[] = [
   { label: 'Destinations',     href: '/destinations',  icon: <Globe      className="h-4 w-4 shrink-0" />, wip: true, restricted: true, adminOnly: true },
   { label: 'Role Collections', href: '/role-collections', icon: <ShieldCheck  className="h-4 w-4 shrink-0" />, wip: true, restricted: true, adminOnly: true },
   { label: 'Users',            href: '/users',            icon: <Users        className="h-4 w-4 shrink-0" />, wip: true, restricted: true, adminOnly: true },
-  { label: 'Audit Log',        href: '/audit-log',            icon: <ScrollText   className="h-4 w-4 shrink-0" />, wip: true, restricted: true, adminOnly: true },
+  { label: 'Audit Logs',        href: '/audit-logs',            icon: <ScrollText   className="h-4 w-4 shrink-0" />, wip: true, restricted: true, adminOnly: true },
 ];
 
 const itemBase = (collapsed: boolean) =>

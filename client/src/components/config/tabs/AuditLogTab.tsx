@@ -58,6 +58,12 @@ function previewMessage(msg: unknown): string {
   return typeof obj === 'string' ? obj : JSON.stringify(obj, null, 2);
 }
 
+function fullDetail(r: AuditRecord): string {
+  let msg: unknown = r.message;
+  if (typeof msg === 'string') { try { msg = JSON.parse(msg); } catch { /* keep as string */ } }
+  return JSON.stringify({ ...r, message: msg }, null, 2);
+}
+
 function CategoryBadge({ cat }: { cat: string }) {
   const map: Record<string, string> = {
     'audit.data-access':       'bg-blue-500/10 text-blue-600 dark:text-blue-400',
@@ -253,7 +259,7 @@ export default function AuditLogTab({ sa, initialFrom, initialTo, initialCategor
   const [expanded,     setExpanded]     = useState<Set<number>>(new Set());
   const [chartStats,   setChartStats]   = useState<AuditHourStat[]>([]);
   const [saRefreshing, setSaRefreshing] = useState(false);
-  const [saProgress,   setSaProgress]   = useState<{ page: number; lastTime: string } | null>(null);
+  const [saProgress,   setSaProgress]   = useState<{ page: number; lastTime: string; pct?: number } | null>(null);
   const evsRef = useRef<EventSource | null>(null);
 
   async function load(p = page, cats = selectedCats, fromOvr?: string, toOvr?: string, kwOvr?: string) {
@@ -333,9 +339,9 @@ export default function AuditLogTab({ sa, initialFrom, initialTo, initialCategor
 
     evs.addEventListener('update', (e: MessageEvent) => {
       try {
-        const data = JSON.parse(e.data as string) as { type?: string; page?: number; lastTime?: string };
+        const data = JSON.parse(e.data as string) as { type?: string; page?: number; lastTime?: string; pct?: number };
         if (data.type === 'audit-sa-progress') {
-          setSaProgress({ page: data.page ?? 0, lastTime: data.lastTime ?? '' });
+          setSaProgress({ page: data.page ?? 0, lastTime: data.lastTime ?? '', pct: data.pct });
         } else if (data.type === 'audit-sa-done' || data.type === 'audit-sa-error') {
           evs.close(); evsRef.current = null;
           setSaRefreshing(false); setSaProgress(null);
@@ -439,14 +445,19 @@ export default function AuditLogTab({ sa, initialFrom, initialTo, initialCategor
 
       {/* SA refresh progress */}
       {saRefreshing && (
-        <div className="px-3 py-1.5 border-b border-border bg-muted/10 shrink-0 flex items-center justify-center gap-2">
-          <Loader2 className="h-3 w-3 animate-spin shrink-0 text-muted-foreground" />
-          <span className="text-xs text-muted-foreground">
-            Retrieving logs from Audit Log API
-            {saProgress && saProgress.page > 0
-              ? `: Page ${saProgress.page}${saProgress.lastTime ? ` — ${saProgress.lastTime}` : ''}`
-              : '…'}
-          </span>
+        <div className="shrink-0 border-b border-border">
+          <div className="h-1 w-full bg-muted">
+            <div className="h-full bg-primary transition-all duration-300" style={{ width: `${saProgress?.pct ?? 0}%` }} />
+          </div>
+          <div className="px-3 py-1 flex items-center justify-center gap-2">
+            <Loader2 className="h-3 w-3 animate-spin shrink-0 text-muted-foreground" />
+            <span className="text-xs text-muted-foreground">
+              Retrieving logs from Audit Log API
+              {saProgress && saProgress.page > 0
+                ? ` — page ${saProgress.page}${saProgress.lastTime ? ` · ${saProgress.lastTime}` : ''}${saProgress.pct != null ? ` (${saProgress.pct}%)` : ''}`
+                : '…'}
+            </span>
+          </div>
         </div>
       )}
 
@@ -485,13 +496,11 @@ export default function AuditLogTab({ sa, initialFrom, initialTo, initialCategor
             </thead>
             <tbody>
               {records.map((r, i) => {
-                const isExp  = expanded.has(i);
-                const prev   = previewMessage(r.message);
-                const isLong = prev.length > 150 || prev.includes('\n');
+                const isExp = expanded.has(i);
+                const prev  = previewMessage(r.message);
                 return (
-                  <tr key={r.uuid ?? i} className={`hover:bg-muted/20 ${isLong ? 'cursor-pointer' : ''}`}
+                  <tr key={r.uuid ?? i} className="hover:bg-muted/20 cursor-pointer"
                     onClick={() => {
-                      if (!isLong) return;
                       if (window.getSelection()?.toString()) return;
                       setExpanded(prev => { const n = new Set(prev); n.has(i) ? n.delete(i) : n.add(i); return n; });
                     }}>
@@ -504,7 +513,7 @@ export default function AuditLogTab({ sa, initialFrom, initialTo, initialCategor
                     <td className="px-2 py-1 border-b border-border/50 align-top">
                       {isExp ? (
                         <pre className="text-[11px] font-mono whitespace-pre-wrap break-all">
-                          <HighlightText text={prev} keywords={keywords} />
+                          <HighlightText text={fullDetail(r)} keywords={keywords} />
                         </pre>
                       ) : (
                         <div className="text-muted-foreground/80 font-mono text-[11px] line-clamp-3 break-all">
