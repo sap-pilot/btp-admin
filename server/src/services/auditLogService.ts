@@ -1,5 +1,5 @@
 import { exec } from 'node:child_process';
-import { mkdir, readdir, readFile, stat, unlink, writeFile } from 'node:fs/promises';
+import { mkdir, readdir, readFile, rm, stat, unlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { promisify } from 'node:util';
@@ -1122,4 +1122,49 @@ export async function getLatestAuditEntries(durationDays: number, keyword?: stri
   }
 
   return result;
+}
+
+// ─── Prune helpers ────────────────────────────────────────────────────────────
+
+// Delete the audit log directories for specific subaccounts (e.g. viewAuditLogs disabled).
+export async function pruneAuditLogDirs(
+  sas:  Array<{ region: string; subdomain: string }>,
+  user = 'system',
+): Promise<number> {
+  let deleted = 0;
+  for (const sa of sas) {
+    const dir = getAuditLogDir(sa.region, sa.subdomain);
+    try {
+      await rm(dir, { recursive: true, force: true });
+      deleted++;
+      logger.info({ region: sa.region, subdomain: sa.subdomain, user }, 'audit-log: local store deleted — viewAuditLogs disabled by user');
+    } catch (err) {
+      logger.warn({ region: sa.region, subdomain: sa.subdomain, user, err }, 'audit-log: failed to delete local store');
+    }
+  }
+  return deleted;
+}
+
+// Scan all audit-log/ subdirectories and delete those whose subaccount no longer has
+// viewAuditLogs=true. Called after a sync that wrote conf/subaccounts.json.
+export async function pruneObsoleteAuditLogDirs(): Promise<number> {
+  const allSas  = await readSubaccounts();
+  const keepSet = new Set(allSas.filter(s => s.viewAuditLogs).map(s => `${s.region}/${s.subdomain}`));
+  const base    = join(config.LOCAL_STORE_DIR, 'audit-log');
+  let deleted   = 0;
+  let regions: string[];
+  try { regions = await readdir(base); } catch { return 0; }
+  for (const region of regions) {
+    let subdomains: string[];
+    try { subdomains = await readdir(join(base, region)); } catch { continue; }
+    for (const subdomain of subdomains) {
+      if (keepSet.has(`${region}/${subdomain}`)) continue;
+      try {
+        await rm(join(base, region, subdomain), { recursive: true, force: true });
+        deleted++;
+        logger.info({ region, subdomain }, 'audit-log: pruned obsolete local store after sync');
+      } catch { /* ignore */ }
+    }
+  }
+  return deleted;
 }

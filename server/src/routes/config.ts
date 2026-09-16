@@ -3,6 +3,7 @@ import { Router } from 'express';
 import { requireAuth, requireAdmin } from '../middleware/requireAuth.js';
 import type { AuthRequest } from '../middleware/requireAuth.js';
 import { readSubaccounts, refreshSubaccounts, saveSubaccounts, saveSpaceSettings, exportConfig, subaccountsFileExists, importSubaccounts } from '../services/subaccountsService.js';
+import { pruneAuditLogDirs } from '../services/auditLogService.js';
 import type { SubaccountEntry } from '../services/subaccountsService.js';
 import { readTabs, saveTabs, tabsFileExists, importTabs } from '../services/tabsService.js';
 import type { TabEntry } from '../services/tabsService.js';
@@ -47,12 +48,15 @@ router.post('/subaccounts/:region/:subdomain/spaces', requireAdmin, async (req, 
 
 router.post('/subaccounts/save', requireAdmin, async (req, res, next) => {
   try {
-    const { data } = req.body as { data?: unknown };
+    const { data, deleteAuditDirs } = req.body as { data?: unknown; deleteAuditDirs?: unknown };
     if (!Array.isArray(data)) {
       res.status(400).json({ ok: false, error: 'data must be an array' });
       return;
     }
     await saveSubaccounts(data as SubaccountEntry[], reqUser(req));
+    if (Array.isArray(deleteAuditDirs) && deleteAuditDirs.length > 0) {
+      await pruneAuditLogDirs(deleteAuditDirs as Array<{ region: string; subdomain: string }>, reqUser(req));
+    }
     res.json({ ok: true });
   } catch (err) { next(err); }
 });

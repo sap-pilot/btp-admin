@@ -14,6 +14,7 @@ import type { BrowseFile } from './localStoreService.js';
 import { getSyncKey, getAllServices, getSyncExcludes } from './configService.js';
 import { emit } from './liveEvents.js';
 import { refreshLastUpdated } from './lastUpdatedService.js';
+import { pruneObsoleteAuditLogDirs } from './auditLogService.js';
 import { getVar } from './variablesService.js';
 import { invalidateTopAppsCache } from './appService.js';
 
@@ -893,6 +894,9 @@ async function executeSync(
     }
     if (missing.includes('conf/settings.json') && onSettingsSynced) {
       onSettingsSynced();
+    }
+    if (missing.includes('conf/subaccounts.json')) {
+      void pruneObsoleteAuditLogDirs();
     }
     if (updatedFolders.has('apps')) {
       invalidateTopAppsCache();
