@@ -16,6 +16,12 @@ The Audit Log Viewer fetches event records from the **SAP Audit Log Management S
 (`auditlog/v2/auditlogrecords`) for selected subaccounts and stores them locally so you can
 search, filter, and browse them without hitting the API on every query.
 
+<!-- SCREENSHOT PLACEHOLDER: Audit Logs overview page showing the timeline bar chart
+     (four stacked series per hour), subaccount filter chips, search bar, and latest entries table.
+     Capture at /audit-logs after running a refresh for at least two subaccounts. -->
+
+![Audit Log Overview](img/auditlog-overview-v1.9.png)
+
 Four event categories are tracked:
 
 | Category | Label | Colour |
@@ -24,10 +30,6 @@ Four event categories are tracked:
 | `audit.security-events` | Security | Amber |
 | `audit.configuration` | Configuration | Purple |
 | `audit.data-modification` | Modification | Green |
-
-<!-- SCREENSHOT PLACEHOLDER: Audit Logs overview page showing the timeline bar chart
-     (four stacked series per hour), subaccount filter chips, search bar, and latest entries table.
-     Capture at /audit-logs after running a refresh for at least two subaccounts. -->
 
 ---
 
@@ -83,6 +85,7 @@ from how far through the time window the latest API page has reached.
      Show the progress bar partially filled, with page number and last-timestamp text.
      Capture while refresh is in progress. -->
 
+![Audit Log Modal](img/auditlog-modal-v1.9.png)
 ---
 
 ## Storage Layout

@@ -11,7 +11,10 @@ Status Page: <br />
 ![Status Page](doc/img/ba-statuspage-v1.8.png)
 
 Work-Zone Apps Usage Analytis: <br />
-![Status Page](doc/img/ba-appspage-v1.8.png)
+![Apps Analytics Page](doc/img/ba-appspage-v1.8.png)
+
+Audit Log Overview: <br />
+![Audit Log Overview](doc/img/auditlog-overview-v1.9.png)
 
 ---
 
