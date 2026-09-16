@@ -325,8 +325,24 @@ export default function AuditLogTab({ sa, initialFrom, initialTo, initialCategor
     } catch { /* ignore */ }
   }
 
+  async function fetchRange(andLoad = false) {
+    try {
+      const res  = await fetch(`/api/audit-log/range/${encodeURIComponent(sa.region)}/${encodeURIComponent(sa.subdomain)}`);
+      const json = await res.json() as { ok: boolean; earliest: string; latest: string };
+      if (json.ok && json.earliest && json.latest) {
+        setFrom(json.earliest);
+        setTo(json.latest);
+        if (andLoad) void load(1, selectedCats, json.earliest, json.latest);
+      } else if (andLoad) {
+        void load(1);
+      }
+    } catch {
+      if (andLoad) void load(1);
+    }
+  }
+
   useEffect(() => {
-    void load(1);
+    void fetchRange(true);
     void fetchChartStats();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -416,7 +432,7 @@ export default function AuditLogTab({ sa, initialFrom, initialTo, initialCategor
         } else if (data.type === 'audit-sa-done' || data.type === 'audit-sa-error') {
           evs.close(); evsRef.current = null;
           setSaRefreshing(false); setSaProgress(null);
-          void load(1); void fetchChartStats();
+          void fetchRange(true); void fetchChartStats();
         }
       } catch { /* ignore */ }
     });

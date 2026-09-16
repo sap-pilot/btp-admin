@@ -85,6 +85,21 @@ router.get('/latest', requireAdmin, async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
+// GET /api/audit-log/range/:region/:subdomain — earliest and latest hour keys from filenames (no file reads)
+router.get('/range/:region/:subdomain', requireAdmin, async (req, res, next) => {
+  try {
+    const { region, subdomain } = req.params as { region: string; subdomain: string };
+    const AUDIT_FILE_RE = /^\d{4}-\d{2}-\d{2}T\d{2}_.+\.json$/;
+    const dir = getAuditLogDir(region, subdomain);
+    let files: string[];
+    try { files = (await readdir(dir)).filter(f => AUDIT_FILE_RE.test(f)).sort(); }
+    catch { files = []; }
+    const earliest = files.length ? files[0]!.slice(0, 13) + ':00' : '';
+    const latest   = files.length ? files[files.length - 1]!.slice(0, 13) + ':59' : '';
+    res.json({ ok: true, earliest, latest });
+  } catch (err) { next(err); }
+});
+
 // GET /api/audit-log/stats/:region/:subdomain?duration=90&categories=data-access,security-events — mini chart
 router.get('/stats/:region/:subdomain', requireAdmin, async (req, res, next) => {
   const t0 = Date.now();
