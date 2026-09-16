@@ -110,10 +110,11 @@ interface MiniChartProps {
   stats:    AuditHourStat[];
   from:     string;
   to:       string;
+  showSel:  boolean;
   onSelect: (from: string, to: string) => void;
 }
 
-function MiniAuditChart({ stats, from, to, onSelect }: MiniChartProps) {
+function MiniAuditChart({ stats, from, to, showSel, onSelect }: MiniChartProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [width, setWidth] = useState(600);
   const [dragAnchor, setDragAnchor] = useState<number | null>(null);
@@ -216,7 +217,7 @@ function MiniAuditChart({ stats, from, to, onSelect }: MiniChartProps) {
         {[4, 3, 2, 1, 0].map(si => (
           <path key={si} d={areaPath(si)} fill={CHART_COLORS[si]} fillOpacity={0.75} />
         ))}
-        {existingSel && !dragSel && (
+        {showSel && existingSel && !dragSel && (
           <rect x={existingSel.x1} y={pt} width={Math.max(existingSel.x2 - existingSel.x1, 2)} height={cH}
             fill="white" fillOpacity={0.15} stroke="white" strokeOpacity={0.5} strokeWidth={1} />
         )}
@@ -247,7 +248,18 @@ function MiniAuditChart({ stats, from, to, onSelect }: MiniChartProps) {
         ))}
         <rect x={pl} y={pt} width={cW} height={cH} fill="transparent"
           onMouseDown={onMD} onMouseMove={onMM} onMouseUp={onMU}
-          onMouseLeave={() => { setDragAnchor(null); setDragCursor(null); }} />
+          onMouseLeave={() => {
+            if (dragAnchor !== null && dragCursor !== null) {
+              // Commit the selection using the last clamped cursor position so dragging
+              // past the right (or left) edge keeps the selection rather than dropping it.
+              const lo = Math.min(dragAnchor, dragCursor), hi = Math.max(dragAnchor, dragCursor);
+              setDragAnchor(null); setDragCursor(null);
+              const fKey = stats[lo]?.hourKey, tKey = stats[hi]?.hourKey;
+              if (fKey && tKey) onSelect(`${fKey}:00`, `${tKey}:59`);
+            } else {
+              setDragAnchor(null); setDragCursor(null);
+            }
+          }} />
       </svg>
     </div>
   );
@@ -269,6 +281,8 @@ export default function AuditLogTab({ sa, initialFrom, initialTo, initialCategor
   );
   const [from,         setFrom]         = useState(initialFrom ?? '');
   const [to,           setTo]           = useState(initialTo ?? '');
+  const [userSetRange, setUserSetRange] = useState(false);
+  const [apiRange,     setApiRange]     = useState<{ earliest: string; latest: string } | null>(null);
   const [limit,        setLimit]        = useState(() => { try { const v = parseInt(localStorage.getItem('audit-page-size') ?? '', 10); return [100,200,500,1000].includes(v) ? v : 100; } catch { return 100; } });
   const [page,         setPage]         = useState(1);
   const [loading,      setLoading]      = useState(false);
@@ -330,6 +344,7 @@ export default function AuditLogTab({ sa, initialFrom, initialTo, initialCategor
       const res  = await fetch(`/api/audit-log/range/${encodeURIComponent(sa.region)}/${encodeURIComponent(sa.subdomain)}`);
       const json = await res.json() as { ok: boolean; earliest: string; latest: string };
       if (json.ok && json.earliest && json.latest) {
+        setApiRange({ earliest: json.earliest, latest: json.latest });
         setFrom(json.earliest);
         setTo(json.latest);
         if (andLoad) void load(1, selectedCats, json.earliest, json.latest);
@@ -339,6 +354,14 @@ export default function AuditLogTab({ sa, initialFrom, initialTo, initialCategor
     } catch {
       if (andLoad) void load(1);
     }
+  }
+
+  function handleResetRange() {
+    if (!apiRange) return;
+    setFrom(apiRange.earliest);
+    setTo(apiRange.latest);
+    setUserSetRange(false);
+    void load(1, selectedCats, apiRange.earliest, apiRange.latest);
   }
 
   useEffect(() => {
@@ -365,7 +388,7 @@ export default function AuditLogTab({ sa, initialFrom, initialTo, initialCategor
   function goPage(p: number) { setPage(p); void load(p); }
 
   function handleChartSelect(f: string, t: string) {
-    setFrom(f); setTo(t); setPage(1);
+    setFrom(f); setTo(t); setPage(1); setUserSetRange(true);
     void load(1, selectedCats, f, t);
   }
 
@@ -508,17 +531,19 @@ export default function AuditLogTab({ sa, initialFrom, initialTo, initialCategor
 
         {/* From / To — lang="en-GB" + step="60" forces 24h and hides seconds in Chromium */}
         <input type="datetime-local" lang="en-GB" step="60" value={from}
-          onChange={e => { setFrom(e.target.value); setPage(1); void load(1, selectedCats, e.target.value, to); }}
+          onChange={e => { setFrom(e.target.value); setPage(1); setUserSetRange(true); void load(1, selectedCats, e.target.value, to); }}
           className="h-7 px-2 text-xs border border-border rounded bg-background focus:outline-none focus:ring-1 focus:ring-ring w-[10.5rem] [color-scheme:light] dark:[color-scheme:dark]"
           title="From" />
         <input type="datetime-local" lang="en-GB" step="60" value={to}
-          onChange={e => { setTo(e.target.value); setPage(1); void load(1, selectedCats, from, e.target.value); }}
+          onChange={e => { setTo(e.target.value); setPage(1); setUserSetRange(true); void load(1, selectedCats, from, e.target.value); }}
           className="h-7 px-2 text-xs border border-border rounded bg-background focus:outline-none focus:ring-1 focus:ring-ring w-[10.5rem] [color-scheme:light] dark:[color-scheme:dark]"
           title="To" />
-        {(from || to) && (
-          <button onClick={() => { setFrom(''); setTo(''); setPage(1); void load(1, selectedCats, '', ''); }}
-            title="Clear time range"
-            className="inline-flex items-center justify-center h-7 w-7 rounded border border-border hover:bg-accent hover:text-accent-foreground transition-colors text-muted-foreground hover:text-foreground shrink-0">
+        {apiRange && (
+          <button
+            onClick={handleResetRange}
+            disabled={!userSetRange || (from === apiRange.earliest && to === apiRange.latest)}
+            title="Reset date time range to earliest/latest available audit log timestamp"
+            className="inline-flex items-center justify-center h-7 w-7 rounded border border-border hover:bg-accent hover:text-accent-foreground transition-colors text-muted-foreground hover:text-foreground shrink-0 disabled:opacity-30 disabled:pointer-events-none">
             <X className="h-3.5 w-3.5" />
           </button>
         )}
@@ -595,7 +620,7 @@ export default function AuditLogTab({ sa, initialFrom, initialTo, initialCategor
 
       {/* Mini area chart */}
       <div className="shrink-0 border-b border-border bg-muted/5">
-        <MiniAuditChart stats={chartStats} from={from} to={to} onSelect={handleChartSelect} />
+        <MiniAuditChart stats={chartStats} from={from} to={to} showSel={userSetRange} onSelect={handleChartSelect} />
       </div>
 
       {/* Error */}

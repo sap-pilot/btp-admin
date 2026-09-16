@@ -85,7 +85,7 @@ router.get('/latest', requireAdmin, async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-// GET /api/audit-log/range/:region/:subdomain — earliest and latest hour keys from filenames (no file reads)
+// GET /api/audit-log/range/:region/:subdomain — actual earliest/latest {time} from first and last audit log files
 router.get('/range/:region/:subdomain', requireAdmin, async (req, res, next) => {
   try {
     const { region, subdomain } = req.params as { region: string; subdomain: string };
@@ -94,9 +94,41 @@ router.get('/range/:region/:subdomain', requireAdmin, async (req, res, next) => 
     let files: string[];
     try { files = (await readdir(dir)).filter(f => AUDIT_FILE_RE.test(f)).sort(); }
     catch { files = []; }
-    const earliest = files.length ? files[0]!.slice(0, 13) + ':00' : '';
-    const latest   = files.length ? files[files.length - 1]!.slice(0, 13) + ':59' : '';
-    res.json({ ok: true, earliest, latest });
+
+    if (!files.length) { res.json({ ok: true, earliest: '', latest: '' }); return; }
+
+    // Scan a file line-by-line for "time" fields without a full JSON parse.
+    // Returns min and max time strings found in the file.
+    async function scanTimes(filepath: string): Promise<{ min: string; max: string }> {
+      const content = await readFile(filepath, 'utf-8').catch(() => '');
+      let min = '', max = '';
+      for (const line of content.split('\n')) {
+        const m = line.match(/"time"\s*:\s*"([^"]+)"/);
+        if (m?.[1]) {
+          const t = m[1]!;
+          if (!min || t < min) min = t;
+          if (!max || t > max) max = t;
+        }
+      }
+      return { min, max };
+    }
+
+    // Convert a UTC ISO timestamp to datetime-local format (YYYY-MM-DDTHH:mm) using UTC fields.
+    function toLocal(utcIso: string): string {
+      if (!utcIso) return '';
+      const d = new Date(utcIso.endsWith('Z') ? utcIso : utcIso + 'Z');
+      if (isNaN(d.getTime())) return '';
+      return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}T${String(d.getUTCHours()).padStart(2, '0')}:${String(d.getUTCMinutes()).padStart(2, '0')}`;
+    }
+
+    const [first, last] = await Promise.all([
+      scanTimes(join(dir, files[0]!)),
+      files.length > 1 ? scanTimes(join(dir, files[files.length - 1]!)) : Promise.resolve({ min: '', max: '' }),
+    ]);
+    const earliestTs = first.min;
+    const latestTs   = files.length > 1 ? last.max : first.max;
+
+    res.json({ ok: true, earliest: toLocal(earliestTs), latest: toLocal(latestTs) });
   } catch (err) { next(err); }
 });
 
