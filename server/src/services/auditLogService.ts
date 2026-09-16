@@ -1,5 +1,5 @@
 import { exec } from 'node:child_process';
-import { mkdir, readdir, readFile, unlink, writeFile } from 'node:fs/promises';
+import { mkdir, readdir, readFile, stat, unlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { promisify } from 'node:util';
@@ -828,9 +828,10 @@ function normalizeCat(category: string): string {
 export async function getAuditStats(
   durationDays: number,
   keyword?: string,
-): Promise<{ stats: AuditHourStat[]; warnings: string[] }> {
+): Promise<{ stats: AuditHourStat[]; warnings: string[]; saSizes: Record<string, number> }> {
   const warnings: string[] = [];
   const stats:    AuditHourStat[] = [];
+  const saSizes:  Record<string, number> = {};
   const cutoff    = new Date(Date.now() - durationDays * 24 * 60 * 60 * 1000);
   const cutoffKey = parseHourKey(cutoff.toISOString());
 
@@ -885,7 +886,10 @@ export async function getAuditStats(
         }
       }
     } else {
-      // No keyword: fast path — read counts directly from filenames.
+      // No keyword: fast path — read counts directly from filenames; stat for sizes.
+      const saKey = `${sa.region}/${sa.subdomain}`;
+      const sizes = await Promise.all(inRange.map(({ f }) => stat(join(dir, f)).then(s => s.size).catch(() => 0)));
+      saSizes[saKey] = (saSizes[saKey] ?? 0) + sizes.reduce((a, b) => a + b, 0);
       for (const { f, m } of inRange) {
         stats.push({
           hourKey:      m![1]!,
@@ -902,7 +906,7 @@ export async function getAuditStats(
   }
 
   stats.sort((a, b) => a.hourKey.localeCompare(b.hourKey));
-  return { stats, warnings };
+  return { stats, warnings, saSizes };
 }
 
 // ─── Per-SA stats (for AuditLogTab mini chart) ───────────────────────────────

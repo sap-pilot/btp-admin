@@ -54,9 +54,9 @@ router.get('/stats', requireAdmin, async (req, res, next) => {
     const duration   = parseInt(typeof req.query['duration'] === 'string' ? req.query['duration'] : '30', 10);
     const keyword    = typeof req.query['q']          === 'string' && req.query['q']          ? req.query['q']          : undefined;
     const categories = parseCategoriesParam(typeof req.query['categories'] === 'string' ? req.query['categories'] : undefined);
-    const { stats, warnings } = await getAuditStats(Math.min(Math.max(duration, 1), 90), keyword);
+    const { stats, warnings, saSizes } = await getAuditStats(Math.min(Math.max(duration, 1), 90), keyword);
     logger.debug({ duration, keyword, categories: categories ? [...categories] : undefined, durationMs: Date.now() - t0 }, 'audit-log/stats');
-    res.json({ ok: true, stats, warnings });
+    res.json({ ok: true, stats, warnings, saSizes });
   } catch (err) { next(err); }
 });
 

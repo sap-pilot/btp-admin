@@ -15,6 +15,8 @@
   - Automatic `auditlog-management` service key management: prefer `btp-admin-sk`, create it if none exist; plan GUID cached per-region in `~/.ba/cf_login_tokens.json`; credentials cached in `~/.ba/auditlog-management-keys.json`
   - Audit log files included in remote sync (priority 4 in the sync sequence)
   - **Export** — Download icon button in the modal Audit Log tab; exports matched files (by From/To hour range) as a ZIP; with keywords only matching records are extracted and packaged; warns when no keywords and total file size exceeds 1 GB, offering Cancel or Export anyway
+  - **Events per Subaccount chart** — stacked horizontal bar chart panel (25 % of width) to the right of the "Audit Events Over Time" area chart; shows total events per category per subaccount sorted by total descending; honors the active keyword and duration filters; overflowing subaccount rows scroll within the panel
+  - **Browser URL sync** — audit log tab state reflected in the browser URL: `/audit-logs/{region}/{subdomain}[?q=keyword]` while a subaccount modal is open; overview URL (`/audit-logs[?q=...&duration=...]`) restored when the modal closes; page reload restores keyword, duration, and open-modal context from the URL
 
 - **Security hardening** — XSUAA OAuth2 session auth, HMAC-signed peer-sync tokens, BTP egress IP filtering for `/aod` and sync endpoints, HTTP security headers (CSP, HSTS, X-Frame-Options, etc.); see [doc/security.md](doc/security.md)
 - **BTP egress IP filtering** — restrict `/aod` proxy and sync callback to known BTP CF egress IP ranges; configurable allowlist

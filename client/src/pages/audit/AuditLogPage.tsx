@@ -27,6 +27,19 @@ interface ChartPoint {
   other:        number;
 }
 
+interface SaBarEntry {
+  alias:      string;
+  region:     string;
+  subdomain:  string;
+  da:         number;
+  se:         number;
+  cfg:        number;
+  dm:         number;
+  other:      number;
+  total:      number;
+  sizeBytes?: number;
+}
+
 interface AuditRecord {
   uuid?:     string;
   time:      string;
@@ -90,6 +103,13 @@ function categoryColor(cat: string): string {
 
 function splitKeywords(kw: string): string[] {
   return kw.trim().split(/\s+/).filter(Boolean);
+}
+
+function formatBytes(b: number): string {
+  if (b >= 1_073_741_824) return `${(b / 1_073_741_824).toFixed(1)} GB`;
+  if (b >= 1_048_576)     return `${(b / 1_048_576).toFixed(1)} MB`;
+  if (b >= 1_024)         return `${(b / 1_024).toFixed(0)} KB`;
+  return `${b} B`;
 }
 
 function HighlightText({ text, keywords }: { text: string; keywords: string[] }) {
@@ -287,6 +307,59 @@ function OverviewAuditChart({ points, selectedCats, from, to, onSelect, onToggle
   );
 }
 
+// ─── Per-SA stacked bar chart ─────────────────────────────────────────────────
+
+const SA_BAR_SEGS = [
+  { key: 'da'  as const, color: '#3b82f6', label: 'Data Access'  },
+  { key: 'se'  as const, color: '#f59e0b', label: 'Security'     },
+  { key: 'cfg' as const, color: '#a855f7', label: 'Config'       },
+  { key: 'dm'  as const, color: '#22c55e', label: 'Modification' },
+  { key: 'other' as const, color: '#64748b', label: 'Other'      },
+] satisfies Array<{ key: keyof Omit<SaBarEntry, 'alias' | 'total'>; color: string; label: string }>;
+
+function SaBarChart({ data, onSaClick }: { data: SaBarEntry[]; onSaClick?: (region: string, subdomain: string) => void }) {
+  if (data.length === 0) {
+    return (
+      <div className="flex items-center justify-center py-8 text-xs text-muted-foreground">No data</div>
+    );
+  }
+  const maxTotal = Math.max(...data.map(e => e.total), 1);
+  return (
+    <div className="space-y-2">
+      {data.map(e => (
+        <div key={`${e.region}/${e.subdomain}`}>
+          <div className="flex items-baseline justify-between gap-1 mb-0.5">
+            <div className="flex items-baseline gap-1.5 min-w-0">
+              <button
+                className="text-[11px] truncate text-foreground/80 leading-tight hover:underline hover:text-primary transition-colors text-left"
+                title={`Open audit logs for ${e.alias}`}
+                onClick={() => onSaClick?.(e.region, e.subdomain)}
+              >{e.alias}</button>
+              <span className="text-[10px] text-muted-foreground/40 font-mono shrink-0">{e.region}/{e.subdomain}</span>
+            </div>
+            <span className="text-[10px] text-muted-foreground/60 shrink-0 tabular-nums">
+              {e.total.toLocaleString()}
+              {e.sizeBytes != null && <span className="text-muted-foreground/40"> · {formatBytes(e.sizeBytes)}</span>}
+            </span>
+          </div>
+          <div className="flex h-2.5 rounded-sm overflow-hidden bg-muted/20">
+            {SA_BAR_SEGS.map(seg => {
+              const count = e[seg.key];
+              if (count === 0) return null;
+              return (
+                <div key={seg.key}
+                  title={`${seg.label}: ${count.toLocaleString()}`}
+                  style={{ width: `${(count / maxTotal) * 100}%`, backgroundColor: seg.color, opacity: 0.82 }}
+                />
+              );
+            })}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
 const ALL_DURATIONS = [
@@ -304,6 +377,7 @@ export default function AuditLogPage() {
   const [duration,        setDuration]        = useState(() => { try { const v = parseInt(new URLSearchParams(window.location.search).get('duration') ?? '', 10); return ALL_DURATIONS.some(d => d.value === v) ? v : 30; } catch { return 30; } });
   const [progress,        setProgress]        = useState<ProgressState | null>(null);
   const [stats,           setStats]           = useState<AuditHourStat[]>([]);
+  const [saSizes,         setSaSizes]         = useState<Record<string, number>>({});
   const [latest,          setLatest]          = useState<SubaccountLatest[]>([]);
   const [loading,         setLoading]         = useState(false);
   const [isRefreshing,    setIsRefreshing]    = useState(false);
@@ -376,10 +450,10 @@ export default function AuditLogPage() {
         fetch(`/api/audit-log/latest?${latestParams}`),
       ]);
       const [statsJson, latestJson] = await Promise.all([
-        statsRes.json() as Promise<{ ok: boolean; stats: AuditHourStat[] }>,
+        statsRes.json() as Promise<{ ok: boolean; stats: AuditHourStat[]; saSizes?: Record<string, number> }>,
         latestRes.json() as Promise<{ ok: boolean; entries: SubaccountLatest[] }>,
       ]);
-      if (statsJson.ok)  setStats(statsJson.stats ?? []);
+      if (statsJson.ok)  { setStats(statsJson.stats ?? []); setSaSizes(statsJson.saSizes ?? {}); }
       if (latestJson.ok) setLatest(latestJson.entries ?? []);
     } catch { /* ignore */ } finally {
       setLoading(false);
@@ -467,6 +541,28 @@ export default function AuditLogPage() {
       }
     }
     return [...map.values()].sort((a, b) => a.hourKey.localeCompare(b.hourKey));
+  })();
+
+  // Per-SA totals for the side stacked bar chart — derived from the same stats data.
+  const saBarData: SaBarEntry[] = (() => {
+    const map = new Map<string, SaBarEntry>();
+    for (const s of stats) {
+      const key = `${s.region}/${s.subdomain}`;
+      if (!map.has(key)) {
+        const alias = allSubaccounts.find(a => a.region === s.region && a.subdomain === s.subdomain)?.alias ?? s.subdomain;
+        map.set(key, { alias, region: s.region, subdomain: s.subdomain, da: 0, se: 0, cfg: 0, dm: 0, other: 0, total: 0 });
+      }
+      const e = map.get(key)!;
+      if (selectedCats.has('data-access'))       e.da    += s.dataAccess;
+      if (selectedCats.has('security-events'))   e.se    += s.security;
+      if (selectedCats.has('configuration'))     e.cfg   += s.config;
+      if (selectedCats.has('data-modification')) e.dm    += s.modification;
+      if (selectedCats.has('other'))             e.other += s.other;
+    }
+    return [...map.values()]
+      .map(e => ({ ...e, total: e.da + e.se + e.cfg + e.dm + e.other, sizeBytes: saSizes[`${e.region}/${e.subdomain}`] }))
+      .filter(e => e.total > 0)
+      .sort((a, b) => b.total - a.total);
   })();
 
   const keywords = splitKeywords(committed);
@@ -559,29 +655,49 @@ export default function AuditLogPage() {
       {/* Main content */}
       <div className="flex-1 overflow-auto min-h-0 px-4 py-4 space-y-6">
 
-        {/* Chart */}
-        <div className="rounded-lg border border-border bg-card p-4">
-          <h2 className="text-sm font-semibold mb-3">Audit Events Over Time</h2>
-          {loading && chartPoints.length === 0 ? (
-            <div className="flex items-center justify-center h-[200px] text-xs text-muted-foreground">Loading…</div>
-          ) : (
-            <OverviewAuditChart
-              points={chartPoints}
-              selectedCats={selectedCats}
-              from={chartFrom}
-              to={chartTo}
-              onSelect={(f, t) => {
-                setChartFrom(f); setChartTo(t);
-                void fetchData(undefined, undefined, f, t);
-              }}
-              onToggleSeries={toggleCat}
-            />
-          )}
-          {(chartFrom || chartTo) && (
-            <p className="text-[11px] text-muted-foreground mt-1.5">
-              Showing entries from {chartFrom || '—'} to {chartTo || '—'} · entries table filtered below
-            </p>
-          )}
+        {/* Charts row: area chart (75%) + per-SA bar chart (25%) */}
+        <div className="flex gap-4 items-stretch">
+
+          {/* Area chart */}
+          <div className="flex-1 min-w-0 rounded-lg border border-border bg-card p-4">
+            <h2 className="text-sm font-semibold mb-3">Audit Events Over Time</h2>
+            {loading && chartPoints.length === 0 ? (
+              <div className="flex items-center justify-center h-[200px] text-xs text-muted-foreground">Loading…</div>
+            ) : (
+              <OverviewAuditChart
+                points={chartPoints}
+                selectedCats={selectedCats}
+                from={chartFrom}
+                to={chartTo}
+                onSelect={(f, t) => {
+                  setChartFrom(f); setChartTo(t);
+                  void fetchData(undefined, undefined, f, t);
+                }}
+                onToggleSeries={toggleCat}
+              />
+            )}
+            {(chartFrom || chartTo) && (
+              <p className="text-[11px] text-muted-foreground mt-1.5">
+                Showing entries from {chartFrom || '—'} to {chartTo || '—'} · entries table filtered below
+              </p>
+            )}
+          </div>
+
+          {/* Per-SA stacked bar chart */}
+          <div className="w-1/4 shrink-0 rounded-lg border border-border bg-card p-4 flex flex-col overflow-hidden">
+            <h2 className="text-sm font-semibold mb-3 shrink-0">Events per Subaccount</h2>
+            <div className="flex-1 overflow-y-auto min-h-0">
+              {loading && saBarData.length === 0 ? (
+                <div className="flex items-center justify-center py-8 text-xs text-muted-foreground">Loading…</div>
+              ) : (
+                <SaBarChart data={saBarData} onSaClick={(region, subdomain) => {
+                  const fullSa = allSubaccounts.find(a => a.region === region && a.subdomain === subdomain);
+                  if (fullSa) { savedOverviewUrl.current = window.location.pathname + window.location.search; setModalSa(fullSa); }
+                }} />
+              )}
+            </div>
+          </div>
+
         </div>
 
         {/* Latest entries by subaccount */}

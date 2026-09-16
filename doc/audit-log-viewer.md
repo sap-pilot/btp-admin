@@ -151,6 +151,28 @@ dramatically reduces the output size.
 
 ---
 
+## Overview Charts
+
+The `/audit-logs` overview page displays two chart panels side by side.
+
+### Audit Events Over Time (left, 75 %)
+
+A stacked area chart showing hourly event counts across all enabled subaccounts. Four series are stacked (Data Access / Security / Configuration / Modification); click a series label to toggle it. Drag across the chart to select a time range — the "Latest Entries" table below filters to that window. Click **Clear selection** in the legend to reset.
+
+<!-- SCREENSHOT PLACEHOLDER: Audit Events Over Time area chart with all four series visible and one hour range selected (selection rectangle visible). Capture at /audit-logs after a refresh. -->
+
+### Events per Subaccount (right, 25 %)
+
+A stacked horizontal bar chart showing the **total** event count per subaccount for the selected duration and keyword. Each bar is split by category (Data Access = blue, Security = amber, Configuration = purple, Modification = green, Other = grey). Bar width is proportional to the maximum total across all subaccounts, so the largest subaccount fills the full panel width and smaller ones are scaled accordingly.
+
+Subaccounts are sorted by total event count (descending). Hover a segment to see the exact count for that category. If there are many subaccounts the panel scrolls internally — the panel height matches the area chart.
+
+The chart respects the same **duration** and **keyword** filters as the area chart: when a keyword is active, counts reflect only matching records (sourced from the keyword-filtered grep results, not filename counts).
+
+<!-- SCREENSHOT PLACEHOLDER: Events per Subaccount bar chart panel showing 4–6 subaccounts with coloured bar segments and count labels. Capture at /audit-logs with the bar chart panel visible on the right. -->
+
+---
+
 ## Searching
 
 ### Overview page (`/audit-logs`)
@@ -170,10 +192,15 @@ dramatically reduces the output size.
   record list.
 - **From / To date-time pickers** — restrict records to a custom time range. Both inputs are
   optional; leaving them blank retrieves all stored records for the subaccount.
-- **Page size** — select 100 / 200 / 500 / 1 000 records per page.
+- **Page size** — select 100 / 200 / 500 / 1 000 records per page. The selection persists in
+  browser `localStorage` and is restored when the tab is reopened.
 - **Expand a record** — click any row to expand it and see the full record detail including
   all technical fields (`uuid`, `time`, `category`, `orgId`, `spaceId`, `correlationId`, etc.)
   alongside the parsed message body. Click again to collapse.
+- **URL sync** — when the subaccount modal is open the browser URL updates to
+  `/audit-logs/{region}/{subdomain}[?q=keyword]`. Refreshing the page reopens the same
+  subaccount and pre-fills the keyword. Closing the modal restores the overview URL
+  (`/audit-logs[?q=...&duration=...]`).
 
 <!-- SCREENSHOT PLACEHOLDER: Subaccount modal Audit Log tab with a search keyword entered,
      showing highlighted matches and one row expanded with full record detail.
