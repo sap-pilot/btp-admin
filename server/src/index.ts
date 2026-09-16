@@ -1,3 +1,4 @@
+import { setGlobalDispatcher, ProxyAgent } from 'undici';
 import express from 'express';
 import { config } from './config.js';
 import { loadConfig, getSyncExcludes } from './services/configService.js';
@@ -20,19 +21,41 @@ import usersRouter from './routes/users.js';
 import authRouter from './routes/auth.js';
 import aodRouter, { aodProxyHandler } from './routes/aod.js';
 import appsRouter from './routes/apps.js';
+import auditLogRouter from './routes/auditLog.js';
 import { startAppsScheduler, stopAppsScheduler } from './services/appService.js';
 import { initRequestLog, mergeAccessLogFromSync } from './services/aodAnalyticsService.js';
 import { warmSettingsVarsCache } from './services/variablesService.js';
 import { registerSettingsVarsChangedCallback, triggerSettingsVarsChanged, warmSettingsDataCache } from './services/settingsService.js';
 import { resetCfLoginCache } from './services/cfLoginService.js';
 import { registerOnSettingsSynced } from './services/syncService.js';
-import { requireSessionGlobal } from './middleware/requireAuth.js';
+import { requireSessionGlobal, requireAodIpFilter } from './middleware/requireAuth.js';
 import { errorHandler } from './middleware/errorHandler.js';
 import { compress } from './middleware/compress.js';
 import { serveStatic } from './static.js';
 
+// ─── Outgoing proxy (HTTPS_PROXY / HTTPS_PROXY_INSECURE) ────────────────────
+// Node.js native fetch (undici) ignores system proxy env vars by default.
+// Wire them up explicitly so all outgoing HTTP/HTTPS traffic obeys the proxy.
+const _proxyUrl = process.env['HTTPS_PROXY'] ?? process.env['HTTP_PROXY'];
+if (_proxyUrl) {
+  const _insecure = ['1', 'true', 'yes'].includes((process.env['HTTPS_PROXY_INSECURE'] ?? '').toLowerCase());
+  const _tlsOpts  = _insecure ? { rejectUnauthorized: false } : undefined;
+  setGlobalDispatcher(new ProxyAgent({ uri: _proxyUrl, proxyTls: _tlsOpts, requestTls: _tlsOpts }));
+  logger.info({ proxyUrl: _proxyUrl, insecure: _insecure }, 'Outgoing HTTP routed through proxy');
+}
+
 const app = express();
 app.use(compress);
+// Security response headers
+app.use((_req, res, next) => {
+  res.setHeader('X-Frame-Options', 'SAMEORIGIN');
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+  if (process.env.VCAP_APPLICATION) {
+    res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
+  }
+  next();
+});
 app.use(express.json({ limit: '5mb' }));
 
 const cfg = loadConfig();
@@ -56,10 +79,10 @@ registerOnSettingsSynced(() => {
 
 app.use('/health', healthRouter);
 app.use(authRouter);
-// AOD proxy: no auth — must be mounted before requireSessionGlobal
-// Raw body parser for the AOD proxy — must run before express.json() consumes the stream.
+// AOD proxy: IP-filtered but no session auth — must be mounted before requireSessionGlobal.
+// Raw body parser must run before express.json() consumes the stream.
 // body-parser sets req._body=true so express.json() skips re-parsing afterwards.
-app.use('/aod', express.raw({ type: '*/*', limit: '50mb' }), aodProxyHandler);
+app.use('/aod', requireAodIpFilter, express.raw({ type: '*/*', limit: '50mb' }), aodProxyHandler);
 // API responses must never be cached — prevents 304s on repeated /api/view requests
 app.use('/api', (_req, res, next) => { res.setHeader('Cache-Control', 'no-store'); next(); });
 // Global session auth: all /api/* require login when XSUAA is bound (exceptions in requireSessionGlobal)
@@ -72,6 +95,7 @@ app.use('/api/role-collections', rcsRouter);
 app.use('/api/users', usersRouter);
 app.use('/api/sync', syncRouter);
 app.use('/api/apps', appsRouter);
+app.use('/api/audit-log', auditLogRouter);
 app.use('/api/aod', aodRouter);
 app.use('/api', apiRouter);
 

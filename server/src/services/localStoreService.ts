@@ -373,6 +373,20 @@ function pathToFolderEntry(relPath: string): { folder: string; name: string } | 
     return name ? { folder: `users/${region}/${sub}`, name: `${origin}/${name}` } : null;
   }
 
+  if (first === 'audit-log') {
+    // audit-log/{region}/{subdomain}/{YYYY-MM-DDTHH}_{counts}.json
+    const s2 = rest.indexOf('/');
+    if (s2 === -1) return null;
+    const region = rest.slice(0, s2);
+    const after2 = rest.slice(s2 + 1);
+    const s3 = after2.indexOf('/');
+    if (s3 === -1) return null;
+    const sub  = after2.slice(0, s3);
+    const name = after2.slice(s3 + 1);
+    if (!name || name.includes('/')) return null;
+    return { folder: `audit-log/${region}/${sub}`, name };
+  }
+
   if (first === 'resp') {
     const s2 = rest.indexOf('/');
     if (s2 === -1) return null;
@@ -653,6 +667,15 @@ export async function responseFileSize(folder: string, filename: string): Promis
 }
 
 /** Read a file from LOCAL_STORE_DIR/apps/: stats CSVs, aod-config.json, accesslog CSVs, or per-app JSON files. */
+export async function readAuditLogFile(relPath: string): Promise<Buffer> {
+  const parts = relPath.split('/');
+  const isFile = parts.length === 3 && /^\d{4}-\d{2}-\d{2}T\d{2}_\d+_\d+_\d+_\d+(?:_\d+)?\.json$/.test(parts[2] ?? '');
+  if (!isFile || parts.some(p => p === '..' || p === '.' || p === '')) {
+    throw new Error('Invalid audit-log path');
+  }
+  return readFile(join(config.LOCAL_STORE_DIR, 'audit-log', relPath));
+}
+
 export async function readAodFile(relPath: string): Promise<Buffer> {
   const parts    = relPath.split('/');
   const isRoot   = relPath === 'aod-config.json' || relPath === 'stats.csv' || relPath === 'aod-stats.csv';

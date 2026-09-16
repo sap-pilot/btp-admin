@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import type { Request, Response } from 'express';
+import { randomBytes } from 'node:crypto';
 import { getXsuaaConfig, buildAuthUrl, exchangeCode, signSession, readSessionFromRequest, userAuditLog, cacheUserToken } from '../services/authService.js';
 import { getClientIp } from '../middleware/requireAuth.js';
 import { logger } from '../logger.js';
@@ -32,6 +33,21 @@ function clearCookie(res: Response): void {
   res.setHeader('Set-Cookie', 'btpauth=; Path=/; HttpOnly; Max-Age=0');
 }
 
+function setStateCookie(res: Response, state: string): void {
+  const secure = process.env.VCAP_APPLICATION ? '; Secure' : '';
+  // Short-lived (5 min), SameSite=Lax so it survives the cross-origin XSUAA redirect
+  res.setHeader('Set-Cookie', `btpstate=${state}; Path=/login; HttpOnly${secure}; SameSite=Lax; Max-Age=300`);
+}
+
+function clearStateCookie(res: Response): void {
+  res.setHeader('Set-Cookie', 'btpstate=; Path=/login; HttpOnly; Max-Age=0');
+}
+
+function readStateCookie(cookieHeader: string): string {
+  const entry = cookieHeader.split(';').map(p => p.trim()).find(p => p.startsWith('btpstate='));
+  return entry ? entry.slice('btpstate='.length) : '';
+}
+
 function popupHtml(script: string, message: string): string {
   return `<!DOCTYPE html><html><head><meta charset="utf-8"><title>BTP Status</title>` +
     `<style>body{font-family:sans-serif;display:flex;align-items:center;justify-content:center;` +
@@ -55,7 +71,9 @@ router.get('/login', (req: Request, res: Response) => {
   const x = getXsuaaConfig();
   if (!x) { res.status(503).send('XSUAA not configured'); return; }
   try {
-    const url = buildAuthUrl(callbackBase(req));
+    const state = randomBytes(16).toString('hex');
+    setStateCookie(res, state);
+    const url = buildAuthUrl(callbackBase(req), state);
     res.type('html').send(popupHtml(`window.location.href=${JSON.stringify(url)};`, 'Redirecting to login…'));
   } catch (err) {
     logger.error({ err }, 'Failed to build auth URL');
@@ -69,6 +87,17 @@ router.get('/login/callback', async (req: Request, res: Response) => {
   if (!x) { res.status(503).send('XSUAA not configured'); return; }
   const code = typeof req.query['code'] === 'string' ? req.query['code'] : '';
   if (!code) { res.status(400).send('Missing authorization code'); return; }
+
+  // CSRF: verify state cookie matches the state returned by XSUAA
+  const stateParam  = typeof req.query['state'] === 'string' ? req.query['state'] : '';
+  const stateCookie = readStateCookie(req.headers.cookie ?? '');
+  clearStateCookie(res);
+  if (!stateParam || !stateCookie || stateParam !== stateCookie) {
+    logger.warn({ ip: getClientIp(req) }, 'Login callback rejected: state mismatch (possible CSRF)');
+    res.status(400).send('Invalid login state — please try logging in again.');
+    return;
+  }
+
   try {
     const { session, accessToken } = await exchangeCode(code, callbackBase(req));
     cacheUserToken(session.sub, accessToken, session.exp);

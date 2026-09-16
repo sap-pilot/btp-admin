@@ -104,13 +104,14 @@ export function getAppUrl(): string {
   } catch { _appUrl = ''; return ''; }
 }
 
-export function buildAuthUrl(callbackBase: string): string {
+export function buildAuthUrl(callbackBase: string, state: string): string {
   const x = getXsuaaConfig();
   if (!x) throw new Error('XSUAA not configured');
   const params = new URLSearchParams({
     response_type: 'code',
     client_id: x.clientid,
     redirect_uri: `${callbackBase}/login/callback`,
+    state,
   });
   return `${x.url}/oauth/authorize?${params}`;
 }

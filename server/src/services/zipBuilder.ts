@@ -1,6 +1,8 @@
 // Minimal ZIP builder/extractor — STORE method only, single-disk, < 4 GiB total size.
 // Native implementation; no third-party dependencies.
 
+import { readFile } from 'node:fs/promises';
+
 const CRC_TABLE = (() => {
   const t = new Uint32Array(256);
   for (let i = 0; i < 256; i++) {
@@ -18,6 +20,81 @@ function crc32(buf: Buffer): number {
 }
 
 export interface ZipEntry { name: string; data: Buffer; }
+export interface ZipPathEntry { name: string; actualPath: string; }
+
+// Streaming ZIP builder — reads each file from disk one at a time to avoid
+// loading thousands of files into memory simultaneously.
+export async function streamZip(entries: ZipPathEntry[], write: (chunk: Buffer) => void): Promise<void> {
+  type CdEntry = { nameBytes: Buffer; crc: number; size: number; localOffset: number };
+  const cdEntries: CdEntry[] = [];
+  let offset = 0;
+
+  for (const { name, actualPath } of entries) {
+    let data: Buffer;
+    try { data = await readFile(actualPath); }
+    catch { continue; }
+
+    const nameBytes = Buffer.from(name, 'utf-8');
+    const c = crc32(data);
+    const size = data.length;
+
+    const lh = Buffer.alloc(30 + nameBytes.length);
+    lh.writeUInt32LE(0x04034b50, 0);
+    lh.writeUInt16LE(20, 4);
+    lh.writeUInt16LE(0, 6);
+    lh.writeUInt16LE(0, 8);   // STORE
+    lh.writeUInt16LE(0, 10);
+    lh.writeUInt16LE(0, 12);
+    lh.writeUInt32LE(c, 14);
+    lh.writeUInt32LE(size, 18);
+    lh.writeUInt32LE(size, 22);
+    lh.writeUInt16LE(nameBytes.length, 26);
+    lh.writeUInt16LE(0, 28);
+    nameBytes.copy(lh, 30);
+
+    cdEntries.push({ nameBytes, crc: c, size, localOffset: offset });
+    write(lh);
+    write(data);
+    offset += lh.length + size;
+  }
+
+  const cdStart = offset;
+  for (const { nameBytes, crc, size, localOffset } of cdEntries) {
+    const cd = Buffer.alloc(46 + nameBytes.length);
+    cd.writeUInt32LE(0x02014b50, 0);
+    cd.writeUInt16LE(20, 4);
+    cd.writeUInt16LE(20, 6);
+    cd.writeUInt16LE(0, 8);
+    cd.writeUInt16LE(0, 10);
+    cd.writeUInt16LE(0, 12);
+    cd.writeUInt16LE(0, 14);
+    cd.writeUInt32LE(crc, 16);
+    cd.writeUInt32LE(size, 20);
+    cd.writeUInt32LE(size, 24);
+    cd.writeUInt16LE(nameBytes.length, 28);
+    cd.writeUInt16LE(0, 30);
+    cd.writeUInt16LE(0, 32);
+    cd.writeUInt16LE(0, 34);
+    cd.writeUInt16LE(0, 36);
+    cd.writeUInt32LE(0, 38);
+    cd.writeUInt32LE(localOffset, 42);
+    nameBytes.copy(cd, 46);
+    write(cd);
+    offset += cd.length;
+  }
+
+  const cdSize = offset - cdStart;
+  const eocd = Buffer.alloc(22);
+  eocd.writeUInt32LE(0x06054b50, 0);
+  eocd.writeUInt16LE(0, 4);
+  eocd.writeUInt16LE(0, 6);
+  eocd.writeUInt16LE(cdEntries.length, 8);
+  eocd.writeUInt16LE(cdEntries.length, 10);
+  eocd.writeUInt32LE(cdSize, 12);
+  eocd.writeUInt32LE(cdStart, 16);
+  eocd.writeUInt16LE(0, 20);
+  write(eocd);
+}
 
 export function buildZip(entries: ZipEntry[]): Buffer {
   const meta = entries.map(({ name, data }) => ({

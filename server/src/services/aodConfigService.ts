@@ -1,15 +1,7 @@
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
-import { config } from '../config.js';
-import { logger } from '../logger.js';
 import { getConfig } from './configService.js';
 import { getCachedSettingsOverrides } from './settingsDataCache.js';
-import { notifyCallbacks } from './syncService.js';
-import { emit } from './liveEvents.js';
-import { touchLastUpdated } from './lastUpdatedService.js';
-
-const AOD_DIR         = join(config.LOCAL_STORE_DIR, 'apps');
-const AOD_CONFIG_PATH = join(AOD_DIR, 'aod-config.json');
+import { readSettings, writeSettings } from './settingsService.js';
+import { logger } from '../logger.js';
 
 export interface AodConfig {
   stopAppsUnusedAfterHrs?:  number;
@@ -25,29 +17,31 @@ function getConfigFileAod(): AodConfig {
   } catch { return {}; }
 }
 
+/**
+ * Reads merged AOD configuration from three sources in priority order:
+ *   1. config.json → aod        bundled base config (lowest priority)
+ *   2. CONFIG_JSON → aod        env-var override of config.json (handled by getConfig())
+ *   3. settings.json → aod      config page overrides — applied when non-empty (highest priority)
+ */
 export async function readAodConfig(): Promise<AodConfig> {
-  const base = getConfigFileAod();
-  let merged: AodConfig;
-  try {
-    const raw   = await readFile(AOD_CONFIG_PATH, 'utf-8');
-    const local = JSON.parse(raw) as AodConfig;
-    merged = { ...base, ...local };
-  } catch {
-    merged = { ...base };
-  }
-  // settings.json->aod is highest priority
+  const merged: AodConfig = { ...getConfigFileAod() };
   const settingsAod = getCachedSettingsOverrides().aod;
   if (settingsAod?.regionalEndpoints) merged.regionProxyEndpoint = settingsAod.regionalEndpoints;
   if (settingsAod?.excludeApps)       merged.excludeApps         = settingsAod.excludeApps;
   return merged;
 }
 
-export async function writeAodConfig(data: AodConfig): Promise<void> {
-  const { regionProxyEndpoint: _rpe, refreshAppsIntervalHrs: _ri, ...toSave } = data;
-  await mkdir(AOD_DIR, { recursive: true });
-  await writeFile(AOD_CONFIG_PATH, JSON.stringify(toSave, null, 2), 'utf-8');
-  touchLastUpdated();
-  notifyCallbacks();
-  emit('config', { ts: Date.now() });
-  logger.info('aod-config.json saved');
+/**
+ * Persists AOD fields into settings.json → aod (the config-page-editable layer).
+ * Fields controlled via variables (stopAppsUnusedAfterHrs, refreshAppsIntervalHrs)
+ * are not written here — configure those via the Variables settings panel.
+ */
+export async function writeAodConfig(data: Partial<AodConfig>): Promise<void> {
+  const current  = await readSettings();
+  const existing = current.aod ?? {};
+  if (data.excludeApps         !== undefined) existing.excludeApps       = data.excludeApps;
+  if (data.regionProxyEndpoint !== undefined) existing.regionalEndpoints = data.regionProxyEndpoint;
+  current.aod = existing;
+  await writeSettings(current);
+  logger.info('AOD config saved to settings.json');
 }

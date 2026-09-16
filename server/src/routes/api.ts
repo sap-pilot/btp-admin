@@ -10,12 +10,15 @@ import { userLabel } from '../services/authService.js';
 import { subscribe } from '../services/liveEvents.js';
 import { getSites } from '../services/configService.js';
 import { getCity } from '../services/geoService.js';
+import { getVar } from '../services/variablesService.js';
 
 const router = Router();
 
 // Public — exempt from session auth; used by the sidebar before login for site-switcher and title.
 router.get('/info', (_req, res) => {
-  res.json({ syncRemote: !!config.SYNC_REMOTE, city: getCity(), sites: getSites(), maxStorageDays: config.MAX_RESPONSE_STORAGE_DAYS });
+  const maxAuditStr  = getVar('MAX_AUDIT_LOG_STORAGE_DAYS');
+  const maxAuditDays = maxAuditStr ? (parseInt(maxAuditStr, 10) || 0) : 0;
+  res.json({ syncRemote: !!config.SYNC_REMOTE, city: getCity(), sites: getSites(), maxStorageDays: config.MAX_RESPONSE_STORAGE_DAYS, maxAuditStorageDays: maxAuditDays });
 });
 
 router.get('/events', (req, res) => {
@@ -25,6 +28,8 @@ router.get('/events', (req, res) => {
   const rcsOnly    = req.query['rcs']    === '1';
   const usersOnly  = req.query['users']  === '1';
   const aodOnly    = req.query['aod']    === '1';
+  const auditOnly  = req.query['audit']    === '1';
+  const auditSaOnly = req.query['audit-sa'] === '1';
 
   let topics: string[];
   if (configOnly) {
@@ -37,6 +42,12 @@ router.get('/events', (req, res) => {
     topics = ['users', 'refresh-users'];
   } else if (aodOnly) {
     topics = ['aod-apps'];
+  } else if (auditOnly) {
+    topics = ['audit-log'];
+  } else if (auditSaOnly) {
+    const r = typeof req.query['region']    === 'string' ? req.query['region']    : '';
+    const s = typeof req.query['subdomain'] === 'string' ? req.query['subdomain'] : '';
+    topics = [`audit-sa:${r}/${s.toLowerCase()}`];
   } else {
     topics = ['global'];
     if (svc) topics.push(`service:${svc}`);

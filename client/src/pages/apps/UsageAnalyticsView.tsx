@@ -44,14 +44,15 @@ function fmtTimestamp(ts: number, includeSeconds: boolean): string {
   const dd  = String(d.getDate()).padStart(2, '0');
   const hh  = String(d.getHours()).padStart(2, '0');
   const min = String(d.getMinutes()).padStart(2, '0');
-  return `${mm}/${dd} ${hh}:${min}`;
+  const sec = String(d.getSeconds()).padStart(2, '0');
+  return includeSeconds ? `${mm}/${dd} ${hh}:${min}:${sec}` : `${mm}/${dd} ${hh}:${min}`;
 }
 function fmtTime(ts: number): string {
   return fmtTimestamp(ts, true);
 }
 function fmtLatestRequest(ts: number): string {
   if (!ts) return '—';
-  return fmtTimestamp(ts, false);
+  return fmtTimestamp(ts, true);
 }
 
 const geoKey  = (lat: number, lon: number) => `${lat.toFixed(2)},${lon.toFixed(2)}`;

@@ -80,6 +80,7 @@ export default function ConfigPage() {
   // Confirmation dialogs
   const [showRefreshDialog,      setShowRefreshDialog]      = useState(false);
   const [showForceRefreshDialog, setShowForceRefreshDialog] = useState(false);
+  const [auditDisableWarn,       setAuditDisableWarn]       = useState<Array<{ region: string; subdomain: string; alias: string }> | null>(null);
   const [showImportDialog,       setShowImportDialog]       = useState(false);
   const [importDialogBody,  setImportDialogBody]  = useState('');
   const [pendingImportData, setPendingImportData] = useState<Record<string, unknown> | null>(null);
@@ -254,13 +255,15 @@ export default function ConfigPage() {
     setRefreshProgress(null);
   }
 
-  async function handleSasSave() {
+  async function doSasSave(deleteAuditDirs: Array<{ region: string; subdomain: string }>) {
     setIsSavingSas(true);
     try {
+      const body: Record<string, unknown> = { data: sasData };
+      if (deleteAuditDirs.length > 0) body['deleteAuditDirs'] = deleteAuditDirs;
       const res  = await fetch('/api/config/subaccounts/save', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ data: sasData }),
+        body: JSON.stringify(body),
       });
       const json = await res.json() as { ok: boolean; error?: string };
       if (!json.ok) throw new Error(json.error ?? 'Save failed');
@@ -278,6 +281,17 @@ export default function ConfigPage() {
     } finally {
       setIsSavingSas(false);
     }
+  }
+
+  async function handleSasSave() {
+    const toDelete = originalSas
+      .filter(orig => orig.viewAuditLogs && !sasData.find(s => s.subaccountId === orig.subaccountId)?.viewAuditLogs)
+      .map(s => ({ region: s.region, subdomain: s.subdomain, alias: s.alias || s.subdomain }));
+    if (toDelete.length > 0) {
+      setAuditDisableWarn(toDelete);
+      return;
+    }
+    await doSasSave([]);
   }
 
   // ── Tabs handlers ─────────────────────────────────────────────────────────────
@@ -760,6 +774,45 @@ export default function ConfigPage() {
           <AlertDialogFooter>
             <AlertDialogCancel onClick={() => setShowForceRefreshDialog(false)}>Cancel</AlertDialogCancel>
             <AlertDialogAction onClick={() => void handleRefresh(true)}>Yes, force another subaccount refresh</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* Audit log deletion warning */}
+      <AlertDialog open={auditDisableWarn !== null} onOpenChange={open => { if (!open) setAuditDisableWarn(null); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete cached audit logs?</AlertDialogTitle>
+            <AlertDialogDescription asChild>
+              <div>
+                <p className="mb-2 text-sm text-muted-foreground">
+                  Saving will disable audit log collection for the following
+                  subaccount{(auditDisableWarn?.length ?? 0) > 1 ? 's' : ''} and
+                  permanently delete all locally cached audit log data:
+                </p>
+                <ul className="mb-3 list-disc pl-5 space-y-0.5">
+                  {auditDisableWarn?.map(sa => (
+                    <li key={`${sa.region}/${sa.subdomain}`} className="text-sm">
+                      <span className="font-medium">{sa.alias}</span>
+                      <span className="ml-1.5 font-mono text-xs text-muted-foreground">({sa.region}/{sa.subdomain})</span>
+                    </li>
+                  ))}
+                </ul>
+                <p className="text-sm text-amber-600 dark:text-amber-400">
+                  To keep a copy, cancel and use the <strong>Export</strong> button in the
+                  subaccount modal → Audit Logs tab before saving.
+                </p>
+              </div>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel onClick={() => setAuditDisableWarn(null)}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              onClick={() => { const warn = auditDisableWarn ?? []; setAuditDisableWarn(null); void doSasSave(warn); }}
+            >
+              Delete and save
+            </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>

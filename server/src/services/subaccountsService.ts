@@ -48,6 +48,7 @@ export interface SubaccountEntry {
   manageDestinations: boolean;
   useAOD:             boolean;
   manageRoles:        boolean;
+  viewAuditLogs?:     boolean;
   /** Runtime-only: true when this SA's subaccount ID is in RESTRICTED_SUBACCOUNT_IDS. Never persisted. */
   restricted?:        boolean;
   org?: {
@@ -102,7 +103,7 @@ async function writeSubaccounts(subaccounts: SubaccountEntry[], globalAccounts?:
 
 const SA_DIFF_FIELDS = [
   'subaccountName', 'alias', 'groupIds', 'pos', 'subdomain',
-  'globalAccountGUID', 'inHomepage', 'manageDestinations', 'useAOD', 'manageRoles',
+  'globalAccountGUID', 'inHomepage', 'manageDestinations', 'useAOD', 'manageRoles', 'viewAuditLogs',
 ] as const;
 
 function diffSubaccounts(before: SubaccountEntry[], after: SubaccountEntry[]): string {
@@ -158,7 +159,7 @@ function mergeOrg(
 }
 
 function mergeSubaccounts(existing: SubaccountEntry[], fresh: SubaccountEntry[]): SubaccountEntry[] {
-  type Editable = Pick<SubaccountEntry, 'alias' | 'groupIds' | 'pos' | 'inHomepage' | 'manageDestinations' | 'useAOD' | 'manageRoles'>;
+  type Editable = Pick<SubaccountEntry, 'alias' | 'groupIds' | 'pos' | 'inHomepage' | 'manageDestinations' | 'useAOD' | 'manageRoles' | 'viewAuditLogs'>;
   type Preserved = Editable & { org: SubaccountEntry['org'] };
   const preservedById = new Map<string, Preserved>();
   for (const s of existing) {
@@ -170,6 +171,7 @@ function mergeSubaccounts(existing: SubaccountEntry[], fresh: SubaccountEntry[])
       manageDestinations: s.manageDestinations ?? false,
       useAOD:             s.useAOD             ?? false,
       manageRoles:        s.manageRoles        ?? false,
+      viewAuditLogs:      s.viewAuditLogs      ?? false,
       org:                s.org,
     });
   }

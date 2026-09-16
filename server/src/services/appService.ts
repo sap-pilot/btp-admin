@@ -713,12 +713,27 @@ export async function scanSubaccountApps(region: string, subdomain: string): Pro
 
 // ─── Auto-stop unused AOD apps ────────────────────────────────────────────────
 
+/** Returns true if `str` matches a glob pattern where `*` is a wildcard. Case-insensitive. */
+function matchesGlob(str: string, pattern: string): boolean {
+  const re = new RegExp(
+    '^' + pattern.split('*').map(s => s.replace(/[.+?^${}()|[\]\\]/g, '\\$&')).join('.*') + '$',
+    'i',
+  );
+  return re.test(str);
+}
+
+function isExcludedApp(name: string, guid: string, excludeApps: string[]): boolean {
+  return excludeApps.some(p => matchesGlob(name, p) || matchesGlob(guid, p));
+}
+
 export async function autoStopUnusedAodApps(): Promise<void> {
   const stopAfterHrs = getStopAppsUnusedAfterHrs();
   if (!stopAfterHrs || stopAfterHrs <= 0) return;
 
   const now        = Math.floor(Date.now() / 1000);
   const cutoff     = now - stopAfterHrs * 3600;
+  const aodCfg     = await readAodConfig();
+  const excludeApps = aodCfg.excludeApps ?? [];
 
   let regions: string[];
   try { regions = await readdir(APPS_DIR); } catch { return; }
@@ -741,6 +756,10 @@ export async function autoStopUnusedAodApps(): Promise<void> {
             const app = JSON.parse(raw) as AppFileData;
             if (!app.aod || app.state !== 'STARTED') continue;
             if (!app.lastAccessed || app.lastAccessed > cutoff) continue;
+            if (excludeApps.length > 0 && isExcludedApp(app.name ?? '', app.guid, excludeApps)) {
+              logger.debug({ region, subdomain, guid: app.guid, name: app.name }, 'AOD: skipping excluded app');
+              continue;
+            }
             logger.info({ region, subdomain, spaceName: app.spaceName, guid: app.guid, name: app.name },
               `stopping unused app ${region}/${subdomain}/${app.spaceName}/${app.guid}.${app.name}`);
             try {

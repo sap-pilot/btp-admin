@@ -1,13 +1,13 @@
 {
   "name": "btp-admin-client",
-  "version": "1.8.0",
+  "version": "1.9.0",
   "private": true,
   "scripts": {
     "build": "tsc -b && vite build",
     "watch": "vite build --watch",
     "lint": "tsc --noEmit",
     "typecheck": "tsc --noEmit",
-    "test": "echo 'No client tests'"
+    "test": "tsx --test src/lib/parseFilename.test.ts src/lib/utils.test.ts"
   },
   "dependencies": {
     "@radix-ui/react-alert-dialog": "^1.1.23",

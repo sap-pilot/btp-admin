@@ -6,6 +6,8 @@ const COMPRESSIBLE = /^(text\/|application\/(json|javascript|xml)|image\/svg\+xm
 
 export function compress(req: Request, res: Response, next: NextFunction): void {
   if (req.method === 'HEAD') { next(); return; }
+  // Sync batch returns an already-compressed ZIP — skip compression entirely
+  if (req.path === '/api/sync/batch') { next(); return; }
   const ae = (req.headers['accept-encoding'] as string | undefined) ?? '';
   if (!ae.includes('gzip')) { next(); return; }
 

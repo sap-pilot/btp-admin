@@ -152,10 +152,10 @@ export function getAutoSubaccountRefreshMs(): number {
 const DEFAULT_INTERNAL_IP_WHITELIST = '';
 
 /**
- * Returns CIDRs for internal/private network ranges always allowed on sync endpoints.
+ * Returns additional CIDRs allowed on sync endpoints beyond the built-in RFC 1918 ranges.
+ * RFC 1918 private ranges (10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16) are always included
+ * automatically in requireSyncAuth — use this only to add further peer-specific CIDRs.
  * SYNC_INTERNAL_IP_WHITELIST env var takes precedence over config.variables entry.
- * Defaults to RFC 1918 private ranges: 192.168.0.0/16, 10.0.0.0/8, 172.16.0.0/12.
- * Set to empty string to disable.
  */
 export function getSyncInternalIpWhitelist(): string[] {
   const raw = process.env.SYNC_INTERNAL_IP_WHITELIST ?? getConfig().variables?.['SYNC_INTERNAL_IP_WHITELIST'] ?? DEFAULT_INTERNAL_IP_WHITELIST;
@@ -174,6 +174,21 @@ export function getSyncNoIpProtection(): boolean {
  */
 export function getSyncWhitelistIPs(): string[] {
   const raw = process.env.SYNC_WHITELIST_IPS ?? getConfig().variables?.['SYNC_WHITELIST_IPS'] ?? '';
+  return String(raw).split(',').map(s => s.trim()).filter(Boolean);
+}
+
+/** Returns true when AOD_NO_IP_PROTECTION is set to "true" or "1". */
+export function getAodNoIpProtection(): boolean {
+  const raw = process.env.AOD_NO_IP_PROTECTION ?? getConfig().variables?.['AOD_NO_IP_PROTECTION'];
+  return raw === 'true' || raw === '1';
+}
+
+/**
+ * Returns extra IPs/CIDRs to whitelist for AOD proxy requests in addition to BTP egress IPs.
+ * AOD_WHITELIST_IPS env var (comma-separated) takes precedence over config.variables entry.
+ */
+export function getAodWhitelistIPs(): string[] {
+  const raw = process.env.AOD_WHITELIST_IPS ?? getConfig().variables?.['AOD_WHITELIST_IPS'] ?? '';
   return String(raw).split(',').map(s => s.trim()).filter(Boolean);
 }
 

@@ -33,6 +33,7 @@ export interface SubaccountEntry {
   manageDestinations: boolean;
   useAOD:             boolean;
   manageRoles:        boolean;
+  viewAuditLogs?:     boolean;
   /** Runtime-only flag set by server when org ID or subaccount ID is in RESTRICTED_ORG_IDS. */
   restricted?:        boolean;
   org?: {
@@ -65,10 +66,10 @@ interface Props {
   onOpenDetail:      (sa: SubaccountEntry) => void;
 }
 
-// col idx:        0    1    2    3    4    5    6    7   8   9   10  11   12   13   14
-//                grip  rgn  sub  ga   sa   org  grp  al  hm  dt  rol sub  svc s-dst s-aod
-const INIT_WIDTHS = [28,  65,  95, 160, 195, 145, 110, 85, 42, 42,  44,  44, 44,  44,  44];
-const MIN_WIDTHS  = [28,  40,  55,  90, 110,  80,  55, 45, 32, 32,  32,  32, 32,  32,  32];
+// col idx:        0    1    2    3    4    5    6    7   8   9   10  11   12   13   14   15
+//                grip  rgn  sub  ga   sa   org  grp  al  hm aud  dt  rol sub  svc s-dst s-aod
+const INIT_WIDTHS = [28,  65,  95, 160, 195, 145, 110, 85, 42, 42,  42,  44,  44, 44,  44,  44];
+const MIN_WIDTHS  = [28,  40,  55,  90, 110,  80,  55, 45, 32, 32,  32,  32,  32, 32,  32,  32];
 
 function updateSa(data: SubaccountEntry[], subaccountId: string, patch: Partial<SubaccountEntry>): SubaccountEntry[] {
   return data.map(s => s.subaccountId === subaccountId ? { ...s, ...patch } : s);
@@ -76,11 +77,11 @@ function updateSa(data: SubaccountEntry[], subaccountId: string, patch: Partial<
 
 function toggleAllColumn(
   data:    SubaccountEntry[],
-  field:   'inHomepage' | 'manageDestinations' | 'manageRoles',
+  field:   'inHomepage' | 'viewAuditLogs' | 'manageDestinations' | 'manageRoles',
   checked: boolean,
 ): SubaccountEntry[] {
   return data.map(sa => {
-    if (field !== 'inHomepage' && sa.restricted) return sa;
+    if (field !== 'inHomepage' && field !== 'viewAuditLogs' && sa.restricted) return sa;
     return { ...sa, [field]: checked };
   });
 }
@@ -140,6 +141,7 @@ export default function SubaccountsTable({
   const eligibleRoles = data.filter(sa => !sa.restricted);
 
   const allHome  = data.length > 0  && data.every(sa => sa.inHomepage);
+  const allAudit = data.length > 0  && data.every(sa => sa.viewAuditLogs);
   const allDest  = eligibleDest.length > 0  && eligibleDest.every(sa => sa.manageDestinations);
   const allRoles = eligibleRoles.length > 0 && eligibleRoles.every(sa => sa.manageRoles);
 
@@ -345,34 +347,41 @@ export default function SubaccountsTable({
                 <div className={rszHdl} onMouseDown={e => { e.stopPropagation(); startResize(e, 8); }} />
               </th>
               <th className={`${thCls} text-center cursor-pointer select-none hover:bg-muted/60 transition-colors`}
+                onClick={() => onChange(toggleAllColumn(data, 'viewAuditLogs', !allAudit))}
+                title={allAudit ? 'Uncheck all Audit' : 'Check all Audit — view audit logs'}
+              >
+                Audit
+                <div className={rszHdl} onMouseDown={e => { e.stopPropagation(); startResize(e, 9); }} />
+              </th>
+              <th className={`${thCls} text-center cursor-pointer select-none hover:bg-muted/60 transition-colors`}
                 onClick={() => onChange(toggleAllColumn(data, 'manageDestinations', !allDest))}
                 title={allDest ? 'Uncheck all Dest' : 'Check all Dest'}
               >
                 Dest
-                <div className={rszHdl} onMouseDown={e => { e.stopPropagation(); startResize(e, 9); }} />
+                <div className={rszHdl} onMouseDown={e => { e.stopPropagation(); startResize(e, 10); }} />
               </th>
               <th className={`${thCls} text-center cursor-pointer select-none hover:bg-muted/60 transition-colors`}
                 onClick={() => onChange(toggleAllColumn(data, 'manageRoles', !allRoles))}
                 title={allRoles ? 'Uncheck all Roles' : 'Check all Roles'}
               >
                 Roles
-                <div className={rszHdl} onMouseDown={e => { e.stopPropagation(); startResize(e, 10); }} />
+                <div className={rszHdl} onMouseDown={e => { e.stopPropagation(); startResize(e, 11); }} />
               </th>
               <th className={`${thCls} text-center`}>
                 Sub
-                <div className={rszHdl} onMouseDown={e => startResize(e, 11)} />
+                <div className={rszHdl} onMouseDown={e => startResize(e, 12)} />
               </th>
               <th className={`${thCls} text-center`}>
                 Svc
-                <div className={rszHdl} onMouseDown={e => startResize(e, 12)} />
+                <div className={rszHdl} onMouseDown={e => startResize(e, 13)} />
               </th>
               <th className={`${thCls} text-center`} title="Managed Destination Spaces — number of CF spaces with manageDest=true">
                 S-Dst
-                <div className={rszHdl} onMouseDown={e => startResize(e, 13)} />
+                <div className={rszHdl} onMouseDown={e => startResize(e, 14)} />
               </th>
               <th className={`${thCls} text-center`} title="Application on Demand Spaces — number of CF spaces with aod=true">
                 S-AOD
-                <div className={rszHdl} onMouseDown={e => startResize(e, 14)} />
+                <div className={rszHdl} onMouseDown={e => startResize(e, 15)} />
               </th>
             </tr>
           </thead>
@@ -452,6 +461,12 @@ export default function SubaccountsTable({
                       className="cursor-pointer" />
                   </td>
                   <td className={`${tdCls} text-center`}>
+                    <input type="checkbox" checked={sa.viewAuditLogs ?? false}
+                      onChange={e => onChange(updateSa(data, sa.subaccountId, { viewAuditLogs: e.target.checked }))}
+                      className="cursor-pointer"
+                      title="View audit logs for this subaccount" />
+                  </td>
+                  <td className={`${tdCls} text-center`}>
                     <input type="checkbox" checked={sa.manageDestinations}
                       onChange={e => onChange(updateSa(data, sa.subaccountId, { manageDestinations: e.target.checked }))}
                       className={sa.restricted ? 'cursor-not-allowed opacity-40' : 'cursor-pointer'}
@@ -496,7 +511,7 @@ export default function SubaccountsTable({
             })}
             {filtered.length === 0 && (
               <tr>
-                <td colSpan={15} className="px-4 py-8 text-center text-xs text-muted-foreground">
+                <td colSpan={16} className="px-4 py-8 text-center text-xs text-muted-foreground">
                   {isFiltered ? 'No subaccounts match the filter.' : 'No subaccounts. Click Refresh to fetch from BTP.'}
                 </td>
               </tr>

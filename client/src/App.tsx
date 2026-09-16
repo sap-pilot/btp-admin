@@ -10,6 +10,7 @@ const DestinationOverview    = lazy(() => import('@/pages/destination/Destinatio
 const RoleCollectionsOverview = lazy(() => import('@/pages/rcs/RoleCollectionsOverview'));
 const UsersOverview           = lazy(() => import('@/pages/users/UsersOverview'));
 const AppsPage                = lazy(() => import('@/pages/apps/AppsPage'));
+const AuditLogPage            = lazy(() => import('@/pages/audit/AuditLogPage'));
 
 
 interface EBState { error: Error | null }
@@ -90,6 +91,8 @@ export default function App() {
               <Route path="/users/:region/:subdomain" element={<UsersOverview />} />
               <Route path="/users/:region/:subdomain/:origin/:email" element={<UsersOverview />} />
               <Route path="/users/:region/:subdomain/:origin/:email/:userTab" element={<UsersOverview />} />
+              <Route path="/audit-logs" element={<AuditLogPage />} />
+              <Route path="/audit-logs/:region/:subdomain" element={<AuditLogPage />} />
               <Route path="/subaccount/:region/:subdomain" element={<ConfigPage />} />
               <Route path="/services/:region/:subdomain" element={<ConfigPage />} />
               <Route path="/config" element={<Navigate to="/config/orgs" replace />} />

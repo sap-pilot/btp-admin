@@ -1,6 +1,6 @@
 {
   "name": "btp-admin-server",
-  "version": "1.8.0",
+  "version": "1.9.0",
   "private": true,
   "type": "module",
   "main": "dist/index.js",
@@ -11,12 +11,14 @@
     "lint": "tsc --noEmit",
     "typecheck": "tsc --noEmit",
     "postinstall": "PLAYWRIGHT_BROWSERS_PATH=./pw-browsers npx playwright install chromium",
-    "test": "node --test dist/**/*.test.js 2>/dev/null || echo 'No tests'"
+    "test": "tsc && LOCAL_STORE_DIR=/tmp/btp-admin-test node --test 'dist/**/*.test.js'",
+    "test:e2e": "npm run build && playwright test --config=../playwright.config.ts"
   },
   "dependencies": {
     "express": "^5.2.1",
     "pino": "^10.3.1",
-    "playwright": "^1.62.0"
+    "playwright": "^1.62.0",
+    "undici": "^8.9.0"
   },
   "devDependencies": {
     "@types/express": "^5.0.6",

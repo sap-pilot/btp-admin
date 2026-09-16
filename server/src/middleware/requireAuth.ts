@@ -3,19 +3,22 @@ import { createHmac, timingSafeEqual } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { getXsuaaConfig, readSessionFromRequest } from '../services/authService.js';
 import type { SessionPayload } from '../services/authService.js';
-import { getSyncKey, getSyncNoIpProtection, getSyncWhitelistIPs, getSyncInternalIpWhitelist } from '../services/configService.js';
+import { getSyncKey, getSyncNoIpProtection, getSyncWhitelistIPs, getSyncInternalIpWhitelist, getAodNoIpProtection, getAodWhitelistIPs } from '../services/configService.js';
 import { config } from '../config.js';
 import { logger } from '../logger.js';
 
 /**
  * Resolve the true client IP for a request.
- * On SAP BTP Cloud Foundry, the GoRouter injects x-cf-true-client-ip with the
- * real caller IP before forwarding the request. When present, use it; otherwise
- * fall back to the socket-level IP (req.ip / remoteAddress).
+ * On SAP BTP Cloud Foundry, the GoRouter injects x-cf-true-client-ip and strips any
+ * client-supplied copy of that header — so it is trustworthy only when running on CF
+ * (VCAP_APPLICATION present). In other environments (local dev, Docker, custom deploys)
+ * the header can be forged by the caller, so we fall back to the socket-level IP.
  */
 export function getClientIp(req: Request): string {
-  const header = req.headers['x-cf-true-client-ip'];
-  if (typeof header === 'string' && header.trim()) return header.trim();
+  if (process.env.VCAP_APPLICATION) {
+    const header = req.headers['x-cf-true-client-ip'];
+    if (typeof header === 'string' && header.trim()) return header.trim();
+  }
   return req.ip ?? req.socket.remoteAddress ?? '';
 }
 
@@ -53,6 +56,9 @@ function isIpAllowed(rawIp: string, list: string[]): boolean {
   const ip = normalizeIp(rawIp);
   return list.some(entry => ipMatchesCidr(ip, entry));
 }
+
+// RFC 1918 private IP ranges — always permitted for CF internal / container-to-container traffic
+const CF_PRIVATE_CIDRS = ['10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16'];
 
 // Lazy-loaded from ./config/btp-endpoints.json (relative to server CWD) — cached for process lifetime
 let _btpEgressIPs: string[] | null = null;
@@ -123,7 +129,7 @@ export function requireSyncAuth(req: Request, res: Response, next: NextFunction)
   // IP whitelist: when btp-endpoints.json is present and SYNC_NO_IP_PROTECTION is not set,
   // only allow IPs from BTP egress ranges plus SYNC_WHITELIST_IPS.
   if (!getSyncNoIpProtection()) {
-    const whitelist = [...getBtpEgressIPs(), ...getSyncWhitelistIPs(), ...getSyncInternalIpWhitelist()];
+    const whitelist = [...getBtpEgressIPs(), ...getSyncWhitelistIPs(), ...getSyncInternalIpWhitelist(), ...CF_PRIVATE_CIDRS];
     if (whitelist.length > 0) {
       if (!isIpAllowed(ip, whitelist)) {
         logger.warn({ ip, path: req.path },
@@ -172,6 +178,29 @@ export function requireSessionGlobal(req: Request, res: Response, next: NextFunc
   if (!x) { next(); return; }
   const session = readSessionFromRequest(req.headers.cookie ?? '', x.clientsecret);
   if (!session) { res.status(401).json({ error: 'Authentication required' }); return; }
+  next();
+}
+
+/**
+ * Guards the /aod proxy endpoint.
+ * Allows loopback (local dev), AOD_NO_IP_PROTECTION=true, or IPs in the BTP egress list
+ * plus any AOD_WHITELIST_IPS. When btp-endpoints.json is absent and no whitelist is set,
+ * the check is a no-op (same behaviour as sync IP filtering).
+ */
+export function requireAodIpFilter(req: Request, res: Response, next: NextFunction): void {
+  if (getAodNoIpProtection()) { next(); return; }
+
+  const ip = getClientIp(req);
+  if (ip === '127.0.0.1' || ip === '::1' || ip === '::ffff:127.0.0.1') { next(); return; }
+
+  const whitelist = [...getBtpEgressIPs(), ...getAodWhitelistIPs(), ...CF_PRIVATE_CIDRS];
+  if (whitelist.length > 0 && !isIpAllowed(ip, whitelist)) {
+    logger.warn({ ip, path: req.path },
+      'AOD request blocked: IP not in BTP egress whitelist — set AOD_NO_IP_PROTECTION=true to disable, or add to AOD_WHITELIST_IPS');
+    res.status(403).json({ error: 'Forbidden: request origin is not in the allowed whitelist' });
+    return;
+  }
+
   next();
 }
 

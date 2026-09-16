@@ -147,78 +147,26 @@ Every sync request carries `x-sync-ts` and `x-sync-sig: HMAC-SHA256(timestamp, S
 To pull files from a producer whose `SYNC_KEY` no longer matches yours:
 
 ```bash
-cf set-env btp-status-producer SYNC_PROTECTION_OFF true
-cf restart btp-status-producer
+cf set-env btp-admin SYNC_PROTECTION_OFF true
+cf restart btp-admin
 # ... complete initial sync on the consumer ...
-cf unset-env btp-status-producer SYNC_PROTECTION_OFF
-cf restart btp-status-producer
+cf unset-env btp-admin SYNC_PROTECTION_OFF
+cf restart btp-admin
 ```
 
 ### Sync IP Whitelisting
 
-When `server/config/btp-endpoints.json` is present, sync endpoints reject requests from IPs not in SAP BTP's published egress ranges (unless `SYNC_NO_IP_PROTECTION` is set).
+When `server/config/btp-endpoints.json` is present, sync endpoints (and the `/aod` proxy) reject requests from IPs not in SAP BTP's published egress ranges. The same file is bundled into the sidecar WAR at build time.
 
-**Generate `btp-endpoints.json`:**
-
-1. Download the SAP CF endpoints CSV from the [SAP Help Portal](https://help.sap.com/docs/btp/sap-business-technology-platform/regions-and-api-endpoints-available-for-cloud-foundry-environment) → **Download → CSV → Download all data on all pages**
-2. Run:
-   ```bash
-   npm run parse-btp-endpoints ~/Downloads/sap-cf-endpoints.csv
-   ```
-
-IP whitelisting is only active when at least one entry is contributed by `btp-endpoints.json`, `SYNC_WHITELIST_IPS`, or `SYNC_INTERNAL_IP_WHITELIST`. HMAC authentication is enforced independently.
+See [Security → `btp-endpoints.json`](security.md#btp-endpointsjson) for how to generate or update the file, and for the full IP filtering reference (variables, bypass flags, CIDR support).
 
 ---
 
 ## Authentication & Authorization
 
-By default the app runs without authentication — all endpoints and admin controls are publicly accessible. When a **XSUAA** service binding is present (`VCAP_SERVICES` contains an `xsuaa` entry), the app switches into authenticated mode automatically.
+See [Security → Authentication & Authorization](security.md#authentication--authorization) for session cookie details, protected routes, role collections, and BTP XSUAA setup.
 
-Authentication follows the **OAuth2 Authorization Code flow** via a browser popup — no `@sap/approuter`. Everything uses `node:crypto` and the Node.js standard library.
-
-### Session Cookie
-
-| Property | Value |
-|----------|-------|
-| Name | `btpauth` |
-| Signing | HMAC-SHA256 (key = XSUAA `clientsecret`); verified with `timingSafeEqual` |
-| HttpOnly | Yes |
-| Secure | Yes on BTP (`VCAP_APPLICATION` present); omitted for local HTTP dev |
-| SameSite | Lax |
-
-### Role Collections
-
-Two role collections are created automatically on first deploy:
-
-| Role Collection | Access |
-|-----------------|--------|
-| **BTP Admin** | Full admin access — Config page, Subaccounts Refresh, Destinations, Role Collections, Users, AOD, Variables settings |
-| **BTP Status Admin** | Write access to status page eval mode and schedule overrides |
-
-After deploying to BTP, assign role collections in **BTP Cockpit → Security → Role Collections**:
-- Assign **BTP Admin** to all users who should manage subaccounts, destinations, role collections, and users
-- Assign **BTP Status Admin** to users who should control health-check eval mode and schedules
-
-### Protected Routes
-
-| Route | Guard |
-|-------|-------|
-| `GET /api/check/:name` | Auth required |
-| `POST /api/sync` | Auth required |
-| `GET /api/view?path=…` | Auth required |
-| `POST /api/eval-mode/:name` | Admin required |
-| `POST /api/schedule/:name` | Admin required |
-| `GET /api/sync/browse` | HMAC sync only |
-| `POST /api/sync/batch` | HMAC sync only |
-| `GET /api/sync/trigger` | HMAC sync only |
-
-All read-only data endpoints and static assets are public regardless of auth state.
-
-### BTP Setup
-
-XSUAA is already wired in `mta.yaml` and `xs-security.json` (committed to the repo). On first deploy BTP provisions the service instance automatically — no manual steps needed beyond assigning role collections to users.
-
-When `VCAP_SERVICES` is not set (local dev), all auth middleware passes through — no login required and all controls remain fully active.
+See [Security → API Endpoint Protection Overview](security.md#api-endpoint-protection-overview) for a full table of which endpoints are protected by which mechanism.
 
 ---
 
@@ -344,6 +292,125 @@ The pre-built `sidecar/btp-admin-sidecar.war` is committed to the repository. Yo
    ```
 
 > `sidecar/sapjco3.jar` is in `.gitignore` — SAP JCo license prohibits redistribution. The `libsapjco3.so` native library is supplied by the buildpack at runtime.
+
+---
+
+## Testing
+
+### Running tests
+
+```bash
+# All tests (client + server)
+npm test
+
+# Server only (compiles TypeScript first, then runs tests)
+npm test --workspace=server
+
+# Client only
+npm test --workspace=client
+```
+
+The server test script runs `tsc` before executing tests — a compile step is always required because test files must be built to `server/dist/` before `node --test` can run them.
+
+### Running a single test file
+
+```bash
+# Server: compile first, then target one file
+cd server && npx tsc && node --test dist/services/authService.test.js
+
+# Client: tsx handles TypeScript directly, no compile step needed
+cd client && tsx --test src/lib/parseFilename.test.ts
+```
+
+### What is covered
+
+**Server unit tests** (`server/src/`):
+
+| File | Feature |
+|------|---------|
+| `services/authService.test.ts` | HMAC session signing/verification, token cache, `readSessionFromRequest`, `userLabel` |
+| `middleware/requireAuth.test.ts` | `getClientIp`, `requireSyncAuth` (IP filter + HMAC), `requireAodIpFilter` |
+| `services/configService.test.ts` | `loadConfig` variable substitution, `getRestrictedIds`, `getSyncExcludes`, `getSyncKey`, refresh intervals |
+| `services/variablesService.test.ts` | 4-level override chain (settings > env > blob > file), `maskIfSensitive`, `getEffectiveDefault` |
+| `services/status/conditionEvaluator.test.ts` | `[STATUS]`, `[RESPONSE_TIME]`, `[BODY]`, `[HEADER.x]`, `len([BODY])`, `pat()`, parse errors |
+
+**Server integration tests** (use a fake BTP/CF HTTP server + fetch interception):
+
+| File | Feature |
+|------|---------|
+| `services/cfLoginService.test.ts` | CF token acquisition, `getOrRefreshToken`, org/space listing per region |
+| `services/btpCliService.test.ts` | BTP CLI login, `btpListGlobalAccounts`, `btpListSubaccounts`, `btpListEnvInstances` |
+| `services/subaccountsService.test.ts` | `refreshSubaccounts` end-to-end: subaccounts.json written, orgs/spaces included, concurrent skip |
+| `services/appService.test.ts` | `scanSubaccountApps` against fake CF, app file persistence, URL from CF routes |
+
+The fake server (`server/src/test-helpers/fakeBtpCfServer.ts`) mimics BTP CLI, CF v3 API, XSUAA, and Destination Service endpoints. The fetch interceptor (`interceptFetch.ts`) redirects all `https://` calls to the fake server so production code needs no changes.
+
+**Client tests** (`client/src/lib/`):
+
+| File | Feature |
+|------|---------|
+| `lib/parseFilename.test.ts` | New and old history filename formats, status code validation, `.starred` flag |
+| `lib/utils.test.ts` | `cn()` class merging (clsx + tailwind-merge), conflict resolution, falsy values |
+
+### Playwright E2E tests
+
+E2E tests run a real Express server against the fake BTP/CF API server, then drive a headless Chromium browser through the full UI.
+
+```bash
+# Build client + run all E2E tests
+npm run test:e2e
+
+# Run a specific spec file
+cd server && npm run build && PLAYWRIGHT_BROWSERS_PATH=./pw-browsers npx playwright test --config=../playwright.config.ts e2e/config.spec.ts
+```
+
+**How it works:**
+
+1. `playwright.config.ts` runs `e2e/globalSetup.ts` before any tests.
+2. `globalSetup` starts the fake BTP/CF server on port 3998 and seeds `/tmp/btp-e2e-test/` with one subaccount, destination, app, role collection, and user.
+3. `playwright.config.ts` starts `server/dist/testServer.js` (the real Express app with `FAKE_API_PORT=3998` set), which installs the fetch interceptor before any Express service modules load.
+4. Playwright spec files (`e2e/*.spec.ts`) navigate the browser against `http://localhost:3099` and assert on rendered content.
+
+**E2E spec files:**
+
+| File | What is tested |
+|------|---------------|
+| `e2e/config.spec.ts` | Config/orgs page shows subaccount name, subdomain, GA name, region |
+| `e2e/destinations.spec.ts` | Destinations overview loads; per-SA page shows `TestDest`; search works |
+| `e2e/apps.spec.ts` | Apps overview loads; per-SA page shows seeded `my-app` as STARTED |
+| `e2e/rcs.spec.ts` | Role collections overview loads; per-SA page shows `TestRC` |
+| `e2e/users.spec.ts` | Users overview loads; per-SA page shows `alice@example.com` |
+
+### Troubleshooting tests
+
+**`Cannot find module` after editing a server test file**
+
+The server runs compiled JS, not TypeScript directly. Re-run `tsc` (or `npm test --workspace=server`, which compiles automatically):
+
+```bash
+cd server && npx tsc
+```
+
+**`not ok — Cannot find module '…/conditionEvaluator.js'`**
+
+Stale compiled file at the wrong dist path. Delete and recompile:
+
+```bash
+rm -f server/dist/services/conditionEvaluator.test.js
+cd server && npx tsc
+```
+
+**`Error: Cannot find module 'tsx/esm'`**
+
+`tsx` is installed in `server/devDependencies` and hoisted by npm workspaces. Run `npm install` from the repo root to ensure it is present:
+
+```bash
+npm install
+```
+
+**Test reads real `server/config.json` instead of test fixture**
+
+Server tests set `process.env.CONFIG_JSON` in `beforeEach` to provide an isolated config. If a test calls `getVar` or `getSyncKey` before the `beforeEach` runs (e.g. at module import time), the module-level cache in `variablesService` or `configService` may be seeded from the real file. Ensure `loadConfig()` is called in `beforeEach` after setting `CONFIG_JSON`.
 
 ---
 

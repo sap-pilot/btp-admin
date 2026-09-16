@@ -40,10 +40,29 @@ public class SidecarServlet extends HttpServlet {
     private volatile String    xsuaaClientId;
     private volatile PublicKey xsuaaPublicKey;
 
+    // BTP egress IPs loaded from WEB-INF/btp-endpoints.json at servlet init
+    private List<String> btpEgressIps = Collections.emptyList();
+    private static final boolean AOD_NO_IP_PROTECTION =
+        "true".equals(System.getenv("AOD_NO_IP_PROTECTION")) || "1".equals(System.getenv("AOD_NO_IP_PROTECTION"));
+
     // ─── Init ─────────────────────────────────────────────────────────────────────
 
     @Override
     public void init() {
+        // Load BTP egress IPs for IP filtering
+        try (InputStream is = getServletContext().getResourceAsStream("/WEB-INF/btp-endpoints.json")) {
+            if (is != null) {
+                byte[] buf = is.readAllBytes();
+                String json = new String(buf, StandardCharsets.UTF_8);
+                btpEgressIps = Collections.unmodifiableList(parseBtpEgressIps(json));
+                System.out.println("[Sidecar] BTP egress IP whitelist loaded: " + btpEgressIps.size() + " IPs");
+            } else {
+                System.out.println("[Sidecar] btp-endpoints.json not found — AOD IP filtering inactive");
+            }
+        } catch (Exception e) {
+            System.err.println("[Sidecar] WARNING: failed to load btp-endpoints.json: " + e);
+        }
+
         String vcap = System.getenv("VCAP_SERVICES");
         if (vcap == null) return;
         try {
@@ -64,6 +83,97 @@ public class SidecarServlet extends HttpServlet {
         } catch (Exception e) {
             System.err.println("[Sidecar] WARNING: XSUAA init failed: " + e);
         }
+    }
+
+    // ─── IP filtering ─────────────────────────────────────────────────────────────
+
+    /** Parses all egressIPs IPv4 addresses from btp-endpoints.json. */
+    private static List<String> parseBtpEgressIps(String json) {
+        List<String> ips = new ArrayList<>();
+        int pos = 0;
+        while ((pos = json.indexOf("\"egressIPs\"", pos)) >= 0) {
+            int colon = json.indexOf(':', pos + 11);
+            if (colon < 0) break;
+            int brace = -1;
+            for (int i = colon + 1; i < json.length(); i++) {
+                if (json.charAt(i) == '{') { brace = i; break; }
+            }
+            if (brace < 0) break;
+            String block = extractBraceBlock(json, brace);
+            if (block == null) break;
+            // Extract all quoted IPv4 strings from the block
+            int bi = 0;
+            while (bi < block.length()) {
+                int q = block.indexOf('"', bi);
+                if (q < 0) break;
+                int end = block.indexOf('"', q + 1);
+                if (end < 0) break;
+                String candidate = block.substring(q + 1, end);
+                if (candidate.matches("\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}")) {
+                    ips.add(candidate);
+                }
+                bi = end + 1;
+            }
+            pos = brace + 1;
+        }
+        return ips;
+    }
+
+    // RFC 1918 private IP ranges — always permitted for CF internal / container-to-container traffic
+    private static final String[] CF_PRIVATE_CIDRS = { "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16" };
+
+    private static String normalizeIp(String ip) {
+        if (ip == null) return "";
+        ip = ip.trim();
+        return ip.startsWith("::ffff:") ? ip.substring(7) : ip;
+    }
+
+    private static boolean isLoopback(String ip) {
+        return "127.0.0.1".equals(ip) || "::1".equals(ip) || "0:0:0:0:0:0:0:1".equals(ip);
+    }
+
+    private static long ipToLong(String ip) {
+        String[] parts = ip.split("\\.");
+        if (parts.length != 4) return -1L;
+        long n = 0;
+        for (String p : parts) {
+            try {
+                int b = Integer.parseInt(p);
+                if (b < 0 || b > 255) return -1L;
+                n = (n << 8) | b;
+            } catch (NumberFormatException e) { return -1L; }
+        }
+        return n;
+    }
+
+    private static boolean matchesCidr(String ip, String cidr) {
+        int slash = cidr.indexOf('/');
+        if (slash < 0) return ip.equals(cidr);
+        String base = cidr.substring(0, slash);
+        int bits;
+        try { bits = Integer.parseInt(cidr.substring(slash + 1)); } catch (NumberFormatException e) { return false; }
+        long mask = bits == 0 ? 0L : (~0L << (32 - bits)) & 0xFFFFFFFFL;
+        long ipNum   = ipToLong(ip)   & 0xFFFFFFFFL;
+        long baseNum = ipToLong(base) & 0xFFFFFFFFL;
+        return ipToLong(ip) >= 0 && ipToLong(base) >= 0 && (ipNum & mask) == (baseNum & mask);
+    }
+
+    private static boolean isPrivateIp(String ip) {
+        for (String cidr : CF_PRIVATE_CIDRS) {
+            if (matchesCidr(ip, cidr)) return true;
+        }
+        return false;
+    }
+
+    /** Returns true if the request IP is allowed by the BTP egress whitelist or RFC 1918 ranges. */
+    private boolean isAodIpAllowed(HttpServletRequest req) {
+        if (AOD_NO_IP_PROTECTION) return true;
+        String raw = req.getHeader("X-Cf-True-Client-Ip");
+        if (raw == null || raw.isEmpty()) raw = req.getRemoteAddr();
+        String ip = normalizeIp(raw);
+        if (isLoopback(ip) || isPrivateIp(ip)) return true;
+        if (btpEgressIps.isEmpty()) return true;
+        return btpEgressIps.contains(ip);
     }
 
     // ─── Routing ─────────────────────────────────────────────────────────────────
@@ -104,6 +214,13 @@ public class SidecarServlet extends HttpServlet {
 
     private void handleTestRfc(HttpServletRequest req, HttpServletResponse resp) throws IOException {
         PrintWriter w = resp.getWriter();
+
+        // IP filtering — only BTP egress IPs may call the sidecar
+        if (!isAodIpAllowed(req)) {
+            resp.setStatus(403);
+            w.write("{\"ok\":false,\"error\":\"Forbidden\",\"detail\":\"Request origin IP not in BTP egress whitelist\",\"source\":\"auth\"}");
+            return;
+        }
 
         // Read body
         StringBuilder sb = new StringBuilder();

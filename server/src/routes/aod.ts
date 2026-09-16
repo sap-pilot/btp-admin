@@ -5,7 +5,7 @@ import { getAnalytics, getRequests, getTopApps, getTopUsers, recordAodRequest } 
 import { join } from 'node:path';
 import type { Request, Response, NextFunction } from 'express';
 import { Router } from 'express';
-import { requireAdmin } from '../middleware/requireAuth.js';
+import { requireAdmin, getClientIp } from '../middleware/requireAuth.js';
 import { config } from '../config.js';
 import { logger } from '../logger.js';
 import { getOrRefreshToken } from '../services/cfLoginService.js';
@@ -282,10 +282,12 @@ export async function aodProxyHandler(req: Request, res: Response, next: NextFun
   const t0       = Date.now();
   const appUrl   = req.headers['x-aod-app-url'];
   const appId    = req.headers['x-aod-app-id'];
-  // x-forwarded-for is a CSV of IPs added by each proxy; take the first (original client)
-  const fwdRaw   = req.headers['x-forwarded-for'] ?? req.headers['x_forwarded_for'] ?? req.ip ?? '';
-  const fwdStr   = Array.isArray(fwdRaw) ? (fwdRaw[0] ?? '') : fwdRaw;
-  const clientIp = fwdStr.split(',')[0]?.trim() ?? '';
+  // clientIp: authoritative caller IP used for filtering and access logging.
+  // On CF, x-cf-true-client-ip is the CF internal service IP (Workzone/dest service), not the
+  // browser user's IP — use x-forwarded-for[0] for geo lookup to get the actual user location.
+  const clientIp = getClientIp(req);
+  const xff      = req.headers['x-forwarded-for'];
+  const geoIp    = (typeof xff === 'string' ? xff.split(',')[0] : undefined)?.trim() || clientIp;
 
   if (!appUrl || typeof appUrl !== 'string' || !appId || typeof appId !== 'string') {
     res.status(400).json({ ok: false, error: 'Missing x-aod-app-url or x-aod-app-id headers' });
@@ -301,7 +303,7 @@ export async function aodProxyHandler(req: Request, res: Response, next: NextFun
   const userId = extractUserId(req);
 
   // Start geo lookup early so it can run concurrently with the app check / proxy
-  const geoPromise = lookupGeo(clientIp);
+  const geoPromise = lookupGeo(geoIp);
 
   // Strip /aod prefix and reconstruct target URL
   const strippedPath = req.path.startsWith('/aod') ? (req.path.slice(4) || '/') : req.path;
@@ -331,7 +333,8 @@ export async function aodProxyHandler(req: Request, res: Response, next: NextFun
       void updateAppFileState(appId, region, subdomain, 'STARTED');
     }
 
-    // Build proxy headers — strip host and x-aod-* only.
+    // Build proxy headers — strip host, x-aod-*, and the btpauth session cookie so the
+    // upstream CF app cannot read or replay this server's session credentials.
     // content-length is forwarded as-is: express.raw() captured the exact client bytes so the
     // original value is correct. accept-encoding is forwarded as-is: for 2xx we pipe raw bytes
     // so the client handles decompression itself; for errors we buffer and strip content-encoding.
@@ -340,8 +343,15 @@ export async function aodProxyHandler(req: Request, res: Response, next: NextFun
       const lk = k.toLowerCase();
       if (lk === 'host') continue;
       if (lk.startsWith('x-aod-')) continue;
-      if (typeof v === 'string') proxyHeaders[k] = v;
-      else if (Array.isArray(v)) proxyHeaders[k] = v.join(', ');
+      const raw = typeof v === 'string' ? v : Array.isArray(v) ? v.join(', ') : undefined;
+      if (!raw) continue;
+      if (lk === 'cookie') {
+        // Strip the btpauth session cookie — never forward server credentials to upstream apps
+        const stripped = raw.replace(/(?:^|;\s*)btpauth=[^;]*/g, '').replace(/^[\s;]+|[\s;]+$/g, '');
+        if (stripped) proxyHeaders[k] = stripped;
+      } else {
+        proxyHeaders[k] = raw;
+      }
     }
 
     const hasBody = req.method !== 'GET' && req.method !== 'HEAD';
