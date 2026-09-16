@@ -1,8 +1,9 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useParams } from 'react-router';
 import { Loader2, PanelLeft, RefreshCw, ScrollText, Search, X } from 'lucide-react';
 import { useSidebar } from '@/components/AppLayout';
 import SubaccountModal from '@/components/SubaccountModal';
+import DateRangePicker from '@/components/DateRangePicker';
 import type { SubaccountEntry } from '@/components/config/SubaccountsTable';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -362,19 +363,27 @@ function SaBarChart({ data, onSaClick }: { data: SaBarEntry[]; onSaClick?: (regi
 
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
-const ALL_DURATIONS = [
+const BASE_DURATIONS = [
   { label: 'Last 7 Days',  value: 7  },
   { label: 'Last 14 Days', value: 14 },
   { label: 'Last 30 Days', value: 30 },
   { label: 'Last 60 Days', value: 60 },
 ];
 
+function toYMD(d: Date): string {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
 export default function AuditLogPage() {
   const { toggle, collapsed } = useSidebar();
   const { region: urlRegion, subdomain: urlSubdomain } = useParams<{ region?: string; subdomain?: string }>();
   const [keyword,         setKeyword]         = useState(() => { try { return new URLSearchParams(window.location.search).get('q') ?? ''; } catch { return ''; } });
   const [committed,       setCommitted]       = useState(() => { try { return new URLSearchParams(window.location.search).get('q') ?? ''; } catch { return ''; } });
-  const [duration,        setDuration]        = useState(() => { try { const v = parseInt(new URLSearchParams(window.location.search).get('duration') ?? '', 10); return ALL_DURATIONS.some(d => d.value === v) ? v : 30; } catch { return 30; } });
+  const [duration,        setDuration]        = useState(() => { try { const v = parseInt(new URLSearchParams(window.location.search).get('duration') ?? '', 10); return v > 0 ? v : 30; } catch { return 30; } });
+  const [isCustomRange,   setIsCustomRange]   = useState(() => { try { const sp = new URLSearchParams(window.location.search); return !!(sp.get('from') && sp.get('to')); } catch { return false; } });
+  const [customFrom,      setCustomFrom]      = useState(() => { try { return new URLSearchParams(window.location.search).get('from') ?? ''; } catch { return ''; } });
+  const [customTo,        setCustomTo]        = useState(() => { try { return new URLSearchParams(window.location.search).get('to') ?? ''; } catch { return ''; } });
+  const [datePickerOpen,  setDatePickerOpen]  = useState(false);
   const [progress,        setProgress]        = useState<ProgressState | null>(null);
   const [stats,           setStats]           = useState<AuditHourStat[]>([]);
   const [saSizes,         setSaSizes]         = useState<Record<string, number>>({});
@@ -430,18 +439,35 @@ export default function AuditLogPage() {
     return () => { evs.close(); };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  async function fetchData(kwOvr?: string, catsOvr?: Set<string>, fromOvr?: string, toOvr?: string) {
+  const dynamicDurations = useMemo(() => {
+    const base = BASE_DURATIONS.filter(d => maxAuditDays <= 0 || d.value <= maxAuditDays);
+    if (maxAuditDays > 0 && !BASE_DURATIONS.some(d => d.value === maxAuditDays)) {
+      return [...base, { label: `Last ${maxAuditDays} Days`, value: maxAuditDays }];
+    }
+    return base;
+  }, [maxAuditDays]);
+
+  async function fetchData(kwOvr?: string, catsOvr?: Set<string>, fromOvr?: string, toOvr?: string, customFromOvr?: string, customToOvr?: string, isCustomOvr?: boolean) {
     setLoading(true);
     try {
-      const useKw   = kwOvr   !== undefined ? kwOvr   : committed;
-      const useCats = catsOvr !== undefined ? catsOvr : selectedCats;
-      const useFrom = fromOvr !== undefined ? fromOvr : chartFrom;
-      const useTo   = toOvr   !== undefined ? toOvr   : chartTo;
-      const params = new URLSearchParams({ duration: String(duration) });
+      const useKw        = kwOvr        !== undefined ? kwOvr        : committed;
+      const useCats      = catsOvr      !== undefined ? catsOvr      : selectedCats;
+      const useChartFrom = fromOvr      !== undefined ? fromOvr      : chartFrom;
+      const useChartTo   = toOvr        !== undefined ? toOvr        : chartTo;
+      const useCustFrom  = customFromOvr !== undefined ? customFromOvr : customFrom;
+      const useCustTo    = customToOvr   !== undefined ? customToOvr   : customTo;
+      const useIsCustom  = isCustomOvr   !== undefined ? isCustomOvr   : isCustomRange;
+
+      let params: URLSearchParams;
+      if (useIsCustom && useCustFrom && useCustTo) {
+        params = new URLSearchParams({ from: useCustFrom, to: useCustTo });
+      } else {
+        params = new URLSearchParams({ duration: String(duration) });
+      }
       if (useKw.trim()) params.set('q', useKw.trim());
       const latestParams = new URLSearchParams(params);
-      if (useFrom) latestParams.set('from', useFrom);
-      if (useTo)   latestParams.set('to',   useTo);
+      if (useChartFrom) latestParams.set('from', useChartFrom);
+      if (useChartTo)   latestParams.set('to',   useChartTo);
       if (useCats.size > 0 && useCats.size < ALL_OVERVIEW_CATS.size) {
         latestParams.set('categories', [...useCats].join(','));
       }
@@ -460,7 +486,7 @@ export default function AuditLogPage() {
     }
   }
 
-  useEffect(() => { void fetchData(); }, [duration]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { if (!isCustomRange) void fetchData(); }, [duration, isCustomRange]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     fetch('/api/config/subaccounts')
@@ -469,16 +495,21 @@ export default function AuditLogPage() {
       .catch(() => { /* ignore */ });
   }, []);
 
-  // Keep the overview URL in sync with the current keyword + duration so a refresh
+  // Keep the overview URL in sync with the current keyword + duration/range so a refresh
   // restores both. Skipped while the modal is open — AuditLogTab manages the URL then.
   useEffect(() => {
     if (urlRegion || urlSubdomain || modalSa) return;
     const params = new URLSearchParams();
     if (committed.trim()) params.set('q', committed.trim());
-    if (duration !== 30)  params.set('duration', String(duration));
+    if (isCustomRange && customFrom && customTo) {
+      params.set('from', customFrom);
+      params.set('to', customTo);
+    } else if (duration !== 30) {
+      params.set('duration', String(duration));
+    }
     const qs = params.toString();
     history.replaceState(null, '', qs ? `/audit-logs?${qs}` : '/audit-logs');
-  }, [committed, duration, modalSa, urlRegion, urlSubdomain]);
+  }, [committed, duration, isCustomRange, customFrom, customTo, modalSa, urlRegion, urlSubdomain]);
 
   // Auto-open the subaccount modal when the URL contains /audit-logs/{region}/{subdomain}.
   // AuditLogTab reads ?q= from window.location.search on mount, so the keyword is
@@ -499,8 +530,8 @@ export default function AuditLogPage() {
         setMaxAuditDays(m);
         if (m > 0) setDuration(d => {
           if (d <= m) return d;
-          const opts = [7, 14, 30, 60].filter(v => v <= m);
-          return opts.length > 0 ? opts[opts.length - 1]! : m;
+          const opts = BASE_DURATIONS.filter(v => v.value <= m);
+          return opts.length > 0 ? opts[opts.length - 1]!.value : m;
         });
       })
       .catch(() => { /* ignore */ });
@@ -607,9 +638,21 @@ export default function AuditLogPage() {
             </span>
           )}
         </div>
-        <select value={duration} onChange={e => setDuration(Number(e.target.value))}
+        <select
+          value={isCustomRange ? 'custom' : String(duration)}
+          onChange={e => {
+            const v = e.target.value;
+            if (v === 'custom') { setDatePickerOpen(true); return; }
+            setIsCustomRange(false);
+            setCustomFrom('');
+            setCustomTo('');
+            setDuration(Number(v));
+          }}
           className="h-8 px-2 text-xs border border-border rounded bg-background focus:outline-none focus:ring-1 focus:ring-ring">
-          {ALL_DURATIONS.filter(d => maxAuditDays <= 0 || d.value <= maxAuditDays).map(d => <option key={d.value} value={d.value}>{d.label}</option>)}
+          {dynamicDurations.map(d => <option key={d.value} value={d.value}>{d.label}</option>)}
+          {isCustomRange
+            ? <option value="custom">{customFrom} – {customTo}</option>
+            : <option value="custom">Custom Date Range…</option>}
         </select>
         <button onClick={() => void handleRefresh()} disabled={isRefreshing}
           className="inline-flex items-center gap-1.5 h-8 px-3 rounded text-xs font-medium border border-border hover:bg-accent hover:text-accent-foreground transition-colors disabled:opacity-50"
@@ -789,16 +832,30 @@ export default function AuditLogPage() {
         )}
       </div>
 
+      {/* Custom date range picker */}
+      <DateRangePicker
+        open={datePickerOpen}
+        onClose={() => setDatePickerOpen(false)}
+        onApply={(from, until) => {
+          setIsCustomRange(true);
+          setCustomFrom(from);
+          setCustomTo(until);
+          void fetchData(undefined, undefined, undefined, undefined, from, until, true);
+        }}
+        fromDate={isCustomRange && customFrom ? customFrom : toYMD(new Date(Date.now() - 30 * 86400000))}
+        untilDate={isCustomRange && customTo ? customTo : toYMD(new Date())}
+        maxStorageDays={maxAuditDays > 0 ? maxAuditDays : 90}
+        noteVariableName="MAX_AUDIT_LOG_STORAGE_DAYS"
+      />
+
       {/* Subaccount modal opened from SA header click — inherits chart selection and categories */}
       {modalSa && (
         <SubaccountModal
           sa={modalSa}
           onClose={() => {
             setModalSa(null);
-            if (savedOverviewUrl.current) {
-              history.replaceState(null, '', savedOverviewUrl.current);
-              savedOverviewUrl.current = null;
-            }
+            history.replaceState(null, '', savedOverviewUrl.current ?? '/audit-logs');
+            savedOverviewUrl.current = null;
           }}
           isAdmin={true}
           initialTab="audit"

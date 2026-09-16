@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Search, ChevronLeft, ChevronRight, X, Loader2, RefreshCw, Download } from 'lucide-react';
+import { Search, ChevronLeft, ChevronRight, X, Loader2, RefreshCw, Download, Square } from 'lucide-react';
 import type { SubaccountEntry } from '@/components/config/SubaccountsTable';
 
 interface AuditHourStat {
@@ -99,6 +99,12 @@ function HighlightText({ text, keywords }: { text: string; keywords: string[] })
 // ─── Mini area chart ──────────────────────────────────────────────────────────
 
 const CHART_COLORS = ['#3b82f6', '#f59e0b', '#a855f7', '#22c55e', '#64748b'] as const;
+
+function fmtY(v: number): string {
+  if (v >= 1_000_000) return `${+(v / 1_000_000).toFixed(1)}m`;
+  if (v >= 1_000)     return `${+(v / 1_000).toFixed(1)}k`;
+  return String(Math.round(v));
+}
 
 interface MiniChartProps {
   stats:    AuditHourStat[];
@@ -218,6 +224,20 @@ function MiniAuditChart({ stats, from, to, onSelect }: MiniChartProps) {
           <rect x={dragSel.x1} y={pt} width={Math.max(dragSel.x2 - dragSel.x1, 2)} height={cH}
             fill="white" fillOpacity={0.25} stroke="white" strokeOpacity={0.8} strokeWidth={1} />
         )}
+        {/* Y axis */}
+        <line x1={pl} y1={pt} x2={pl} y2={pt + cH} stroke="currentColor" strokeOpacity={0.12} strokeWidth={1} />
+        {([maxTotal, maxTotal / 2] as const).map((v, i) => {
+          const y = yOf(v);
+          return (
+            <g key={i}>
+              <line x1={pl} y1={y} x2={pl + 4} y2={y} stroke="currentColor" strokeOpacity={0.25} strokeWidth={1} />
+              <text x={pl + 6} y={i === 0 ? pt + 8 : y + 3}
+                textAnchor="start" fontSize={7} fill="currentColor" opacity={0.45}>
+                {fmtY(Math.round(v))}
+              </text>
+            </g>
+          );
+        })}
         {/* X axis */}
         <line x1={pl} y1={pt + cH} x2={pl + cW} y2={pt + cH} stroke="currentColor" strokeOpacity={0.15} strokeWidth={1} />
         {xTicks.map(({ idx, label }) => (
@@ -262,7 +282,8 @@ export default function AuditLogTab({ sa, initialFrom, initialTo, initialCategor
   const [saProgress,   setSaProgress]   = useState<{ page: number; lastTime: string; pct?: number } | null>(null);
   const [exporting,    setExporting]    = useState(false);
   const [exportWarn,   setExportWarn]   = useState<{ message: string; fileCount: number; sizeBytes: number } | null>(null);
-  const evsRef = useRef<EventSource | null>(null);
+  const evsRef             = useRef<EventSource | null>(null);
+  const refreshStartRef    = useRef<number | null>(null);
 
   async function load(p = page, cats = selectedCats, fromOvr?: string, toOvr?: string, kwOvr?: string, limitOvr?: number) {
     const useFrom  = fromOvr  !== undefined ? fromOvr  : from;
@@ -295,7 +316,7 @@ export default function AuditLogTab({ sa, initialFrom, initialTo, initialCategor
 
   async function fetchChartStats(cats = selectedCats) {
     try {
-      const params = new URLSearchParams({ duration: '90' });
+      const params = new URLSearchParams({ duration: '365' });
       const cp = catsParam(cats);
       if (cp) params.set('categories', cp);
       const res = await fetch(`/api/audit-log/stats/${encodeURIComponent(sa.region)}/${encodeURIComponent(sa.subdomain)}?${params}`);
@@ -377,6 +398,7 @@ export default function AuditLogTab({ sa, initialFrom, initialTo, initialCategor
 
   async function handleSaRefresh() {
     if (saRefreshing) return;
+    refreshStartRef.current = Date.now();
     setSaRefreshing(true);
     setSaProgress({ page: 0, lastTime: '' });
 
@@ -491,11 +513,20 @@ export default function AuditLogTab({ sa, initialFrom, initialTo, initialCategor
           {exporting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Download className="h-3.5 w-3.5" />}
         </button>
 
-        {/* Refresh button — triggers delta sync with Audit Log API */}
-        <button onClick={() => void handleSaRefresh()} disabled={loading || saRefreshing} title="Retrieve latest logs from Audit Log API"
-          className="inline-flex items-center justify-center h-7 w-7 rounded border border-border hover:bg-accent hover:text-accent-foreground transition-colors disabled:opacity-50">
-          {saRefreshing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
-        </button>
+        {/* Refresh / Stop button */}
+        {saRefreshing ? (
+          <button
+            onClick={() => void fetch(`/api/audit-log/refresh/${encodeURIComponent(sa.region)}/${encodeURIComponent(sa.subdomain)}/stop`, { method: 'POST' })}
+            title="Stop refresh — partial records will be saved"
+            className="inline-flex items-center justify-center h-7 w-7 rounded border border-destructive text-destructive hover:bg-destructive hover:text-destructive-foreground transition-colors">
+            <Square className="h-3.5 w-3.5" />
+          </button>
+        ) : (
+          <button onClick={() => void handleSaRefresh()} disabled={loading} title="Retrieve latest logs from Audit Log API"
+            className="inline-flex items-center justify-center h-7 w-7 rounded border border-border hover:bg-accent hover:text-accent-foreground transition-colors disabled:opacity-50">
+            <RefreshCw className="h-3.5 w-3.5" />
+          </button>
+        )}
       </div>
 
       {/* SA refresh progress */}
@@ -509,7 +540,20 @@ export default function AuditLogTab({ sa, initialFrom, initialTo, initialCategor
             <span className="text-xs text-muted-foreground">
               Retrieving logs from Audit Log API
               {saProgress && saProgress.page > 0
-                ? ` — page ${saProgress.page}${saProgress.lastTime ? ` · ${saProgress.lastTime}` : ''}${saProgress.pct != null ? ` (${saProgress.pct}%)` : ''}`
+                ? (() => {
+                    const pct = saProgress.pct ?? 0;
+                    const pageStr = ` — page ${saProgress.page}${saProgress.lastTime ? ` · ${saProgress.lastTime}` : ''}`;
+                    const pctStr  = pct > 0 ? ` (${pct.toFixed(2)}%` : '';
+                    let etaStr = '';
+                    if (pct >= 0.5 && refreshStartRef.current) {
+                      const elapsedMs  = Date.now() - refreshStartRef.current;
+                      const remainMs   = (elapsedMs / (pct / 100)) - elapsedMs;
+                      if (remainMs < 60_000)         etaStr = ' · < 1 min';
+                      else if (remainMs < 3_600_000) etaStr = ` · est. ${Math.round(remainMs / 60_000)} min`;
+                      else                           etaStr = ` · est. ${(remainMs / 3_600_000).toFixed(1)} hrs`;
+                    }
+                    return pct > 0 ? `${pageStr}${pctStr}${etaStr})` : pageStr;
+                  })()
                 : '…'}
             </span>
           </div>
@@ -619,16 +663,12 @@ export default function AuditLogTab({ sa, initialFrom, initialTo, initialCategor
                 className="inline-flex items-center h-6 px-1.5 rounded text-xs border border-border hover:bg-accent disabled:opacity-40">
                 <ChevronLeft className="h-3.5 w-3.5" />
               </button>
-              {Array.from({ length: Math.min(pages, 9) }, (_, idx) => {
-                let p = idx + 1;
-                if (pages > 9) { const start = Math.max(1, Math.min(page - 4, pages - 8)); p = start + idx; }
-                return (
-                  <button key={p} onClick={() => goPage(p)}
-                    className={`inline-flex items-center justify-center h-6 w-6 rounded text-xs border transition-colors ${
-                      p === page ? 'bg-primary text-primary-foreground border-primary' : 'border-border hover:bg-accent'
-                    }`}>{p}</button>
-                );
-              })}
+              <input
+                type="number" min={1} max={pages} defaultValue={page} key={page}
+                className="h-6 w-14 rounded border border-border bg-background px-1.5 text-center text-xs [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+                onKeyDown={e => { if (e.key === 'Enter') { const v = parseInt((e.target as HTMLInputElement).value, 10); if (v >= 1 && v <= pages) goPage(v); } }}
+              />
+              <span className="text-xs text-muted-foreground">/ {pages}</span>
               <button onClick={() => goPage(page + 1)} disabled={page >= pages}
                 className="inline-flex items-center h-6 px-1.5 rounded text-xs border border-border hover:bg-accent disabled:opacity-40">
                 <ChevronRight className="h-3.5 w-3.5" />

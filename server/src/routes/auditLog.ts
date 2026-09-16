@@ -7,7 +7,7 @@ import { randomBytes } from 'node:crypto';
 import { requireAdmin } from '../middleware/requireAuth.js';
 import {
   refreshAuditLogs, isAuditRefreshRunning,
-  refreshSubaccountAuditLogs, isSaAuditRefreshRunning,
+  refreshSubaccountAuditLogs, isSaAuditRefreshRunning, stopSubaccountAuditLogRefresh,
   getAuditStats, getAuditSaStats, getAuditRecords, getLatestAuditEntries,
   getAuditLogDir,
 } from '../services/auditLogService.js';
@@ -47,15 +47,25 @@ router.post('/refresh/:region/:subdomain', requireAdmin, (req, res) => {
   res.json({ ok: true, started: true });
 });
 
+// POST /api/audit-log/refresh/:region/:subdomain/stop — stop an in-progress single-SA refresh (admin only)
+router.post('/refresh/:region/:subdomain/stop', requireAdmin, (req, res) => {
+  const { region, subdomain } = req.params as { region: string; subdomain: string };
+  stopSubaccountAuditLogRefresh(region, subdomain);
+  logger.info({ region, subdomain }, 'Single-SA audit log refresh stop requested via API');
+  res.json({ ok: true });
+});
+
 // GET /api/audit-log/stats?duration=30&q=keyword&categories=... — hourly chart data derived from filenames
 router.get('/stats', requireAdmin, async (req, res, next) => {
   const t0 = Date.now();
   try {
     const duration   = parseInt(typeof req.query['duration'] === 'string' ? req.query['duration'] : '30', 10);
     const keyword    = typeof req.query['q']          === 'string' && req.query['q']          ? req.query['q']          : undefined;
+    const from       = typeof req.query['from'] === 'string' && req.query['from'] ? req.query['from'] : undefined;
+    const to         = typeof req.query['to']   === 'string' && req.query['to']   ? req.query['to']   : undefined;
     const categories = parseCategoriesParam(typeof req.query['categories'] === 'string' ? req.query['categories'] : undefined);
-    const { stats, warnings, saSizes } = await getAuditStats(Math.min(Math.max(duration, 1), 90), keyword);
-    logger.debug({ duration, keyword, categories: categories ? [...categories] : undefined, durationMs: Date.now() - t0 }, 'audit-log/stats');
+    const { stats, warnings, saSizes } = await getAuditStats(Math.min(Math.max(duration, 1), 365), keyword, from, to);
+    logger.debug({ duration, from, to, keyword, categories: categories ? [...categories] : undefined, durationMs: Date.now() - t0 }, 'audit-log/stats');
     res.json({ ok: true, stats, warnings, saSizes });
   } catch (err) { next(err); }
 });
@@ -69,7 +79,7 @@ router.get('/latest', requireAdmin, async (req, res, next) => {
     const from       = typeof req.query['from'] === 'string' && req.query['from'] ? req.query['from'] : undefined;
     const to         = typeof req.query['to']   === 'string' && req.query['to']   ? req.query['to']   : undefined;
     const categories = parseCategoriesParam(typeof req.query['categories'] === 'string' ? req.query['categories'] : undefined);
-    const entries    = await getLatestAuditEntries(Math.min(Math.max(duration, 1), 90), keyword, from, to, categories);
+    const entries    = await getLatestAuditEntries(Math.min(Math.max(duration, 1), 365), keyword, from, to, categories);
     logger.debug({ duration, keyword, from, to, categories: categories ? [...categories] : undefined, durationMs: Date.now() - t0 }, 'audit-log/latest');
     res.json({ ok: true, entries });
   } catch (err) { next(err); }
