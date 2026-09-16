@@ -1,5 +1,5 @@
 import { existsSync } from 'node:fs';
-import { mkdir, readdir, readFile, rename, stat, unlink, utimes, writeFile } from 'node:fs/promises';
+import { mkdir, readdir, readFile, rename, rm, stat, unlink, utimes, writeFile } from 'node:fs/promises';
 import { join, sep } from 'node:path';
 import { homedir } from 'node:os';
 import { execFile } from 'node:child_process';
@@ -1739,7 +1739,14 @@ export async function refreshSpaceDestinations(
         deleted += activeCount;
         logger.info({ spaceKey, instance: instEnt.name, count: activeCount }, 'Destination service instance removed from CF — folder renamed to .deleted');
       } catch (err) {
-        logger.warn({ spaceKey, instance: instEnt.name, err }, 'Failed to rename removed instance folder to .deleted');
+        if ((err as NodeJS.ErrnoException).code === 'EEXIST') {
+          await rm(deletedDirPath, { recursive: true, force: true });
+          await rename(instanceDir, deletedDirPath);
+          deleted += activeCount;
+          logger.info({ spaceKey, instance: instEnt.name, count: activeCount }, 'Destination service instance removed from CF — overwrote existing .deleted folder');
+        } else {
+          logger.warn({ spaceKey, instance: instEnt.name, err }, 'Failed to rename removed instance folder to .deleted');
+        }
       }
     }
   }
@@ -1762,7 +1769,13 @@ export async function refreshSpaceDestinations(
         await rename(spaceDir, deletedPath);
         logger.info({ location: `${sa.region}/${sa.subdomain}/${spaceEnt.name}` }, 'Space no longer manageDest — folder renamed to .deleted');
       } catch (err) {
-        logger.warn({ location: `${sa.region}/${sa.subdomain}/${spaceEnt.name}`, err }, 'Failed to rename removed space folder to .deleted');
+        if ((err as NodeJS.ErrnoException).code === 'EEXIST') {
+          await rm(deletedPath, { recursive: true, force: true });
+          await rename(spaceDir, deletedPath);
+          logger.info({ location: `${sa.region}/${sa.subdomain}/${spaceEnt.name}` }, 'Space no longer manageDest — overwrote existing .deleted folder');
+        } else {
+          logger.warn({ location: `${sa.region}/${sa.subdomain}/${spaceEnt.name}`, err }, 'Failed to rename removed space folder to .deleted');
+        }
       }
     }
   }

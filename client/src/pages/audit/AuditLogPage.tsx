@@ -5,6 +5,7 @@ import { useSidebar } from '@/components/AppLayout';
 import SubaccountModal from '@/components/SubaccountModal';
 import DateRangePicker from '@/components/DateRangePicker';
 import type { SubaccountEntry } from '@/components/config/SubaccountsTable';
+import type { CockpitMenuItem } from '@/components/home/HomepageContent';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -80,16 +81,10 @@ function previewMessage(msg: unknown): string {
   return typeof obj === 'string' ? obj : JSON.stringify(obj);
 }
 
-function formatExpanded(msg: unknown): string {
-  let obj: unknown = msg;
-  if (typeof obj === 'string') {
-    const raw = obj;
-    try { obj = JSON.parse(obj); } catch { return raw; }
-  }
-  if (obj !== null && typeof obj === 'object') {
-    return JSON.stringify(obj, null, 2);
-  }
-  return typeof obj === 'string' ? obj : JSON.stringify(obj, null, 2);
+function fullDetail(r: AuditRecord): string {
+  let msg: unknown = r.message;
+  if (typeof msg === 'string') { try { msg = JSON.parse(msg); } catch { /* keep as string */ } }
+  return JSON.stringify({ ...r, message: msg }, null, 2);
 }
 
 function categoryColor(cat: string): string {
@@ -396,6 +391,8 @@ export default function AuditLogPage() {
   const [maxAuditDays,    setMaxAuditDays]    = useState(0);
   const [allSubaccounts,  setAllSubaccounts]  = useState<SubaccountEntry[]>([]);
   const [modalSa,         setModalSa]         = useState<SubaccountEntry | null>(null);
+  const [cockpit,         setCockpit]         = useState<{ idp: string; host: string }>({ idp: '', host: '' });
+  const [cockpitMenu,     setCockpitMenu]     = useState<CockpitMenuItem | null>(null);
   const [selectedCats,    setSelectedCats]    = useState<Set<string>>(() => new Set(ALL_OVERVIEW_CATS));
   const [expandedRows,    setExpandedRows]    = useState<Set<string>>(() => new Set());
   const [chartFrom,       setChartFrom]       = useState('');
@@ -534,6 +531,14 @@ export default function AuditLogPage() {
           return opts.length > 0 ? opts[opts.length - 1]!.value : m;
         });
       })
+      .catch(() => { /* ignore */ });
+    fetch('/api/settings')
+      .then(r => r.json() as Promise<{ ok: boolean; data: { homepage?: { cockpit?: { idp: string; host: string } } } }>)
+      .then(j => { if (j.ok) setCockpit(j.data?.homepage?.cockpit ?? { idp: '', host: '' }); })
+      .catch(() => { /* ignore */ });
+    fetch('/api/config/cockpit-menu')
+      .then(r => r.json() as Promise<CockpitMenuItem | null>)
+      .then(j => { if (j) setCockpitMenu(j); })
       .catch(() => { /* ignore */ });
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -805,7 +810,7 @@ export default function AuditLogPage() {
                             <td className="px-3 py-1 border-b border-border/50 min-w-0 align-top">
                               {isExp ? (
                                 <pre className="text-[11px] font-mono whitespace-pre-wrap break-all">
-                                  <HighlightText text={formatExpanded(r.message)} keywords={keywords} />
+                                  <HighlightText text={fullDetail(r)} keywords={keywords} />
                                 </pre>
                               ) : (
                                 <div className="text-[11px] text-muted-foreground/80 font-mono line-clamp-2 break-all">
@@ -858,6 +863,8 @@ export default function AuditLogPage() {
             savedOverviewUrl.current = null;
           }}
           isAdmin={true}
+          cockpit={cockpit}
+          cockpitMenu={cockpitMenu}
           initialTab="audit"
           subaccounts={allSubaccounts}
           onSelectSubaccount={s => setModalSa(s)}
