@@ -23,6 +23,10 @@ export function isRefreshRunning(): boolean  { return refreshRunning; }
 export function getCachedTopApps(): SubaccountTopApps[] { return topAppsCache ?? []; }
 export function invalidateTopAppsCache(): void { topAppsCache = null; }
 
+export async function getAppsLastRefreshedMs(): Promise<number | null> {
+  try { return (await stat(join(APPS_DIR, 'stats.csv'))).mtimeMs; } catch { return null; }
+}
+
 export async function refreshTopAppsAndNotify(): Promise<void> {
   try { topAppsCache = await buildTopApps(); } catch { /* keep stale */ }
   emitImmediate('aod-apps', { type: 'app-state-changed' });

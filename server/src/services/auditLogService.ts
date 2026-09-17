@@ -1192,3 +1192,25 @@ export async function pruneObsoleteAuditLogDirs(): Promise<number> {
   }
   return deleted;
 }
+
+export async function getAuditLastRefreshedMs(): Promise<number | null> {
+  const base = join(config.LOCAL_STORE_DIR, 'audit-log');
+  let maxMs: number | null = null;
+  let regions: string[];
+  try { regions = await readdir(base); } catch { return null; }
+  for (const region of regions) {
+    let subdomains: string[];
+    try { subdomains = await readdir(join(base, region)); } catch { continue; }
+    for (const subdomain of subdomains) {
+      let files: string[];
+      try { files = await readdir(join(base, region, subdomain)); } catch { continue; }
+      for (const file of files) {
+        try {
+          const ms = (await stat(join(base, region, subdomain, file))).mtimeMs;
+          if (maxMs === null || ms > maxMs) maxMs = ms;
+        } catch { /* ignore */ }
+      }
+    }
+  }
+  return maxMs;
+}

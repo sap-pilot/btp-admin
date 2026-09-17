@@ -532,6 +532,10 @@ export default function AuditLogPage() {
         });
       })
       .catch(() => { /* ignore */ });
+    fetch('/api/audit-log/status')
+      .then(r => r.json() as Promise<{ ok: boolean; lastRefreshedMs?: number | null }>)
+      .then(j => { if (j.ok && j.lastRefreshedMs) setLastRefreshTime(prev => (prev === null || j.lastRefreshedMs! > prev) ? j.lastRefreshedMs! : prev); })
+      .catch(() => { /* ignore */ });
     fetch('/api/settings')
       .then(r => r.json() as Promise<{ ok: boolean; data: { homepage?: { cockpit?: { idp: string; host: string } } } }>)
       .then(j => { if (j.ok) setCockpit(j.data?.homepage?.cockpit ?? { idp: '', host: '' }); })
@@ -617,7 +621,7 @@ export default function AuditLogPage() {
           <span className="text-sm font-semibold leading-tight">Audit Log</span>
           {lastRefreshTime !== null && (
             <span className="text-[10px] text-muted-foreground/50 leading-tight">
-              Refreshed: {new Date(lastRefreshTime).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' })}
+              Updated at {new Date(lastRefreshTime).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' })}
             </span>
           )}
         </div>

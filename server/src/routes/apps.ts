@@ -1,13 +1,14 @@
 import { Router } from 'express';
-import { scanApps, getStatsData, getLatestStats, isRefreshRunning, getTopAppsPerSubaccount, getCachedTopApps, getSubaccountApps, searchApps, updateAppFileState, refreshTopAppsAndNotify, scanSubaccountApps } from '../services/appService.js';
+import { scanApps, getStatsData, getLatestStats, isRefreshRunning, getTopAppsPerSubaccount, getCachedTopApps, getSubaccountApps, searchApps, updateAppFileState, refreshTopAppsAndNotify, scanSubaccountApps, getAppsLastRefreshedMs } from '../services/appService.js';
 import { requireAdmin } from '../middleware/requireAuth.js';
 import { logger } from '../logger.js';
 import { getOrRefreshToken } from '../services/cfLoginService.js';
 
 const router = Router();
 
-router.get('/status', requireAdmin, (_req, res) => {
-  res.json({ ok: true, refreshing: isRefreshRunning() });
+router.get('/status', requireAdmin, async (_req, res) => {
+  const lastRefreshedMs = await getAppsLastRefreshedMs();
+  res.json({ ok: true, refreshing: isRefreshRunning(), lastRefreshedMs });
 });
 
 router.post('/refresh', requireAdmin, (_req, res) => {

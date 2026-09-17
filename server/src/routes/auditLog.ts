@@ -9,7 +9,7 @@ import {
   refreshAuditLogs, isAuditRefreshRunning,
   refreshSubaccountAuditLogs, isSaAuditRefreshRunning, stopSubaccountAuditLogRefresh,
   getAuditStats, getAuditSaStats, getAuditRecords, getLatestAuditEntries,
-  getAuditLogDir,
+  getAuditLogDir, getAuditLastRefreshedMs,
 } from '../services/auditLogService.js';
 import { config } from '../config.js';
 import { logger } from '../logger.js';
@@ -23,6 +23,12 @@ function parseCategoriesParam(raw: string | undefined): Set<string> | undefined 
   const cats = new Set(raw.split(',').map(s => s.trim()).filter(s => ALL_AUDIT_CATS.has(s)));
   return cats.size > 0 && cats.size < ALL_AUDIT_CATS.size ? cats : undefined;
 }
+
+// GET /api/audit-log/status
+router.get('/status', requireAdmin, async (_req, res) => {
+  const lastRefreshedMs = await getAuditLastRefreshedMs();
+  res.json({ ok: true, refreshing: isAuditRefreshRunning(), lastRefreshedMs });
+});
 
 // POST /api/audit-log/refresh — trigger background audit log refresh for all SAs (admin only)
 router.post('/refresh', requireAdmin, (_req, res) => {
