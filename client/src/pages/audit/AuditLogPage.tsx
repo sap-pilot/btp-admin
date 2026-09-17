@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useParams } from 'react-router';
-import { Loader2, PanelLeft, RefreshCw, ScrollText, Search, X } from 'lucide-react';
+import { Loader2, PanelLeft, RefreshCw, ScrollText, Search, Square, X } from 'lucide-react';
 import { useSidebar } from '@/components/AppLayout';
 import SubaccountModal from '@/components/SubaccountModal';
 import DateRangePicker from '@/components/DateRangePicker';
@@ -58,8 +58,8 @@ interface SubaccountLatest {
 }
 
 type ProgressState =
-  | { type: 'running'; current: number; total: number; alias: string; phase: string; page?: number; lastTime?: string }
-  | { type: 'done';    warnings: string[] }
+  | { type: 'running'; current: number; total: number; alias: string; phase: string; page?: number; lastTime?: string; region?: string; subdomain?: string; pct?: number; eta?: number | null }
+  | { type: 'done';    warnings: string[]; totalReceived?: number; processingTimeMs?: number }
   | { type: 'error';   error: string; warnings: string[] };
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -411,16 +411,19 @@ export default function AuditLogPage() {
         const data = JSON.parse(e.data as string) as {
           type?: string;
           current?: number; total?: number; alias?: string; phase?: string; page?: number; lastTime?: string;
+          region?: string; subdomain?: string;
+          pct?: number; eta?: number | null;
+          totalReceived?: number; processingTimeMs?: number;
           warnings?: string[]; error?: string;
         };
         if (data.type === 'audit-start') {
           setIsRefreshing(true);
           setProgress({ type: 'running', current: 0, total: data.total ?? 0, alias: '', phase: 'starting' });
         } else if (data.type === 'audit-progress') {
-          setProgress({ type: 'running', current: data.current ?? 0, total: data.total ?? 0, alias: data.alias ?? '', phase: data.phase ?? '', page: data.page, lastTime: data.lastTime });
+          setProgress({ type: 'running', current: data.current ?? 0, total: data.total ?? 0, alias: data.alias ?? '', phase: data.phase ?? '', page: data.page, lastTime: data.lastTime, region: data.region, subdomain: data.subdomain, pct: data.pct, eta: data.eta });
         } else if (data.type === 'audit-done') {
           setIsRefreshing(false);
-          setProgress({ type: 'done', warnings: data.warnings ?? [] });
+          setProgress({ type: 'done', warnings: data.warnings ?? [], totalReceived: data.totalReceived, processingTimeMs: data.processingTimeMs });
           void fetchData();
           const now = Date.now();
           setLastRefreshTime(now);
@@ -550,6 +553,10 @@ export default function AuditLogPage() {
     try { await fetch('/api/audit-log/refresh', { method: 'POST' }); } catch { /* ignore */ }
   }
 
+  async function handleStopRefresh() {
+    try { await fetch('/api/audit-log/refresh/stop', { method: 'POST' }); } catch { /* ignore */ }
+  }
+
   function toggleCat(catKey: string) {
     const next = new Set(selectedCats);
     if (next.has(catKey)) { if (next.size <= 1) return; next.delete(catKey); }
@@ -663,12 +670,21 @@ export default function AuditLogPage() {
             ? <option value="custom">{customFrom} – {customTo}</option>
             : <option value="custom">Custom Date Range…</option>}
         </select>
-        <button onClick={() => void handleRefresh()} disabled={isRefreshing}
-          className="inline-flex items-center gap-1.5 h-8 px-3 rounded text-xs font-medium border border-border hover:bg-accent hover:text-accent-foreground transition-colors disabled:opacity-50"
-          title="Refresh audit logs from BTP">
-          <RefreshCw className={`h-3.5 w-3.5 ${isRefreshing ? 'animate-spin' : ''}`} />
-          {isRefreshing ? 'Refreshing…' : 'Refresh'}
-        </button>
+        {isRefreshing ? (
+          <button onClick={() => void handleStopRefresh()}
+            className="inline-flex items-center gap-1.5 h-8 px-3 rounded text-xs font-medium border border-destructive text-destructive hover:bg-destructive hover:text-destructive-foreground transition-colors"
+            title="Stop refresh — partial records will be saved">
+            <Square className="h-3.5 w-3.5" />
+            Stop
+          </button>
+        ) : (
+          <button onClick={() => void handleRefresh()}
+            className="inline-flex items-center gap-1.5 h-8 px-3 rounded text-xs font-medium border border-border hover:bg-accent hover:text-accent-foreground transition-colors"
+            title="Refresh audit logs from BTP">
+            <RefreshCw className="h-3.5 w-3.5" />
+            Refresh
+          </button>
+        )}
       </div>
 
       {/* Progress bar */}
@@ -676,18 +692,38 @@ export default function AuditLogPage() {
         const isDone     = progress.type === 'done';
         const hasIssues  = isDone && !!progress.warnings.length;
         const isError    = progress.type === 'error';
-        const pct        = isDone || isError ? 100 : progress.total > 0 ? Math.round((Math.max(progress.current - 1, 0) / progress.total) * 100) : 0;
+        const barPct     = isDone || isError ? 100
+          : progress.pct !== undefined ? progress.pct
+          : progress.total > 0 ? Math.round((Math.max(progress.current - 1, 0) / progress.total) * 100) : 0;
         const barColor   = hasIssues || isError ? 'bg-amber-500' : isDone ? 'bg-green-500' : 'bg-primary';
         const textColor  = hasIssues || isError ? 'text-amber-600 dark:text-amber-400' : isDone ? 'text-green-600 dark:text-green-400' : 'text-foreground';
         const bgColor    = hasIssues || isError ? 'bg-amber-500/8' : isDone ? 'bg-green-500/8' : 'bg-muted/40';
+        let etaStr = '';
+        if (progress.type === 'running' && progress.eta != null) {
+          const s = progress.eta;
+          if (s < 60)        etaStr = ' — est. < 1 min';
+          else if (s < 3600) etaStr = ` — est. ${Math.round(s / 60)} min`;
+          else               etaStr = ` — est. ${(s / 3600).toFixed(1)} hrs`;
+        }
+        const latestStr = progress.type === 'running' && progress.region && progress.lastTime
+          ? ` · Latest: ${progress.region}/${progress.subdomain} — ${progress.lastTime}`
+          : '';
+        let doneTimeStr = '';
+        if (progress.type === 'done' && progress.processingTimeMs != null) {
+          const s = Math.round(progress.processingTimeMs / 1000);
+          if (s < 60)      doneTimeStr = ` in ${s}s`;
+          else if (s < 3600) doneTimeStr = ` in ${Math.floor(s / 60)}m ${s % 60}s`;
+          else               doneTimeStr = ` in ${Math.floor(s / 3600)}h ${Math.floor((s % 3600) / 60)}m`;
+        }
+        const pctStr = progress.type === 'running' && progress.pct !== undefined && progress.pct > 0 ? `, overall progress: ${progress.pct.toFixed(2)}%` : '';
         const msg = progress.type === 'running'
-          ? `Refreshing ${progress.current}/${progress.total}${progress.alias ? ` — ${progress.alias}` : ''}${progress.phase === 'fetching' && progress.page ? ` (page ${progress.page}${progress.lastTime ? ` · ${progress.lastTime}` : ''})` : ''}`
+          ? `Retrieving ${progress.total} subaccounts' audit log${pctStr}${etaStr}${latestStr}`
           : progress.type === 'done'
-            ? `Refresh complete${progress.warnings.length ? ` — ${progress.warnings.length} warning(s)` : ''}`
+            ? `Refresh complete — ${progress.totalReceived ?? 0} entries received${doneTimeStr}${progress.warnings.length ? ` · ${progress.warnings.length} warning(s)` : ''}`
             : `Error: ${progress.error}`;
         return (
           <div className={`relative shrink-0 border-b border-border ${bgColor}`}>
-            <div className="h-1 w-full"><div className={`h-full transition-all duration-300 ${barColor}`} style={{ width: `${pct}%` }} /></div>
+            <div className="h-1 w-full"><div className={`h-full transition-all duration-300 ${barColor}`} style={{ width: `${barPct}%` }} /></div>
             <div className={`px-4 py-1.5 text-xs text-center ${textColor} pr-8`}>{msg}</div>
             {hasIssues && (
               <div className="px-4 pb-2 flex flex-col gap-0.5">

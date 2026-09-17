@@ -6,7 +6,7 @@ import { spawn } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { requireAdmin } from '../middleware/requireAuth.js';
 import {
-  refreshAuditLogs, isAuditRefreshRunning,
+  refreshAuditLogs, isAuditRefreshRunning, stopAuditLogRefresh,
   refreshSubaccountAuditLogs, isSaAuditRefreshRunning, stopSubaccountAuditLogRefresh,
   getAuditStats, getAuditSaStats, getAuditRecords, getLatestAuditEntries,
   getAuditLogDir, getAuditLastRefreshedMs,
@@ -39,6 +39,12 @@ router.post('/refresh', requireAdmin, (_req, res) => {
   void refreshAuditLogs();
   logger.info('Audit log refresh triggered via API');
   res.json({ ok: true, started: true });
+});
+
+// POST /api/audit-log/refresh/stop — stop the global refresh (admin only)
+router.post('/refresh/stop', requireAdmin, (_req, res) => {
+  stopAuditLogRefresh();
+  res.json({ ok: true });
 });
 
 // POST /api/audit-log/refresh/:region/:subdomain — single-SA delta refresh (admin only)

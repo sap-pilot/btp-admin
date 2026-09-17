@@ -70,16 +70,16 @@ the `/audit-logs` page.
 
 ### All enabled subaccounts (global refresh)
 
-Click **Refresh** on the Audit Logs overview page (`/audit-logs`). A progress bar shows
-`Refreshing N/M subaccounts — alias (page P · last-timestamp)` as each subaccount is processed.
-The bar turns green on completion and amber if there were warnings (e.g. a missing service
-instance).
+Click **Refresh** on the Audit Logs overview page (`/audit-logs`). All enabled subaccounts are
+fetched **in parallel**. A progress bar shows `Refreshing N/M — alias (page P · last-timestamp) · X.XX% · est. Y min`
+as progress accumulates across all SAs. The bar turns green on completion and amber if there
+were warnings (e.g. a missing service instance).
 
 ### Single subaccount (modal refresh)
 
 Open a subaccount modal → **Audit Log** tab → click the **Refresh** icon button next to the
-subaccount name. A thin progress bar below the toolbar shows percentage completion estimated
-from how far through the time window the latest API page has reached.
+subaccount name. A thin progress bar below the toolbar shows percentage completion and an ETA
+estimated from elapsed time and current progress percentage.
 
 <!-- SCREENSHOT PLACEHOLDER: Subaccount modal Audit Log tab during a single-SA refresh.
      Show the progress bar partially filled, with page number and last-timestamp text.
@@ -208,6 +208,98 @@ The chart respects the same **duration** and **keyword** filters as the area cha
 <!-- SCREENSHOT PLACEHOLDER: Subaccount modal Audit Log tab with a search keyword entered,
      showing highlighted matches and one row expanded with full record detail.
      Capture at /config (any subaccount modal → Audit Log tab). -->
+
+---
+
+## Refresh Architecture
+
+### Parallel global refresh
+
+`refreshAuditLogs()` fetches all enabled subaccounts concurrently using `Promise.allSettled`.
+Each SA has its own OAuth token obtained from its own UAA endpoint, so their requests are
+independent and do not share a rate-limit envelope. If one SA hits HTTP 429 it backs off and
+retries without affecting the others.
+
+A shared in-memory `progressMap` (keyed by `{region}/{subdomain}`) tracks each SA's
+`processedMinutes` and `totalMinutes`. After every page fetch the global pct is recalculated:
+
+```
+globalPct = sum(all SA processedMinutes) / sum(all SA totalMinutes) * 100
+```
+
+### Multi-segment fetch per subaccount
+
+Before fetching, `buildSegments(dir)` inspects the existing hourly JSON files in the
+subaccount's local store and divides time into segments that cover only the **gaps**:
+
+1. **File discovery** — list files matching `YYYY-MM-DDTHH_*.json`, sort alphabetically
+   (= chronological).
+2. **Group detection** — files with consecutive hourKeys (gap ≤ 1 h) belong to the same group.
+   A gap larger than 1 h starts a new group.
+3. **Group boundaries** — the earliest and latest `"time"` fields are extracted from the first
+   and last file in each group respectively (regex scan, no full JSON parse).
+4. **Segment construction** — given groups G₁ … Gₙ and `maxStart = now − MAX_AUDIT_LOG_STORAGE_DAYS`:
+
+   | Segment | startTs | endTs |
+   |---|---|---|
+   | Before G₁ | `maxStart` | `G₁.startTs` |
+   | G₁ → G₂ | `G₁.endTs` | `G₂.startTs` |
+   | … | … | … |
+   | After Gₙ | `Gₙ.endTs` | `null` (open-ended) |
+
+   Segments where `startTs ≥ endTs` are discarded. There is always at least one segment
+   (the trailing open-ended one).
+
+   If no files exist the single segment is `{ startTs: maxStart, endTs: null }`.
+
+Segments are processed **sequentially** within each subaccount.  For each segment:
+- A `time_from / time_to` URL is used for page 1 (SAP returns a preview of the most recent
+  records; pct is suppressed on page 1 to avoid a false spike).
+- Subsequent pages use the `handle` from the `paging` response header.
+- The in-memory streaming buffer is flushed to disk at the end of every segment, preventing
+  records from one segment bleeding into hour files that belong to an earlier gap.
+
+### Progress calculation
+
+After each page (page 2+ within a segment) the SA-level pct is calculated as:
+
+```
+processedMinutes = completedSegmentMinutes + (lastRecordTime − currentSegment.startTs)
+totalMinutes     = Σ countMinutes(seg.startTs, seg.endTs ?? now)   [recalculated each time]
+pct              = processedMinutes / totalMinutes × 100            [2 decimal places]
+```
+
+`totalMinutes` is **dynamic** because the last segment's `endTs` is `null` (open-ended = now
+at calculation time). An ETA is displayed once pct ≥ 0.5%:
+
+```
+eta = elapsedTime / pct × 100 − elapsedTime
+```
+
+For the global refresh, the same formula applies across all SAs:
+
+```
+globalProcessedMinutes = Σ SA processedMinutes
+globalTotalMinutes     = Σ SA totalMinutes        [recalculated each time]
+globalPct              = globalProcessedMinutes / globalTotalMinutes × 100
+```
+
+### SSE event fields (new additions)
+
+| Event | New fields |
+|---|---|
+| `audit-progress` (global) | `pct`, `processedMinutes`, `totalMinutes`, `eta` (seconds \| null), `lastTime` |
+| `audit-sa-progress` (per-SA) | `processedMinutes`, `totalMinutes`, `eta` (seconds \| null) |
+
+### Logging
+
+After every API call the service emits a structured log:
+- **DEBUG** (2xx) — `region/subdomain`, `page`, `lastTime`, `pct`, `processedMinutes`, `totalMinutes`, `durationMs`
+- **WARN** (4xx) — `region/subdomain`, `status`, `durationMs`
+- **ERROR** (5xx) — `region/subdomain`, `status`, `durationMs`
+
+After `buildSegments` resolves, a DEBUG log lists all segments with UTC ISO `startTs` / `endTs`
+for each subaccount.
 
 ---
 
