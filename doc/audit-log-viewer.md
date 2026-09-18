@@ -88,6 +88,47 @@ estimated from elapsed time and current progress percentage.
 ![Audit Log Modal](img/auditlog-modal-v1.9.png)
 ---
 
+## Architecture
+
+```
+┌─────────────────────────────────┐
+│  AuditLogPage.tsx               │  /audit-logs overview
+│  AuditLogTab.tsx                │  subaccount modal tab
+└────────────┬────────────────────┘
+             │ HTTP / SSE
+             ▼
+┌─────────────────────────────────┐
+│  auditLog.ts route              │
+│  GET /api/audit-log/stats       │  chart data (counts from filenames)
+│  GET /api/audit-log/search      │  keyword search (reads file content)
+│  GET /api/audit-log/records     │  paginated records for modal tab
+│  POST /api/audit-log/refresh    │  global + single-SA refresh trigger
+└────────────┬────────────────────┘
+             │ calls
+             ▼
+┌─────────────────────────────────┐      ┌──────────────────────────────────┐
+│  auditLogService.ts             │─────▶│  localStore/audit-log/           │
+│  · getAuditLogCredentials()     │      │    {region}/{subdomain}/         │
+│  · getAuditLogToken()           │      │      YYYY-MM-DDTHH_N_N_N_N.json  │
+│  · refreshAuditLogs()           │      └──────────────────────────────────┘
+│  · refreshSubaccountAuditLogs() │
+│  · parseAndSaveRecords()        │
+└────────────┬────────────────────┘
+             │ HTTPS (Bearer, paginated)
+             ▼
+┌─────────────────────────────────┐
+│  SAP Audit Log Management API   │
+│  auditlog/v2/auditlogrecords    │
+└─────────────────────────────────┘
+```
+
+<!-- DIAGRAM PLACEHOLDER: Replace the ASCII diagram above with a rendered architecture diagram.
+     Suggested tool: draw.io / Excalidraw.
+     Show: user → AuditLogPage/AuditLogTab → auditLog.ts routes → auditLogService → local filesystem + SAP Audit Log Management API.
+     Include the CF API credential discovery path (plan → instance → service key → UAA token). -->
+
+---
+
 ## Storage Layout
 
 Audit log files are stored under `{LOCAL_STORE_DIR}/audit-log/{region}/{subdomain}/`.
@@ -151,28 +192,6 @@ dramatically reduces the output size.
 <!-- SCREENSHOT PLACEHOLDER: Subaccount modal Audit Log tab showing the Export warning banner
      (amber background) with "Export anyway" and "Cancel" buttons.
      Trigger by selecting a wide time range (e.g. 90 days) with no keywords and clicking Export. -->
-
----
-
-## Overview Charts
-
-The `/audit-logs` overview page displays two chart panels side by side.
-
-### Audit Events Over Time (left, 75 %)
-
-A stacked area chart showing hourly event counts across all enabled subaccounts. Four series are stacked (Data Access / Security / Configuration / Modification); click a series label to toggle it. Drag across the chart to select a time range — the "Latest Entries" table below filters to that window. Click **Clear selection** in the legend to reset.
-
-<!-- SCREENSHOT PLACEHOLDER: Audit Events Over Time area chart with all four series visible and one hour range selected (selection rectangle visible). Capture at /audit-logs after a refresh. -->
-
-### Events per Subaccount (right, 25 %)
-
-A stacked horizontal bar chart showing the **total** event count per subaccount for the selected duration and keyword. Each bar is split by category (Data Access = blue, Security = amber, Configuration = purple, Modification = green, Other = grey). Bar width is proportional to the maximum total across all subaccounts, so the largest subaccount fills the full panel width and smaller ones are scaled accordingly.
-
-Subaccounts are sorted by total event count (descending). Hover a segment to see the exact count for that category. If there are many subaccounts the panel scrolls internally — the panel height matches the area chart.
-
-The chart respects the same **duration** and **keyword** filters as the area chart: when a keyword is active, counts reflect only matching records (sourced from the keyword-filtered grep results, not filename counts).
-
-<!-- SCREENSHOT PLACEHOLDER: Events per Subaccount bar chart panel showing 4–6 subaccounts with coloured bar segments and count labels. Capture at /audit-logs with the bar chart panel visible on the right. -->
 
 ---
 
@@ -300,54 +319,6 @@ After every API call the service emits a structured log:
 
 After `buildSegments` resolves, a DEBUG log lists all segments with UTC ISO `startTs` / `endTs`
 for each subaccount.
-
----
-
-## Architecture
-
-```
-┌─────────────────────────────────┐
-│  SAP Audit Log Management API   │
-│  auditlog/v2/auditlogrecords    │
-└────────────┬────────────────────┘
-             │ HTTPS (Bearer, paginated)
-             ▼
-┌─────────────────────────────────┐
-│  auditLogService.ts             │
-│  · getAuditLogCredentials()     │  ←── CF API: plan GUID → instance → key
-│  · getAuditLogToken()           │  ←── UAA: client_credentials grant
-│  · refreshAuditLogs()           │  global refresh (all enabled SAs)
-│  · refreshSubaccountAuditLogs() │  single-SA refresh (SSE progress)
-│  · parseAndSaveRecords()        │  merge + dedupe per-hour files
-└────────────┬────────────────────┘
-             │ writes
-             ▼
-┌─────────────────────────────────┐
-│  localStore/audit-log/          │
-│    {region}/{subdomain}/        │
-│      YYYY-MM-DDTHH_N_N_N_N.json│
-└─────────────────────────────────┘
-             │ reads
-             ▼
-┌─────────────────────────────────┐
-│  auditLog.ts route              │
-│  GET /api/audit-log/stats       │  chart data (counts from filenames)
-│  GET /api/audit-log/search      │  keyword search (reads file content)
-│  GET /api/audit-log/records     │  paginated records for modal tab
-│  POST /api/audit-log/refresh    │  global + single-SA refresh trigger
-└─────────────────────────────────┘
-             │ SSE
-             ▼
-┌─────────────────────────────────┐
-│  AuditLogPage.tsx               │  /audit-logs overview
-│  AuditLogTab.tsx                │  subaccount modal tab
-└─────────────────────────────────┘
-```
-
-<!-- DIAGRAM PLACEHOLDER: Replace the ASCII diagram above with a rendered architecture diagram.
-     Suggested tool: draw.io / Excalidraw.
-     Show: Audit Log Management API → auditLogService → local filesystem → REST routes → React pages.
-     Include the CF API credential discovery path (plan → instance → service key → UAA token). -->
 
 ---
 
