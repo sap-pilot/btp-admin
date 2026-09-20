@@ -99,6 +99,7 @@ router.get('/latest', requireAdmin, async (req, res, next) => {
 
 // GET /api/audit-log/range/:region/:subdomain — actual earliest/latest {time} from first and last audit log files
 router.get('/range/:region/:subdomain', requireAdmin, async (req, res, next) => {
+  const t0 = Date.now();
   try {
     const { region, subdomain } = req.params as { region: string; subdomain: string };
     const AUDIT_FILE_RE = /^\d{4}-\d{2}-\d{2}T\d{2}_.+\.json$/;
@@ -109,9 +110,9 @@ router.get('/range/:region/:subdomain', requireAdmin, async (req, res, next) => 
 
     if (!files.length) { res.json({ ok: true, earliest: '', latest: '' }); return; }
 
-    // Scan a file line-by-line for "time" fields without a full JSON parse.
-    // Returns min and max time strings found in the file.
-    async function scanTimes(filepath: string): Promise<{ min: string; max: string }> {
+    // Scan a file for "time" fields without a full JSON parse.
+    // Returns min and max time strings found, or null if the file has no records.
+    async function scanTimes(filepath: string): Promise<{ min: string; max: string } | null> {
       const content = await readFile(filepath, 'utf-8').catch(() => '');
       let min = '', max = '';
       for (const line of content.split('\n')) {
@@ -122,7 +123,7 @@ router.get('/range/:region/:subdomain', requireAdmin, async (req, res, next) => 
           if (!max || t > max) max = t;
         }
       }
-      return { min, max };
+      return min ? { min, max } : null;
     }
 
     // Convert a UTC ISO timestamp to datetime-local format (YYYY-MM-DDTHH:mm) using UTC fields.
@@ -133,14 +134,24 @@ router.get('/range/:region/:subdomain', requireAdmin, async (req, res, next) => 
       return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}T${String(d.getUTCHours()).padStart(2, '0')}:${String(d.getUTCMinutes()).padStart(2, '0')}`;
     }
 
-    const [first, last] = await Promise.all([
-      scanTimes(join(dir, files[0]!)),
-      files.length > 1 ? scanTimes(join(dir, files[files.length - 1]!)) : Promise.resolve({ min: '', max: '' }),
-    ]);
-    const earliestTs = first.min;
-    const latestTs   = files.length > 1 ? last.max : first.max;
+    // Scan forward for earliest — skip leading empty placeholder files
+    let earliestTs = '';
+    for (let i = 0; i < files.length; i++) {
+      const times = await scanTimes(join(dir, files[i]!));
+      if (times) { earliestTs = times.min; break; }
+    }
 
-    res.json({ ok: true, earliest: toLocal(earliestTs), latest: toLocal(latestTs) });
+    // Scan backward for latest — skip trailing empty placeholder files
+    let latestTs = '';
+    for (let i = files.length - 1; i >= 0; i--) {
+      const times = await scanTimes(join(dir, files[i]!));
+      if (times) { latestTs = times.max; break; }
+    }
+
+    const earliest = toLocal(earliestTs);
+    const latest   = toLocal(latestTs);
+    logger.debug({ region, subdomain, earliest, latest, durationMs: Date.now() - t0 }, 'audit-log/range/:sa');
+    res.json({ ok: true, earliest, latest });
   } catch (err) { next(err); }
 });
 

@@ -273,29 +273,46 @@ async function buildSegments(dir: string): Promise<Segment[]> {
   }
   groups.push({ files: curGroup, startTs: new Date(0), endTs: new Date(0) });
 
-  // Populate group startTs / endTs from actual record times
+  // Populate group startTs / endTs from actual record times.
+  // Scan forward for startTs and backward for endTs so that empty placeholder
+  // files (written by fillEmptyHours) at the head or tail of a group are
+  // skipped — otherwise their null scanMinMaxTime result leaves the timestamp
+  // at new Date(0) (1970), producing a nonsensical trailing segment.
   for (const g of groups) {
-    const firstFile = g.files[0]!;
-    const lastFile  = g.files[g.files.length - 1]!;
-    try {
-      const firstContent = await readFile(join(dir, firstFile), 'utf-8');
-      const firstTimes   = scanMinMaxTime(firstContent);
-      if (firstTimes) g.startTs = new Date(firstTimes.min.endsWith('Z') ? firstTimes.min : firstTimes.min + 'Z');
-    } catch { /* keep default */ }
-
-    if (lastFile === firstFile) {
-      // Re-use already-scanned result for endTs
+    // Forward scan: find first file with actual records
+    let startFound = false;
+    for (let i = 0; i < g.files.length; i++) {
       try {
-        const content = await readFile(join(dir, lastFile), 'utf-8');
+        const content = await readFile(join(dir, g.files[i]!), 'utf-8');
         const times   = scanMinMaxTime(content);
-        if (times) { g.startTs = new Date(times.min.endsWith('Z') ? times.min : times.min + 'Z'); g.endTs = new Date(times.max.endsWith('Z') ? times.max : times.max + 'Z'); }
-      } catch { /* keep default */ }
-    } else {
+        if (times) {
+          g.startTs  = new Date(times.min.endsWith('Z') ? times.min : times.min + 'Z');
+          startFound = true;
+          break;
+        }
+      } catch { /* skip unreadable file */ }
+    }
+    if (!startFound) {
+      // All files empty — fall back to the hour encoded in the first filename
+      g.startTs = new Date(g.files[0]!.slice(0, 13) + ':00:00Z');
+    }
+
+    // Backward scan: find last file with actual records
+    let endFound = false;
+    for (let i = g.files.length - 1; i >= 0; i--) {
       try {
-        const lastContent = await readFile(join(dir, lastFile), 'utf-8');
-        const lastTimes   = scanMinMaxTime(lastContent);
-        if (lastTimes) g.endTs = new Date(lastTimes.max.endsWith('Z') ? lastTimes.max : lastTimes.max + 'Z');
-      } catch { /* keep default */ }
+        const content = await readFile(join(dir, g.files[i]!), 'utf-8');
+        const times   = scanMinMaxTime(content);
+        if (times) {
+          g.endTs  = new Date(times.max.endsWith('Z') ? times.max : times.max + 'Z');
+          endFound = true;
+          break;
+        }
+      } catch { /* skip unreadable file */ }
+    }
+    if (!endFound) {
+      // All files empty — fall back to the hour encoded in the last filename
+      g.endTs = new Date(g.files[g.files.length - 1]!.slice(0, 13) + ':00:00Z');
     }
   }
 
