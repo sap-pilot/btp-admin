@@ -191,7 +191,7 @@ export async function checkService(serviceName: string, requestHost?: string, on
             response: { status: retryStatus, headers: {}, body: rr.message },
             responseTime: rr.responseTime,
             screenshotUrl: hasRetryScreenshot
-              ? `/api/download?path=${encodeURIComponent(serviceName)}/${encodeURIComponent(retryFile.replace(/\.json$/, '.screenshot.png'))}`
+              ? `/api/view?path=${encodeURIComponent(serviceName)}/${encodeURIComponent(retryFile.replace(/\.json$/, '.screenshot.png'))}`
               : undefined,
             consoleText: rr.consoleLogs.length > 0 ? rr.consoleLogs.join('\n') : undefined,
             htmlText: rr.htmlContent || undefined,
@@ -234,7 +234,7 @@ export async function checkService(serviceName: string, requestHost?: string, on
         response: { status: overallStatus, headers: {}, body: result.message },
         responseTime: result.responseTime,
         screenshotUrl: hasScreenshot
-          ? `/api/download?path=${encodeURIComponent(serviceName)}/${encodeURIComponent(screenshotFile)}`
+          ? `/api/view?path=${encodeURIComponent(serviceName)}/${encodeURIComponent(screenshotFile)}`
           : undefined,
         consoleText: result.consoleLogs.length > 0 ? result.consoleLogs.join('\n') : undefined,
         htmlText: result.htmlContent || undefined,
