@@ -1,5 +1,31 @@
 # Changelog
 
+## [v1.10.0] - 2026-09-22
+
+### Added
+- **Audit log — parallel global refresh** — all enabled subaccounts fetched concurrently via `Promise.allSettled`; each SA uses its own OAuth token so rate-limit envelopes are independent; global progress bar shows overall pct, ETA, and the latest SA / timestamp advancing across all SAs
+- **Audit log — multi-segment per-SA fetch** — `buildSegments()` inspects existing hourly files and constructs fetch windows that cover only the gaps (uncovered hours), making subsequent refreshes incremental; after each segment, `fillEmptyHours` writes `_0_0_0_0.json` placeholders for hours that returned no records so those hours are not re-fetched as gaps
+- **Audit log — purge old files** — files older than `MAX_AUDIT_LOG_STORAGE_DAYS` (measured from the hour key in the filename) are deleted before each SA refresh
+- **Audit log — Stop button** — red Square icon cancels the running global or single-SA refresh mid-flight; pending records are saved so the next refresh resumes where it left off
+- **Audit log — SA modal range auto-population** — on tab open and after refresh, From / To datetime pickers are pre-filled from the actual earliest / latest `"time"` field values in the subaccount's stored files (line-scan, no full JSON parse); a **Reset** button restores the inputs to the API-determined range (always visible when range is available, enabled when inputs differ)
+- **Audit log — Custom Date Range** — "Custom Date Range…" option in the duration dropdown on the overview page; when `MAX_AUDIT_LOG_STORAGE_DAYS` is set it also appears as an extra labelled option
+- **Audit log — inline Y-axis** — compact labels (10k, 1m) with inside tick marks on the area chart in the SA modal tab
+- **Audit log — page number input** — pagination buttons on the SA modal tab replaced with a number input (Enter to navigate)
+- **"Updated at" timestamp** — Apps page and Audit Logs page each show "Updated at HH:mm:ss" below the page title; Apps updates on the `refresh-done` SSE event
+- **Browser tab titles** — `document.title` updated to `Page Name (siteName)` on every navigation; distinct labels for Homepage, Health Status, Apps, Destinations, Role Collections, Users, Audit Logs, and Config
+
+### Fixed
+- **Audit log — 1970-epoch segment** — empty `[]` placeholder files at the tail of a file group left the group's `endTs` at `new Date(0)`; the trailing open-ended segment then started at epoch 1970, causing the next refresh to request 56 years of API history; fixed by scanning backward (and forward for `startTs`) through group files to find the last/first non-empty file
+- **Audit log — range endpoint returning empty `latest`** — the same empty-file condition caused the SA modal From/To pickers to stay blank and the Reset button to never render; fixed with the same backward scan; `GET /api/audit-log/range/:region/:subdomain` now emits a `DEBUG` log with the determined range and duration
+- **Audit log — missing Open Cockpit button** — the subaccount modal opened from the Audit Logs page was missing the Cockpit button because `cockpit`/`cockpitMenu` were not fetched on that page
+- **Audit log — full-detail expanded row** — expanded rows on the `/audit-logs` overview page now show the complete record JSON (`uuid`, `time`, `category`, `orgId`, `spaceId`, `correlationId`, parsed `message`) instead of the message body only
+- **Audit log — pct spike on page 1** — SAP API returns a most-recent-records preview on page 1 before handle-based forward pagination; progress pct now suppressed on page 1 to avoid a false 100% flash
+- **Audit log — chart drag edge** — dragging a selection past the left or right edge of the area chart no longer drops the selection; the last clamped cursor index is committed on `mouseLeave`
+- **Destinations — EEXIST on `.deleted` rename** — when renaming a space folder to `.deleted` failed because a stale `.deleted` directory already existed, the source folder was left in place with only a warning; now removes the stale target and retries
+- **Browser tab titles** — `/role-collections` and `/users` each get their own label instead of sharing "Role Collections / Users"
+
+---
+
 ## [v1.9.0] - 2026-09-15
 
 ### Added

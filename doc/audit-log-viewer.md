@@ -70,22 +70,63 @@ the `/audit-logs` page.
 
 ### All enabled subaccounts (global refresh)
 
-Click **Refresh** on the Audit Logs overview page (`/audit-logs`). A progress bar shows
-`Refreshing N/M subaccounts — alias (page P · last-timestamp)` as each subaccount is processed.
-The bar turns green on completion and amber if there were warnings (e.g. a missing service
-instance).
+Click **Refresh** on the Audit Logs overview page (`/audit-logs`). All enabled subaccounts are
+fetched **in parallel**. A progress bar shows `Refreshing N/M — alias (page P · last-timestamp) · X.XX% · est. Y min`
+as progress accumulates across all SAs. The bar turns green on completion and amber if there
+were warnings (e.g. a missing service instance).
 
 ### Single subaccount (modal refresh)
 
 Open a subaccount modal → **Audit Log** tab → click the **Refresh** icon button next to the
-subaccount name. A thin progress bar below the toolbar shows percentage completion estimated
-from how far through the time window the latest API page has reached.
+subaccount name. A thin progress bar below the toolbar shows percentage completion and an ETA
+estimated from elapsed time and current progress percentage.
 
 <!-- SCREENSHOT PLACEHOLDER: Subaccount modal Audit Log tab during a single-SA refresh.
      Show the progress bar partially filled, with page number and last-timestamp text.
      Capture while refresh is in progress. -->
 
 ![Audit Log Modal](img/auditlog-modal-v1.9.png)
+---
+
+## Architecture
+
+```
+┌─────────────────────────────────┐
+│  AuditLogPage.tsx               │  /audit-logs overview
+│  AuditLogTab.tsx                │  subaccount modal tab
+└────────────┬────────────────────┘
+             │ HTTP / SSE
+             ▼
+┌─────────────────────────────────┐
+│  auditLog.ts route              │
+│  GET /api/audit-log/stats       │  chart data (counts from filenames)
+│  GET /api/audit-log/search      │  keyword search (reads file content)
+│  GET /api/audit-log/records     │  paginated records for modal tab
+│  POST /api/audit-log/refresh    │  global + single-SA refresh trigger
+└────────────┬────────────────────┘
+             │ calls
+             ▼
+┌─────────────────────────────────┐      ┌──────────────────────────────────┐
+│  auditLogService.ts             │─────▶│  localStore/audit-log/           │
+│  · getAuditLogCredentials()     │      │    {region}/{subdomain}/         │
+│  · getAuditLogToken()           │      │      YYYY-MM-DDTHH_N_N_N_N.json  │
+│  · refreshAuditLogs()           │      └──────────────────────────────────┘
+│  · refreshSubaccountAuditLogs() │
+│  · parseAndSaveRecords()        │
+└────────────┬────────────────────┘
+             │ HTTPS (Bearer, paginated)
+             ▼
+┌─────────────────────────────────┐
+│  SAP Audit Log Management API   │
+│  auditlog/v2/auditlogrecords    │
+└─────────────────────────────────┘
+```
+
+<!-- DIAGRAM PLACEHOLDER: Replace the ASCII diagram above with a rendered architecture diagram.
+     Suggested tool: draw.io / Excalidraw.
+     Show: user → AuditLogPage/AuditLogTab → auditLog.ts routes → auditLogService → local filesystem + SAP Audit Log Management API.
+     Include the CF API credential discovery path (plan → instance → service key → UAA token). -->
+
 ---
 
 ## Storage Layout
@@ -154,28 +195,6 @@ dramatically reduces the output size.
 
 ---
 
-## Overview Charts
-
-The `/audit-logs` overview page displays two chart panels side by side.
-
-### Audit Events Over Time (left, 75 %)
-
-A stacked area chart showing hourly event counts across all enabled subaccounts. Four series are stacked (Data Access / Security / Configuration / Modification); click a series label to toggle it. Drag across the chart to select a time range — the "Latest Entries" table below filters to that window. Click **Clear selection** in the legend to reset.
-
-<!-- SCREENSHOT PLACEHOLDER: Audit Events Over Time area chart with all four series visible and one hour range selected (selection rectangle visible). Capture at /audit-logs after a refresh. -->
-
-### Events per Subaccount (right, 25 %)
-
-A stacked horizontal bar chart showing the **total** event count per subaccount for the selected duration and keyword. Each bar is split by category (Data Access = blue, Security = amber, Configuration = purple, Modification = green, Other = grey). Bar width is proportional to the maximum total across all subaccounts, so the largest subaccount fills the full panel width and smaller ones are scaled accordingly.
-
-Subaccounts are sorted by total event count (descending). Hover a segment to see the exact count for that category. If there are many subaccounts the panel scrolls internally — the panel height matches the area chart.
-
-The chart respects the same **duration** and **keyword** filters as the area chart: when a keyword is active, counts reflect only matching records (sourced from the keyword-filtered grep results, not filename counts).
-
-<!-- SCREENSHOT PLACEHOLDER: Events per Subaccount bar chart panel showing 4–6 subaccounts with coloured bar segments and count labels. Capture at /audit-logs with the bar chart panel visible on the right. -->
-
----
-
 ## Searching
 
 ### Overview page (`/audit-logs`)
@@ -211,51 +230,95 @@ The chart respects the same **duration** and **keyword** filters as the area cha
 
 ---
 
-## Architecture
+## Refresh Architecture
+
+### Parallel global refresh
+
+`refreshAuditLogs()` fetches all enabled subaccounts concurrently using `Promise.allSettled`.
+Each SA has its own OAuth token obtained from its own UAA endpoint, so their requests are
+independent and do not share a rate-limit envelope. If one SA hits HTTP 429 it backs off and
+retries without affecting the others.
+
+A shared in-memory `progressMap` (keyed by `{region}/{subdomain}`) tracks each SA's
+`processedMinutes` and `totalMinutes`. After every page fetch the global pct is recalculated:
 
 ```
-┌─────────────────────────────────┐
-│  SAP Audit Log Management API   │
-│  auditlog/v2/auditlogrecords    │
-└────────────┬────────────────────┘
-             │ HTTPS (Bearer, paginated)
-             ▼
-┌─────────────────────────────────┐
-│  auditLogService.ts             │
-│  · getAuditLogCredentials()     │  ←── CF API: plan GUID → instance → key
-│  · getAuditLogToken()           │  ←── UAA: client_credentials grant
-│  · refreshAuditLogs()           │  global refresh (all enabled SAs)
-│  · refreshSubaccountAuditLogs() │  single-SA refresh (SSE progress)
-│  · parseAndSaveRecords()        │  merge + dedupe per-hour files
-└────────────┬────────────────────┘
-             │ writes
-             ▼
-┌─────────────────────────────────┐
-│  localStore/audit-log/          │
-│    {region}/{subdomain}/        │
-│      YYYY-MM-DDTHH_N_N_N_N.json│
-└─────────────────────────────────┘
-             │ reads
-             ▼
-┌─────────────────────────────────┐
-│  auditLog.ts route              │
-│  GET /api/audit-log/stats       │  chart data (counts from filenames)
-│  GET /api/audit-log/search      │  keyword search (reads file content)
-│  GET /api/audit-log/records     │  paginated records for modal tab
-│  POST /api/audit-log/refresh    │  global + single-SA refresh trigger
-└─────────────────────────────────┘
-             │ SSE
-             ▼
-┌─────────────────────────────────┐
-│  AuditLogPage.tsx               │  /audit-logs overview
-│  AuditLogTab.tsx                │  subaccount modal tab
-└─────────────────────────────────┘
+globalPct = sum(all SA processedMinutes) / sum(all SA totalMinutes) * 100
 ```
 
-<!-- DIAGRAM PLACEHOLDER: Replace the ASCII diagram above with a rendered architecture diagram.
-     Suggested tool: draw.io / Excalidraw.
-     Show: Audit Log Management API → auditLogService → local filesystem → REST routes → React pages.
-     Include the CF API credential discovery path (plan → instance → service key → UAA token). -->
+### Multi-segment fetch per subaccount
+
+Before fetching, `buildSegments(dir)` inspects the existing hourly JSON files in the
+subaccount's local store and divides time into segments that cover only the **gaps**:
+
+1. **File discovery** — list files matching `YYYY-MM-DDTHH_*.json`, sort alphabetically
+   (= chronological).
+2. **Group detection** — files with consecutive hourKeys (gap ≤ 1 h) belong to the same group.
+   A gap larger than 1 h starts a new group.
+3. **Group boundaries** — the earliest and latest `"time"` fields are extracted from the first
+   and last file in each group respectively (regex scan, no full JSON parse).
+4. **Segment construction** — given groups G₁ … Gₙ and `maxStart = now − MAX_AUDIT_LOG_STORAGE_DAYS`:
+
+   | Segment | startTs | endTs |
+   |---|---|---|
+   | Before G₁ | `maxStart` | `G₁.startTs` |
+   | G₁ → G₂ | `G₁.endTs` | `G₂.startTs` |
+   | … | … | … |
+   | After Gₙ | `Gₙ.endTs` | `null` (open-ended) |
+
+   Segments where `startTs ≥ endTs` are discarded. There is always at least one segment
+   (the trailing open-ended one).
+
+   If no files exist the single segment is `{ startTs: maxStart, endTs: null }`.
+
+Segments are processed **sequentially** within each subaccount.  For each segment:
+- A `time_from / time_to` URL is used for page 1 (SAP returns a preview of the most recent
+  records; pct is suppressed on page 1 to avoid a false spike).
+- Subsequent pages use the `handle` from the `paging` response header.
+- The in-memory streaming buffer is flushed to disk at the end of every segment, preventing
+  records from one segment bleeding into hour files that belong to an earlier gap.
+
+### Progress calculation
+
+After each page (page 2+ within a segment) the SA-level pct is calculated as:
+
+```
+processedMinutes = completedSegmentMinutes + (lastRecordTime − currentSegment.startTs)
+totalMinutes     = Σ countMinutes(seg.startTs, seg.endTs ?? now)   [recalculated each time]
+pct              = processedMinutes / totalMinutes × 100            [2 decimal places]
+```
+
+`totalMinutes` is **dynamic** because the last segment's `endTs` is `null` (open-ended = now
+at calculation time). An ETA is displayed once pct ≥ 0.5%:
+
+```
+eta = elapsedTime / pct × 100 − elapsedTime
+```
+
+For the global refresh, the same formula applies across all SAs:
+
+```
+globalProcessedMinutes = Σ SA processedMinutes
+globalTotalMinutes     = Σ SA totalMinutes        [recalculated each time]
+globalPct              = globalProcessedMinutes / globalTotalMinutes × 100
+```
+
+### SSE event fields (new additions)
+
+| Event | New fields |
+|---|---|
+| `audit-progress` (global) | `pct`, `processedMinutes`, `totalMinutes`, `eta` (seconds \| null), `lastTime` |
+| `audit-sa-progress` (per-SA) | `processedMinutes`, `totalMinutes`, `eta` (seconds \| null) |
+
+### Logging
+
+After every API call the service emits a structured log:
+- **DEBUG** (2xx) — `region/subdomain`, `page`, `lastTime`, `pct`, `processedMinutes`, `totalMinutes`, `durationMs`
+- **WARN** (4xx) — `region/subdomain`, `status`, `durationMs`
+- **ERROR** (5xx) — `region/subdomain`, `status`, `durationMs`
+
+After `buildSegments` resolves, a DEBUG log lists all segments with UTC ISO `startTs` / `endTs`
+for each subaccount.
 
 ---
 

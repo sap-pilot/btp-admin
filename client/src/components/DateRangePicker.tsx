@@ -108,9 +108,10 @@ interface Props {
   fromDate: string;
   untilDate: string;
   maxStorageDays: number;
+  noteVariableName?: string;
 }
 
-export default function DateRangePicker({ open, onClose, onApply, fromDate: initFrom, untilDate: initUntil, maxStorageDays }: Props) {
+export default function DateRangePicker({ open, onClose, onApply, fromDate: initFrom, untilDate: initUntil, maxStorageDays, noteVariableName = 'MAX_RESPONSE_STORAGE_DAYS' }: Props) {
   const today = toYMD(new Date());
 
   const [from, setFrom] = useState(initFrom);
@@ -160,7 +161,7 @@ export default function DateRangePicker({ open, onClose, onApply, fromDate: init
         </div>
         <p className="text-[11px] text-muted-foreground mt-1">
           Up to <strong>{maxStorageDays} days</strong> of history is available based on the server&apos;s{' '}
-          <code className="text-[10px]">MAX_RESPONSE_STORAGE_DAYS</code> setting, unless files are starred
+          <code className="text-[10px]">{noteVariableName}</code> setting, unless files are starred
           (starred files are retained indefinitely).
         </p>
         <DialogFooter className="mt-2">

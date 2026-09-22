@@ -1,9 +1,11 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useParams } from 'react-router';
-import { Loader2, PanelLeft, RefreshCw, ScrollText, Search, X } from 'lucide-react';
+import { Loader2, PanelLeft, RefreshCw, ScrollText, Search, Square, X } from 'lucide-react';
 import { useSidebar } from '@/components/AppLayout';
 import SubaccountModal from '@/components/SubaccountModal';
+import DateRangePicker from '@/components/DateRangePicker';
 import type { SubaccountEntry } from '@/components/config/SubaccountsTable';
+import type { CockpitMenuItem } from '@/components/home/HomepageContent';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -56,8 +58,8 @@ interface SubaccountLatest {
 }
 
 type ProgressState =
-  | { type: 'running'; current: number; total: number; alias: string; phase: string; page?: number; lastTime?: string }
-  | { type: 'done';    warnings: string[] }
+  | { type: 'running'; current: number; total: number; alias: string; phase: string; page?: number; lastTime?: string; region?: string; subdomain?: string; pct?: number; eta?: number | null }
+  | { type: 'done';    warnings: string[]; totalReceived?: number; processingTimeMs?: number }
   | { type: 'error';   error: string; warnings: string[] };
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -79,16 +81,10 @@ function previewMessage(msg: unknown): string {
   return typeof obj === 'string' ? obj : JSON.stringify(obj);
 }
 
-function formatExpanded(msg: unknown): string {
-  let obj: unknown = msg;
-  if (typeof obj === 'string') {
-    const raw = obj;
-    try { obj = JSON.parse(obj); } catch { return raw; }
-  }
-  if (obj !== null && typeof obj === 'object') {
-    return JSON.stringify(obj, null, 2);
-  }
-  return typeof obj === 'string' ? obj : JSON.stringify(obj, null, 2);
+function fullDetail(r: AuditRecord): string {
+  let msg: unknown = r.message;
+  if (typeof msg === 'string') { try { msg = JSON.parse(msg); } catch { /* keep as string */ } }
+  return JSON.stringify({ ...r, message: msg }, null, 2);
 }
 
 function categoryColor(cat: string): string {
@@ -362,19 +358,27 @@ function SaBarChart({ data, onSaClick }: { data: SaBarEntry[]; onSaClick?: (regi
 
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
-const ALL_DURATIONS = [
+const BASE_DURATIONS = [
   { label: 'Last 7 Days',  value: 7  },
   { label: 'Last 14 Days', value: 14 },
   { label: 'Last 30 Days', value: 30 },
   { label: 'Last 60 Days', value: 60 },
 ];
 
+function toYMD(d: Date): string {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
 export default function AuditLogPage() {
   const { toggle, collapsed } = useSidebar();
   const { region: urlRegion, subdomain: urlSubdomain } = useParams<{ region?: string; subdomain?: string }>();
   const [keyword,         setKeyword]         = useState(() => { try { return new URLSearchParams(window.location.search).get('q') ?? ''; } catch { return ''; } });
   const [committed,       setCommitted]       = useState(() => { try { return new URLSearchParams(window.location.search).get('q') ?? ''; } catch { return ''; } });
-  const [duration,        setDuration]        = useState(() => { try { const v = parseInt(new URLSearchParams(window.location.search).get('duration') ?? '', 10); return ALL_DURATIONS.some(d => d.value === v) ? v : 30; } catch { return 30; } });
+  const [duration,        setDuration]        = useState(() => { try { const v = parseInt(new URLSearchParams(window.location.search).get('duration') ?? '', 10); return v > 0 ? v : 30; } catch { return 30; } });
+  const [isCustomRange,   setIsCustomRange]   = useState(() => { try { const sp = new URLSearchParams(window.location.search); return !!(sp.get('from') && sp.get('to')); } catch { return false; } });
+  const [customFrom,      setCustomFrom]      = useState(() => { try { return new URLSearchParams(window.location.search).get('from') ?? ''; } catch { return ''; } });
+  const [customTo,        setCustomTo]        = useState(() => { try { return new URLSearchParams(window.location.search).get('to') ?? ''; } catch { return ''; } });
+  const [datePickerOpen,  setDatePickerOpen]  = useState(false);
   const [progress,        setProgress]        = useState<ProgressState | null>(null);
   const [stats,           setStats]           = useState<AuditHourStat[]>([]);
   const [saSizes,         setSaSizes]         = useState<Record<string, number>>({});
@@ -387,6 +391,8 @@ export default function AuditLogPage() {
   const [maxAuditDays,    setMaxAuditDays]    = useState(0);
   const [allSubaccounts,  setAllSubaccounts]  = useState<SubaccountEntry[]>([]);
   const [modalSa,         setModalSa]         = useState<SubaccountEntry | null>(null);
+  const [cockpit,         setCockpit]         = useState<{ idp: string; host: string }>({ idp: '', host: '' });
+  const [cockpitMenu,     setCockpitMenu]     = useState<CockpitMenuItem | null>(null);
   const [selectedCats,    setSelectedCats]    = useState<Set<string>>(() => new Set(ALL_OVERVIEW_CATS));
   const [expandedRows,    setExpandedRows]    = useState<Set<string>>(() => new Set());
   const [chartFrom,       setChartFrom]       = useState('');
@@ -405,16 +411,19 @@ export default function AuditLogPage() {
         const data = JSON.parse(e.data as string) as {
           type?: string;
           current?: number; total?: number; alias?: string; phase?: string; page?: number; lastTime?: string;
+          region?: string; subdomain?: string;
+          pct?: number; eta?: number | null;
+          totalReceived?: number; processingTimeMs?: number;
           warnings?: string[]; error?: string;
         };
         if (data.type === 'audit-start') {
           setIsRefreshing(true);
           setProgress({ type: 'running', current: 0, total: data.total ?? 0, alias: '', phase: 'starting' });
         } else if (data.type === 'audit-progress') {
-          setProgress({ type: 'running', current: data.current ?? 0, total: data.total ?? 0, alias: data.alias ?? '', phase: data.phase ?? '', page: data.page, lastTime: data.lastTime });
+          setProgress({ type: 'running', current: data.current ?? 0, total: data.total ?? 0, alias: data.alias ?? '', phase: data.phase ?? '', page: data.page, lastTime: data.lastTime, region: data.region, subdomain: data.subdomain, pct: data.pct, eta: data.eta });
         } else if (data.type === 'audit-done') {
           setIsRefreshing(false);
-          setProgress({ type: 'done', warnings: data.warnings ?? [] });
+          setProgress({ type: 'done', warnings: data.warnings ?? [], totalReceived: data.totalReceived, processingTimeMs: data.processingTimeMs });
           void fetchData();
           const now = Date.now();
           setLastRefreshTime(now);
@@ -430,18 +439,35 @@ export default function AuditLogPage() {
     return () => { evs.close(); };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  async function fetchData(kwOvr?: string, catsOvr?: Set<string>, fromOvr?: string, toOvr?: string) {
+  const dynamicDurations = useMemo(() => {
+    const base = BASE_DURATIONS.filter(d => maxAuditDays <= 0 || d.value <= maxAuditDays);
+    if (maxAuditDays > 0 && !BASE_DURATIONS.some(d => d.value === maxAuditDays)) {
+      return [...base, { label: `Last ${maxAuditDays} Days`, value: maxAuditDays }];
+    }
+    return base;
+  }, [maxAuditDays]);
+
+  async function fetchData(kwOvr?: string, catsOvr?: Set<string>, fromOvr?: string, toOvr?: string, customFromOvr?: string, customToOvr?: string, isCustomOvr?: boolean) {
     setLoading(true);
     try {
-      const useKw   = kwOvr   !== undefined ? kwOvr   : committed;
-      const useCats = catsOvr !== undefined ? catsOvr : selectedCats;
-      const useFrom = fromOvr !== undefined ? fromOvr : chartFrom;
-      const useTo   = toOvr   !== undefined ? toOvr   : chartTo;
-      const params = new URLSearchParams({ duration: String(duration) });
+      const useKw        = kwOvr        !== undefined ? kwOvr        : committed;
+      const useCats      = catsOvr      !== undefined ? catsOvr      : selectedCats;
+      const useChartFrom = fromOvr      !== undefined ? fromOvr      : chartFrom;
+      const useChartTo   = toOvr        !== undefined ? toOvr        : chartTo;
+      const useCustFrom  = customFromOvr !== undefined ? customFromOvr : customFrom;
+      const useCustTo    = customToOvr   !== undefined ? customToOvr   : customTo;
+      const useIsCustom  = isCustomOvr   !== undefined ? isCustomOvr   : isCustomRange;
+
+      let params: URLSearchParams;
+      if (useIsCustom && useCustFrom && useCustTo) {
+        params = new URLSearchParams({ from: useCustFrom, to: useCustTo });
+      } else {
+        params = new URLSearchParams({ duration: String(duration) });
+      }
       if (useKw.trim()) params.set('q', useKw.trim());
       const latestParams = new URLSearchParams(params);
-      if (useFrom) latestParams.set('from', useFrom);
-      if (useTo)   latestParams.set('to',   useTo);
+      if (useChartFrom) latestParams.set('from', useChartFrom);
+      if (useChartTo)   latestParams.set('to',   useChartTo);
       if (useCats.size > 0 && useCats.size < ALL_OVERVIEW_CATS.size) {
         latestParams.set('categories', [...useCats].join(','));
       }
@@ -460,7 +486,7 @@ export default function AuditLogPage() {
     }
   }
 
-  useEffect(() => { void fetchData(); }, [duration]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { if (!isCustomRange) void fetchData(); }, [duration, isCustomRange]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     fetch('/api/config/subaccounts')
@@ -469,16 +495,21 @@ export default function AuditLogPage() {
       .catch(() => { /* ignore */ });
   }, []);
 
-  // Keep the overview URL in sync with the current keyword + duration so a refresh
+  // Keep the overview URL in sync with the current keyword + duration/range so a refresh
   // restores both. Skipped while the modal is open — AuditLogTab manages the URL then.
   useEffect(() => {
     if (urlRegion || urlSubdomain || modalSa) return;
     const params = new URLSearchParams();
     if (committed.trim()) params.set('q', committed.trim());
-    if (duration !== 30)  params.set('duration', String(duration));
+    if (isCustomRange && customFrom && customTo) {
+      params.set('from', customFrom);
+      params.set('to', customTo);
+    } else if (duration !== 30) {
+      params.set('duration', String(duration));
+    }
     const qs = params.toString();
     history.replaceState(null, '', qs ? `/audit-logs?${qs}` : '/audit-logs');
-  }, [committed, duration, modalSa, urlRegion, urlSubdomain]);
+  }, [committed, duration, isCustomRange, customFrom, customTo, modalSa, urlRegion, urlSubdomain]);
 
   // Auto-open the subaccount modal when the URL contains /audit-logs/{region}/{subdomain}.
   // AuditLogTab reads ?q= from window.location.search on mount, so the keyword is
@@ -499,15 +530,31 @@ export default function AuditLogPage() {
         setMaxAuditDays(m);
         if (m > 0) setDuration(d => {
           if (d <= m) return d;
-          const opts = [7, 14, 30, 60].filter(v => v <= m);
-          return opts.length > 0 ? opts[opts.length - 1]! : m;
+          const opts = BASE_DURATIONS.filter(v => v.value <= m);
+          return opts.length > 0 ? opts[opts.length - 1]!.value : m;
         });
       })
+      .catch(() => { /* ignore */ });
+    fetch('/api/audit-log/status')
+      .then(r => r.json() as Promise<{ ok: boolean; lastRefreshedMs?: number | null }>)
+      .then(j => { if (j.ok && j.lastRefreshedMs) setLastRefreshTime(prev => (prev === null || j.lastRefreshedMs! > prev) ? j.lastRefreshedMs! : prev); })
+      .catch(() => { /* ignore */ });
+    fetch('/api/settings')
+      .then(r => r.json() as Promise<{ ok: boolean; data: { homepage?: { cockpit?: { idp: string; host: string } } } }>)
+      .then(j => { if (j.ok) setCockpit(j.data?.homepage?.cockpit ?? { idp: '', host: '' }); })
+      .catch(() => { /* ignore */ });
+    fetch('/api/config/cockpit-menu')
+      .then(r => r.json() as Promise<CockpitMenuItem | null>)
+      .then(j => { if (j) setCockpitMenu(j); })
       .catch(() => { /* ignore */ });
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   async function handleRefresh() {
     try { await fetch('/api/audit-log/refresh', { method: 'POST' }); } catch { /* ignore */ }
+  }
+
+  async function handleStopRefresh() {
+    try { await fetch('/api/audit-log/refresh/stop', { method: 'POST' }); } catch { /* ignore */ }
   }
 
   function toggleCat(catKey: string) {
@@ -581,7 +628,7 @@ export default function AuditLogPage() {
           <span className="text-sm font-semibold leading-tight">Audit Log</span>
           {lastRefreshTime !== null && (
             <span className="text-[10px] text-muted-foreground/50 leading-tight">
-              Refreshed: {new Date(lastRefreshTime).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' })}
+              Updated at {new Date(lastRefreshTime).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' })}
             </span>
           )}
         </div>
@@ -607,16 +654,37 @@ export default function AuditLogPage() {
             </span>
           )}
         </div>
-        <select value={duration} onChange={e => setDuration(Number(e.target.value))}
+        <select
+          value={isCustomRange ? 'custom' : String(duration)}
+          onChange={e => {
+            const v = e.target.value;
+            if (v === 'custom') { setDatePickerOpen(true); return; }
+            setIsCustomRange(false);
+            setCustomFrom('');
+            setCustomTo('');
+            setDuration(Number(v));
+          }}
           className="h-8 px-2 text-xs border border-border rounded bg-background focus:outline-none focus:ring-1 focus:ring-ring">
-          {ALL_DURATIONS.filter(d => maxAuditDays <= 0 || d.value <= maxAuditDays).map(d => <option key={d.value} value={d.value}>{d.label}</option>)}
+          {dynamicDurations.map(d => <option key={d.value} value={d.value}>{d.label}</option>)}
+          {isCustomRange
+            ? <option value="custom">{customFrom} – {customTo}</option>
+            : <option value="custom">Custom Date Range…</option>}
         </select>
-        <button onClick={() => void handleRefresh()} disabled={isRefreshing}
-          className="inline-flex items-center gap-1.5 h-8 px-3 rounded text-xs font-medium border border-border hover:bg-accent hover:text-accent-foreground transition-colors disabled:opacity-50"
-          title="Refresh audit logs from BTP">
-          <RefreshCw className={`h-3.5 w-3.5 ${isRefreshing ? 'animate-spin' : ''}`} />
-          {isRefreshing ? 'Refreshing…' : 'Refresh'}
-        </button>
+        {isRefreshing ? (
+          <button onClick={() => void handleStopRefresh()}
+            className="inline-flex items-center gap-1.5 h-8 px-3 rounded text-xs font-medium border border-destructive text-destructive hover:bg-destructive hover:text-destructive-foreground transition-colors"
+            title="Stop refresh — partial records will be saved">
+            <Square className="h-3.5 w-3.5" />
+            Stop
+          </button>
+        ) : (
+          <button onClick={() => void handleRefresh()}
+            className="inline-flex items-center gap-1.5 h-8 px-3 rounded text-xs font-medium border border-border hover:bg-accent hover:text-accent-foreground transition-colors"
+            title="Refresh audit logs from BTP">
+            <RefreshCw className="h-3.5 w-3.5" />
+            Refresh
+          </button>
+        )}
       </div>
 
       {/* Progress bar */}
@@ -624,18 +692,38 @@ export default function AuditLogPage() {
         const isDone     = progress.type === 'done';
         const hasIssues  = isDone && !!progress.warnings.length;
         const isError    = progress.type === 'error';
-        const pct        = isDone || isError ? 100 : progress.total > 0 ? Math.round((Math.max(progress.current - 1, 0) / progress.total) * 100) : 0;
+        const barPct     = isDone || isError ? 100
+          : progress.pct !== undefined ? progress.pct
+          : progress.total > 0 ? Math.round((Math.max(progress.current - 1, 0) / progress.total) * 100) : 0;
         const barColor   = hasIssues || isError ? 'bg-amber-500' : isDone ? 'bg-green-500' : 'bg-primary';
         const textColor  = hasIssues || isError ? 'text-amber-600 dark:text-amber-400' : isDone ? 'text-green-600 dark:text-green-400' : 'text-foreground';
         const bgColor    = hasIssues || isError ? 'bg-amber-500/8' : isDone ? 'bg-green-500/8' : 'bg-muted/40';
+        let etaStr = '';
+        if (progress.type === 'running' && progress.eta != null) {
+          const s = progress.eta;
+          if (s < 60)        etaStr = ' — est. < 1 min';
+          else if (s < 3600) etaStr = ` — est. ${Math.round(s / 60)} min`;
+          else               etaStr = ` — est. ${(s / 3600).toFixed(1)} hrs`;
+        }
+        const latestStr = progress.type === 'running' && progress.region && progress.lastTime
+          ? ` · Latest: ${progress.region}/${progress.subdomain} — ${progress.lastTime}`
+          : '';
+        let doneTimeStr = '';
+        if (progress.type === 'done' && progress.processingTimeMs != null) {
+          const s = Math.round(progress.processingTimeMs / 1000);
+          if (s < 60)      doneTimeStr = ` in ${s}s`;
+          else if (s < 3600) doneTimeStr = ` in ${Math.floor(s / 60)}m ${s % 60}s`;
+          else               doneTimeStr = ` in ${Math.floor(s / 3600)}h ${Math.floor((s % 3600) / 60)}m`;
+        }
+        const pctStr = progress.type === 'running' && progress.pct !== undefined && progress.pct > 0 ? `, overall progress: ${progress.pct.toFixed(2)}%` : '';
         const msg = progress.type === 'running'
-          ? `Refreshing ${progress.current}/${progress.total}${progress.alias ? ` — ${progress.alias}` : ''}${progress.phase === 'fetching' && progress.page ? ` (page ${progress.page}${progress.lastTime ? ` · ${progress.lastTime}` : ''})` : ''}`
+          ? `Retrieving ${progress.total} subaccounts' audit log${pctStr}${etaStr}${latestStr}`
           : progress.type === 'done'
-            ? `Refresh complete${progress.warnings.length ? ` — ${progress.warnings.length} warning(s)` : ''}`
+            ? `Refresh complete — ${progress.totalReceived ?? 0} entries received${doneTimeStr}${progress.warnings.length ? ` · ${progress.warnings.length} warning(s)` : ''}`
             : `Error: ${progress.error}`;
         return (
           <div className={`relative shrink-0 border-b border-border ${bgColor}`}>
-            <div className="h-1 w-full"><div className={`h-full transition-all duration-300 ${barColor}`} style={{ width: `${pct}%` }} /></div>
+            <div className="h-1 w-full"><div className={`h-full transition-all duration-300 ${barColor}`} style={{ width: `${barPct}%` }} /></div>
             <div className={`px-4 py-1.5 text-xs text-center ${textColor} pr-8`}>{msg}</div>
             {hasIssues && (
               <div className="px-4 pb-2 flex flex-col gap-0.5">
@@ -762,7 +850,7 @@ export default function AuditLogPage() {
                             <td className="px-3 py-1 border-b border-border/50 min-w-0 align-top">
                               {isExp ? (
                                 <pre className="text-[11px] font-mono whitespace-pre-wrap break-all">
-                                  <HighlightText text={formatExpanded(r.message)} keywords={keywords} />
+                                  <HighlightText text={fullDetail(r)} keywords={keywords} />
                                 </pre>
                               ) : (
                                 <div className="text-[11px] text-muted-foreground/80 font-mono line-clamp-2 break-all">
@@ -789,18 +877,34 @@ export default function AuditLogPage() {
         )}
       </div>
 
+      {/* Custom date range picker */}
+      <DateRangePicker
+        open={datePickerOpen}
+        onClose={() => setDatePickerOpen(false)}
+        onApply={(from, until) => {
+          setIsCustomRange(true);
+          setCustomFrom(from);
+          setCustomTo(until);
+          void fetchData(undefined, undefined, undefined, undefined, from, until, true);
+        }}
+        fromDate={isCustomRange && customFrom ? customFrom : toYMD(new Date(Date.now() - 30 * 86400000))}
+        untilDate={isCustomRange && customTo ? customTo : toYMD(new Date())}
+        maxStorageDays={maxAuditDays > 0 ? maxAuditDays : 90}
+        noteVariableName="MAX_AUDIT_LOG_STORAGE_DAYS"
+      />
+
       {/* Subaccount modal opened from SA header click — inherits chart selection and categories */}
       {modalSa && (
         <SubaccountModal
           sa={modalSa}
           onClose={() => {
             setModalSa(null);
-            if (savedOverviewUrl.current) {
-              history.replaceState(null, '', savedOverviewUrl.current);
-              savedOverviewUrl.current = null;
-            }
+            history.replaceState(null, '', savedOverviewUrl.current ?? '/audit-logs');
+            savedOverviewUrl.current = null;
           }}
           isAdmin={true}
+          cockpit={cockpit}
+          cockpitMenu={cockpitMenu}
           initialTab="audit"
           subaccounts={allSubaccounts}
           onSelectSubaccount={s => setModalSa(s)}

@@ -6,10 +6,10 @@ import { spawn } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { requireAdmin } from '../middleware/requireAuth.js';
 import {
-  refreshAuditLogs, isAuditRefreshRunning,
-  refreshSubaccountAuditLogs, isSaAuditRefreshRunning,
+  refreshAuditLogs, isAuditRefreshRunning, stopAuditLogRefresh,
+  refreshSubaccountAuditLogs, isSaAuditRefreshRunning, stopSubaccountAuditLogRefresh,
   getAuditStats, getAuditSaStats, getAuditRecords, getLatestAuditEntries,
-  getAuditLogDir,
+  getAuditLogDir, getAuditLastRefreshedMs,
 } from '../services/auditLogService.js';
 import { config } from '../config.js';
 import { logger } from '../logger.js';
@@ -24,6 +24,12 @@ function parseCategoriesParam(raw: string | undefined): Set<string> | undefined 
   return cats.size > 0 && cats.size < ALL_AUDIT_CATS.size ? cats : undefined;
 }
 
+// GET /api/audit-log/status
+router.get('/status', requireAdmin, async (_req, res) => {
+  const lastRefreshedMs = await getAuditLastRefreshedMs();
+  res.json({ ok: true, refreshing: isAuditRefreshRunning(), lastRefreshedMs });
+});
+
 // POST /api/audit-log/refresh — trigger background audit log refresh for all SAs (admin only)
 router.post('/refresh', requireAdmin, (_req, res) => {
   if (isAuditRefreshRunning()) {
@@ -33,6 +39,12 @@ router.post('/refresh', requireAdmin, (_req, res) => {
   void refreshAuditLogs();
   logger.info('Audit log refresh triggered via API');
   res.json({ ok: true, started: true });
+});
+
+// POST /api/audit-log/refresh/stop — stop the global refresh (admin only)
+router.post('/refresh/stop', requireAdmin, (_req, res) => {
+  stopAuditLogRefresh();
+  res.json({ ok: true });
 });
 
 // POST /api/audit-log/refresh/:region/:subdomain — single-SA delta refresh (admin only)
@@ -47,15 +59,25 @@ router.post('/refresh/:region/:subdomain', requireAdmin, (req, res) => {
   res.json({ ok: true, started: true });
 });
 
+// POST /api/audit-log/refresh/:region/:subdomain/stop — stop an in-progress single-SA refresh (admin only)
+router.post('/refresh/:region/:subdomain/stop', requireAdmin, (req, res) => {
+  const { region, subdomain } = req.params as { region: string; subdomain: string };
+  stopSubaccountAuditLogRefresh(region, subdomain);
+  logger.info({ region, subdomain }, 'Single-SA audit log refresh stop requested via API');
+  res.json({ ok: true });
+});
+
 // GET /api/audit-log/stats?duration=30&q=keyword&categories=... — hourly chart data derived from filenames
 router.get('/stats', requireAdmin, async (req, res, next) => {
   const t0 = Date.now();
   try {
     const duration   = parseInt(typeof req.query['duration'] === 'string' ? req.query['duration'] : '30', 10);
     const keyword    = typeof req.query['q']          === 'string' && req.query['q']          ? req.query['q']          : undefined;
+    const from       = typeof req.query['from'] === 'string' && req.query['from'] ? req.query['from'] : undefined;
+    const to         = typeof req.query['to']   === 'string' && req.query['to']   ? req.query['to']   : undefined;
     const categories = parseCategoriesParam(typeof req.query['categories'] === 'string' ? req.query['categories'] : undefined);
-    const { stats, warnings, saSizes } = await getAuditStats(Math.min(Math.max(duration, 1), 90), keyword);
-    logger.debug({ duration, keyword, categories: categories ? [...categories] : undefined, durationMs: Date.now() - t0 }, 'audit-log/stats');
+    const { stats, warnings, saSizes } = await getAuditStats(Math.min(Math.max(duration, 1), 365), keyword, from, to);
+    logger.debug({ duration, from, to, keyword, categories: categories ? [...categories] : undefined, durationMs: Date.now() - t0 }, 'audit-log/stats');
     res.json({ ok: true, stats, warnings, saSizes });
   } catch (err) { next(err); }
 });
@@ -69,9 +91,67 @@ router.get('/latest', requireAdmin, async (req, res, next) => {
     const from       = typeof req.query['from'] === 'string' && req.query['from'] ? req.query['from'] : undefined;
     const to         = typeof req.query['to']   === 'string' && req.query['to']   ? req.query['to']   : undefined;
     const categories = parseCategoriesParam(typeof req.query['categories'] === 'string' ? req.query['categories'] : undefined);
-    const entries    = await getLatestAuditEntries(Math.min(Math.max(duration, 1), 90), keyword, from, to, categories);
+    const entries    = await getLatestAuditEntries(Math.min(Math.max(duration, 1), 365), keyword, from, to, categories);
     logger.debug({ duration, keyword, from, to, categories: categories ? [...categories] : undefined, durationMs: Date.now() - t0 }, 'audit-log/latest');
     res.json({ ok: true, entries });
+  } catch (err) { next(err); }
+});
+
+// GET /api/audit-log/range/:region/:subdomain — actual earliest/latest {time} from first and last audit log files
+router.get('/range/:region/:subdomain', requireAdmin, async (req, res, next) => {
+  const t0 = Date.now();
+  try {
+    const { region, subdomain } = req.params as { region: string; subdomain: string };
+    const AUDIT_FILE_RE = /^\d{4}-\d{2}-\d{2}T\d{2}_.+\.json$/;
+    const dir = getAuditLogDir(region, subdomain);
+    let files: string[];
+    try { files = (await readdir(dir)).filter(f => AUDIT_FILE_RE.test(f)).sort(); }
+    catch { files = []; }
+
+    if (!files.length) { res.json({ ok: true, earliest: '', latest: '' }); return; }
+
+    // Scan a file for "time" fields without a full JSON parse.
+    // Returns min and max time strings found, or null if the file has no records.
+    async function scanTimes(filepath: string): Promise<{ min: string; max: string } | null> {
+      const content = await readFile(filepath, 'utf-8').catch(() => '');
+      let min = '', max = '';
+      for (const line of content.split('\n')) {
+        const m = line.match(/"time"\s*:\s*"([^"]+)"/);
+        if (m?.[1]) {
+          const t = m[1]!;
+          if (!min || t < min) min = t;
+          if (!max || t > max) max = t;
+        }
+      }
+      return min ? { min, max } : null;
+    }
+
+    // Convert a UTC ISO timestamp to datetime-local format (YYYY-MM-DDTHH:mm) using UTC fields.
+    function toLocal(utcIso: string): string {
+      if (!utcIso) return '';
+      const d = new Date(utcIso.endsWith('Z') ? utcIso : utcIso + 'Z');
+      if (isNaN(d.getTime())) return '';
+      return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}T${String(d.getUTCHours()).padStart(2, '0')}:${String(d.getUTCMinutes()).padStart(2, '0')}`;
+    }
+
+    // Scan forward for earliest — skip leading empty placeholder files
+    let earliestTs = '';
+    for (let i = 0; i < files.length; i++) {
+      const times = await scanTimes(join(dir, files[i]!));
+      if (times) { earliestTs = times.min; break; }
+    }
+
+    // Scan backward for latest — skip trailing empty placeholder files
+    let latestTs = '';
+    for (let i = files.length - 1; i >= 0; i--) {
+      const times = await scanTimes(join(dir, files[i]!));
+      if (times) { latestTs = times.max; break; }
+    }
+
+    const earliest = toLocal(earliestTs);
+    const latest   = toLocal(latestTs);
+    logger.debug({ region, subdomain, earliest, latest, durationMs: Date.now() - t0 }, 'audit-log/range/:sa');
+    res.json({ ok: true, earliest, latest });
   } catch (err) { next(err); }
 });
 

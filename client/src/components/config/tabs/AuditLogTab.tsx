@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Search, ChevronLeft, ChevronRight, X, Loader2, RefreshCw, Download } from 'lucide-react';
+import { Search, ChevronLeft, ChevronRight, X, Loader2, RefreshCw, Download, Square } from 'lucide-react';
 import type { SubaccountEntry } from '@/components/config/SubaccountsTable';
 
 interface AuditHourStat {
@@ -100,14 +100,21 @@ function HighlightText({ text, keywords }: { text: string; keywords: string[] })
 
 const CHART_COLORS = ['#3b82f6', '#f59e0b', '#a855f7', '#22c55e', '#64748b'] as const;
 
+function fmtY(v: number): string {
+  if (v >= 1_000_000) return `${+(v / 1_000_000).toFixed(1)}m`;
+  if (v >= 1_000)     return `${+(v / 1_000).toFixed(1)}k`;
+  return String(Math.round(v));
+}
+
 interface MiniChartProps {
   stats:    AuditHourStat[];
   from:     string;
   to:       string;
+  showSel:  boolean;
   onSelect: (from: string, to: string) => void;
 }
 
-function MiniAuditChart({ stats, from, to, onSelect }: MiniChartProps) {
+function MiniAuditChart({ stats, from, to, showSel, onSelect }: MiniChartProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [width, setWidth] = useState(600);
   const [dragAnchor, setDragAnchor] = useState<number | null>(null);
@@ -210,7 +217,7 @@ function MiniAuditChart({ stats, from, to, onSelect }: MiniChartProps) {
         {[4, 3, 2, 1, 0].map(si => (
           <path key={si} d={areaPath(si)} fill={CHART_COLORS[si]} fillOpacity={0.75} />
         ))}
-        {existingSel && !dragSel && (
+        {showSel && existingSel && !dragSel && (
           <rect x={existingSel.x1} y={pt} width={Math.max(existingSel.x2 - existingSel.x1, 2)} height={cH}
             fill="white" fillOpacity={0.15} stroke="white" strokeOpacity={0.5} strokeWidth={1} />
         )}
@@ -218,6 +225,20 @@ function MiniAuditChart({ stats, from, to, onSelect }: MiniChartProps) {
           <rect x={dragSel.x1} y={pt} width={Math.max(dragSel.x2 - dragSel.x1, 2)} height={cH}
             fill="white" fillOpacity={0.25} stroke="white" strokeOpacity={0.8} strokeWidth={1} />
         )}
+        {/* Y axis */}
+        <line x1={pl} y1={pt} x2={pl} y2={pt + cH} stroke="currentColor" strokeOpacity={0.12} strokeWidth={1} />
+        {([maxTotal, maxTotal / 2] as const).map((v, i) => {
+          const y = yOf(v);
+          return (
+            <g key={i}>
+              <line x1={pl} y1={y} x2={pl + 4} y2={y} stroke="currentColor" strokeOpacity={0.25} strokeWidth={1} />
+              <text x={pl + 6} y={i === 0 ? pt + 8 : y + 3}
+                textAnchor="start" fontSize={7} fill="currentColor" opacity={0.45}>
+                {fmtY(Math.round(v))}
+              </text>
+            </g>
+          );
+        })}
         {/* X axis */}
         <line x1={pl} y1={pt + cH} x2={pl + cW} y2={pt + cH} stroke="currentColor" strokeOpacity={0.15} strokeWidth={1} />
         {xTicks.map(({ idx, label }) => (
@@ -227,7 +248,18 @@ function MiniAuditChart({ stats, from, to, onSelect }: MiniChartProps) {
         ))}
         <rect x={pl} y={pt} width={cW} height={cH} fill="transparent"
           onMouseDown={onMD} onMouseMove={onMM} onMouseUp={onMU}
-          onMouseLeave={() => { setDragAnchor(null); setDragCursor(null); }} />
+          onMouseLeave={() => {
+            if (dragAnchor !== null && dragCursor !== null) {
+              // Commit the selection using the last clamped cursor position so dragging
+              // past the right (or left) edge keeps the selection rather than dropping it.
+              const lo = Math.min(dragAnchor, dragCursor), hi = Math.max(dragAnchor, dragCursor);
+              setDragAnchor(null); setDragCursor(null);
+              const fKey = stats[lo]?.hourKey, tKey = stats[hi]?.hourKey;
+              if (fKey && tKey) onSelect(`${fKey}:00`, `${tKey}:59`);
+            } else {
+              setDragAnchor(null); setDragCursor(null);
+            }
+          }} />
       </svg>
     </div>
   );
@@ -249,6 +281,8 @@ export default function AuditLogTab({ sa, initialFrom, initialTo, initialCategor
   );
   const [from,         setFrom]         = useState(initialFrom ?? '');
   const [to,           setTo]           = useState(initialTo ?? '');
+  const [userSetRange, setUserSetRange] = useState(false);
+  const [apiRange,     setApiRange]     = useState<{ earliest: string; latest: string } | null>(null);
   const [limit,        setLimit]        = useState(() => { try { const v = parseInt(localStorage.getItem('audit-page-size') ?? '', 10); return [100,200,500,1000].includes(v) ? v : 100; } catch { return 100; } });
   const [page,         setPage]         = useState(1);
   const [loading,      setLoading]      = useState(false);
@@ -262,7 +296,8 @@ export default function AuditLogTab({ sa, initialFrom, initialTo, initialCategor
   const [saProgress,   setSaProgress]   = useState<{ page: number; lastTime: string; pct?: number } | null>(null);
   const [exporting,    setExporting]    = useState(false);
   const [exportWarn,   setExportWarn]   = useState<{ message: string; fileCount: number; sizeBytes: number } | null>(null);
-  const evsRef = useRef<EventSource | null>(null);
+  const evsRef             = useRef<EventSource | null>(null);
+  const refreshStartRef    = useRef<number | null>(null);
 
   async function load(p = page, cats = selectedCats, fromOvr?: string, toOvr?: string, kwOvr?: string, limitOvr?: number) {
     const useFrom  = fromOvr  !== undefined ? fromOvr  : from;
@@ -295,7 +330,7 @@ export default function AuditLogTab({ sa, initialFrom, initialTo, initialCategor
 
   async function fetchChartStats(cats = selectedCats) {
     try {
-      const params = new URLSearchParams({ duration: '90' });
+      const params = new URLSearchParams({ duration: '365' });
       const cp = catsParam(cats);
       if (cp) params.set('categories', cp);
       const res = await fetch(`/api/audit-log/stats/${encodeURIComponent(sa.region)}/${encodeURIComponent(sa.subdomain)}?${params}`);
@@ -304,8 +339,33 @@ export default function AuditLogTab({ sa, initialFrom, initialTo, initialCategor
     } catch { /* ignore */ }
   }
 
+  async function fetchRange(andLoad = false) {
+    try {
+      const res  = await fetch(`/api/audit-log/range/${encodeURIComponent(sa.region)}/${encodeURIComponent(sa.subdomain)}`);
+      const json = await res.json() as { ok: boolean; earliest: string; latest: string };
+      if (json.ok && json.earliest && json.latest) {
+        setApiRange({ earliest: json.earliest, latest: json.latest });
+        setFrom(json.earliest);
+        setTo(json.latest);
+        if (andLoad) void load(1, selectedCats, json.earliest, json.latest);
+      } else if (andLoad) {
+        void load(1);
+      }
+    } catch {
+      if (andLoad) void load(1);
+    }
+  }
+
+  function handleResetRange() {
+    if (!apiRange) return;
+    setFrom(apiRange.earliest);
+    setTo(apiRange.latest);
+    setUserSetRange(false);
+    void load(1, selectedCats, apiRange.earliest, apiRange.latest);
+  }
+
   useEffect(() => {
-    void load(1);
+    void fetchRange(true);
     void fetchChartStats();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -328,7 +388,7 @@ export default function AuditLogTab({ sa, initialFrom, initialTo, initialCategor
   function goPage(p: number) { setPage(p); void load(p); }
 
   function handleChartSelect(f: string, t: string) {
-    setFrom(f); setTo(t); setPage(1);
+    setFrom(f); setTo(t); setPage(1); setUserSetRange(true);
     void load(1, selectedCats, f, t);
   }
 
@@ -377,6 +437,7 @@ export default function AuditLogTab({ sa, initialFrom, initialTo, initialCategor
 
   async function handleSaRefresh() {
     if (saRefreshing) return;
+    refreshStartRef.current = Date.now();
     setSaRefreshing(true);
     setSaProgress({ page: 0, lastTime: '' });
 
@@ -394,7 +455,7 @@ export default function AuditLogTab({ sa, initialFrom, initialTo, initialCategor
         } else if (data.type === 'audit-sa-done' || data.type === 'audit-sa-error') {
           evs.close(); evsRef.current = null;
           setSaRefreshing(false); setSaProgress(null);
-          void load(1); void fetchChartStats();
+          void fetchRange(true); void fetchChartStats();
         }
       } catch { /* ignore */ }
     });
@@ -470,17 +531,19 @@ export default function AuditLogTab({ sa, initialFrom, initialTo, initialCategor
 
         {/* From / To — lang="en-GB" + step="60" forces 24h and hides seconds in Chromium */}
         <input type="datetime-local" lang="en-GB" step="60" value={from}
-          onChange={e => { setFrom(e.target.value); setPage(1); void load(1, selectedCats, e.target.value, to); }}
+          onChange={e => { setFrom(e.target.value); setPage(1); setUserSetRange(true); void load(1, selectedCats, e.target.value, to); }}
           className="h-7 px-2 text-xs border border-border rounded bg-background focus:outline-none focus:ring-1 focus:ring-ring w-[10.5rem] [color-scheme:light] dark:[color-scheme:dark]"
           title="From" />
         <input type="datetime-local" lang="en-GB" step="60" value={to}
-          onChange={e => { setTo(e.target.value); setPage(1); void load(1, selectedCats, from, e.target.value); }}
+          onChange={e => { setTo(e.target.value); setPage(1); setUserSetRange(true); void load(1, selectedCats, from, e.target.value); }}
           className="h-7 px-2 text-xs border border-border rounded bg-background focus:outline-none focus:ring-1 focus:ring-ring w-[10.5rem] [color-scheme:light] dark:[color-scheme:dark]"
           title="To" />
-        {(from || to) && (
-          <button onClick={() => { setFrom(''); setTo(''); setPage(1); void load(1, selectedCats, '', ''); }}
-            title="Clear time range"
-            className="inline-flex items-center justify-center h-7 w-7 rounded border border-border hover:bg-accent hover:text-accent-foreground transition-colors text-muted-foreground hover:text-foreground shrink-0">
+        {apiRange && (
+          <button
+            onClick={handleResetRange}
+            disabled={!userSetRange || (from === apiRange.earliest && to === apiRange.latest)}
+            title="Reset date time range to earliest/latest available audit log timestamp"
+            className="inline-flex items-center justify-center h-7 w-7 rounded border border-border hover:bg-accent hover:text-accent-foreground transition-colors text-muted-foreground hover:text-foreground shrink-0 disabled:opacity-30 disabled:pointer-events-none">
             <X className="h-3.5 w-3.5" />
           </button>
         )}
@@ -491,11 +554,20 @@ export default function AuditLogTab({ sa, initialFrom, initialTo, initialCategor
           {exporting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Download className="h-3.5 w-3.5" />}
         </button>
 
-        {/* Refresh button — triggers delta sync with Audit Log API */}
-        <button onClick={() => void handleSaRefresh()} disabled={loading || saRefreshing} title="Retrieve latest logs from Audit Log API"
-          className="inline-flex items-center justify-center h-7 w-7 rounded border border-border hover:bg-accent hover:text-accent-foreground transition-colors disabled:opacity-50">
-          {saRefreshing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
-        </button>
+        {/* Refresh / Stop button */}
+        {saRefreshing ? (
+          <button
+            onClick={() => void fetch(`/api/audit-log/refresh/${encodeURIComponent(sa.region)}/${encodeURIComponent(sa.subdomain)}/stop`, { method: 'POST' })}
+            title="Stop refresh — partial records will be saved"
+            className="inline-flex items-center justify-center h-7 w-7 rounded border border-destructive text-destructive hover:bg-destructive hover:text-destructive-foreground transition-colors">
+            <Square className="h-3.5 w-3.5" />
+          </button>
+        ) : (
+          <button onClick={() => void handleSaRefresh()} disabled={loading} title="Retrieve latest logs from Audit Log API"
+            className="inline-flex items-center justify-center h-7 w-7 rounded border border-border hover:bg-accent hover:text-accent-foreground transition-colors disabled:opacity-50">
+            <RefreshCw className="h-3.5 w-3.5" />
+          </button>
+        )}
       </div>
 
       {/* SA refresh progress */}
@@ -509,7 +581,20 @@ export default function AuditLogTab({ sa, initialFrom, initialTo, initialCategor
             <span className="text-xs text-muted-foreground">
               Retrieving logs from Audit Log API
               {saProgress && saProgress.page > 0
-                ? ` — page ${saProgress.page}${saProgress.lastTime ? ` · ${saProgress.lastTime}` : ''}${saProgress.pct != null ? ` (${saProgress.pct}%)` : ''}`
+                ? (() => {
+                    const pct = saProgress.pct ?? 0;
+                    const pageStr = ` — page ${saProgress.page}${saProgress.lastTime ? ` · ${saProgress.lastTime}` : ''}`;
+                    const pctStr  = pct > 0 ? ` (${pct.toFixed(2)}%` : '';
+                    let etaStr = '';
+                    if (pct >= 0.5 && refreshStartRef.current) {
+                      const elapsedMs  = Date.now() - refreshStartRef.current;
+                      const remainMs   = (elapsedMs / (pct / 100)) - elapsedMs;
+                      if (remainMs < 60_000)         etaStr = ' · < 1 min';
+                      else if (remainMs < 3_600_000) etaStr = ` · est. ${Math.round(remainMs / 60_000)} min`;
+                      else                           etaStr = ` · est. ${(remainMs / 3_600_000).toFixed(1)} hrs`;
+                    }
+                    return pct > 0 ? `${pageStr}${pctStr}${etaStr})` : pageStr;
+                  })()
                 : '…'}
             </span>
           </div>
@@ -535,7 +620,7 @@ export default function AuditLogTab({ sa, initialFrom, initialTo, initialCategor
 
       {/* Mini area chart */}
       <div className="shrink-0 border-b border-border bg-muted/5">
-        <MiniAuditChart stats={chartStats} from={from} to={to} onSelect={handleChartSelect} />
+        <MiniAuditChart stats={chartStats} from={from} to={to} showSel={userSetRange} onSelect={handleChartSelect} />
       </div>
 
       {/* Error */}
@@ -619,16 +704,12 @@ export default function AuditLogTab({ sa, initialFrom, initialTo, initialCategor
                 className="inline-flex items-center h-6 px-1.5 rounded text-xs border border-border hover:bg-accent disabled:opacity-40">
                 <ChevronLeft className="h-3.5 w-3.5" />
               </button>
-              {Array.from({ length: Math.min(pages, 9) }, (_, idx) => {
-                let p = idx + 1;
-                if (pages > 9) { const start = Math.max(1, Math.min(page - 4, pages - 8)); p = start + idx; }
-                return (
-                  <button key={p} onClick={() => goPage(p)}
-                    className={`inline-flex items-center justify-center h-6 w-6 rounded text-xs border transition-colors ${
-                      p === page ? 'bg-primary text-primary-foreground border-primary' : 'border-border hover:bg-accent'
-                    }`}>{p}</button>
-                );
-              })}
+              <input
+                type="number" min={1} max={pages} defaultValue={page} key={page}
+                className="h-6 w-14 rounded border border-border bg-background px-1.5 text-center text-xs [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+                onKeyDown={e => { if (e.key === 'Enter') { const v = parseInt((e.target as HTMLInputElement).value, 10); if (v >= 1 && v <= pages) goPage(v); } }}
+              />
+              <span className="text-xs text-muted-foreground">/ {pages}</span>
               <button onClick={() => goPage(page + 1)} disabled={page >= pages}
                 className="inline-flex items-center h-6 px-1.5 rounded text-xs border border-border hover:bg-accent disabled:opacity-40">
                 <ChevronRight className="h-3.5 w-3.5" />

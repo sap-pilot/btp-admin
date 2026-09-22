@@ -249,6 +249,8 @@ export default function AppsPage() {
   const [cockpitMenu, setCockpitMenu]       = useState<CockpitMenuItem | null>(null);
   const [activeTab, setActiveTab]           = useState('');
 
+  const [lastRefreshedMs, setLastRefreshedMs]  = useState<number | null>(null);
+
   const [searchInput, setSearchInput]         = useState('');
   const [committedSearch, setCommittedSearch] = useState('');
   const [isSearching, setIsSearching]         = useState(false);
@@ -297,8 +299,8 @@ export default function AppsPage() {
 
   useEffect(() => {
     void fetch('/api/apps/status')
-      .then(r => r.json() as Promise<{ ok: boolean; refreshing: boolean }>)
-      .then(d => { if (d.ok) setIsRefreshing(d.refreshing); })
+      .then(r => r.json() as Promise<{ ok: boolean; refreshing: boolean; lastRefreshedMs?: number | null }>)
+      .then(d => { if (d.ok) { setIsRefreshing(d.refreshing); if (d.lastRefreshedMs) setLastRefreshedMs(d.lastRefreshedMs); } })
       .catch(() => {});
 
     void Promise.all([
@@ -376,6 +378,7 @@ export default function AppsPage() {
           setIsRefreshing(false);
           if (msg.type === 'refresh-done') {
             setProgress(prev => ({ type: 'done', total: prev?.total ?? 0 }));
+            setLastRefreshedMs(Date.now());
             const newLatest = msg.allStats ?? null;
             if (newLatest) setLatest(newLatest);
             void fetchStats(fromSecs, toSecs);
@@ -567,7 +570,14 @@ export default function AppsPage() {
         <button onClick={toggle} className="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-accent/50 transition-colors" title="Toggle sidebar">
           <PanelLeft className="h-4 w-4" />
         </button>
-        <span className="text-sm font-semibold shrink-0">Apps</span>
+        <div className="hidden sm:flex flex-col justify-center min-w-0">
+          <span className="text-sm font-semibold leading-tight">Apps</span>
+          {lastRefreshedMs !== null && (
+            <span className="text-[10px] text-muted-foreground/50 leading-tight">
+              Updated at {new Date(lastRefreshedMs).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' })}
+            </span>
+          )}
+        </div>
 
         {/* Search box — fills remaining space */}
         <div className="relative flex-1 min-w-0 ml-2">

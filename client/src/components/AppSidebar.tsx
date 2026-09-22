@@ -103,8 +103,16 @@ export default function AppSidebar() {
 
   useEffect(() => {
     const p = location.pathname;
-    const label = p === '/home' ? 'Home' : null;
-    document.title = label ? `${label} - ${appTitle}` : appTitle;
+    let label = 'BTP Admin';
+    if (p.startsWith('/home'))             label = 'Homepage';
+    else if (p.startsWith('/status'))      label = 'Health Status';
+    else if (p.startsWith('/apps'))        label = 'Apps';
+    else if (p.startsWith('/destinations'))label = 'Destinations';
+    else if (p.startsWith('/role-collections')) label = 'Role Collections';
+    else if (p.startsWith('/users'))            label = 'Users';
+    else if (p.startsWith('/audit-logs')) label = 'Audit Logs';
+    else if (p.startsWith('/config') || p.startsWith('/subaccount') || p.startsWith('/services')) label = 'Config';
+    document.title = `${label} (${appTitle})`;
   }, [location.pathname, appTitle]);
 
   useEffect(() => {
