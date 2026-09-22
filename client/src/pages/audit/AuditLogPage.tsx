@@ -420,6 +420,7 @@ export default function AuditLogPage() {
           setIsRefreshing(true);
           setProgress({ type: 'running', current: 0, total: data.total ?? 0, alias: '', phase: 'starting' });
         } else if (data.type === 'audit-progress') {
+          setIsRefreshing(true);
           setProgress({ type: 'running', current: data.current ?? 0, total: data.total ?? 0, alias: data.alias ?? '', phase: data.phase ?? '', page: data.page, lastTime: data.lastTime, region: data.region, subdomain: data.subdomain, pct: data.pct, eta: data.eta });
         } else if (data.type === 'audit-done') {
           setIsRefreshing(false);
