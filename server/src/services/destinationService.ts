@@ -821,8 +821,11 @@ async function writeGlobalChangelog(
 
   if (isDelta && changes.length > 0) {
     for (const c of changes) {
-      const histPath = `/destinations/${encodeURIComponent(c.region)}/${encodeURIComponent(c.subdomain)}/${encodeURIComponent(c.name)}/history`;
-      entry += `\n- ${c.action}: ${c.region}.${c.subdomain} -> ${c.name} ([History](${histPath}))`;
+      const histPath = c.spaceName
+        ? `/destinations/${encodeURIComponent(c.region)}/${encodeURIComponent(c.subdomain)}/${encodeURIComponent(c.spaceName)}/${encodeURIComponent(c.instanceName ?? '')}/${encodeURIComponent(c.instanceGuid ?? '')}/${encodeURIComponent(c.name)}/history`
+        : `/destinations/${encodeURIComponent(c.region)}/${encodeURIComponent(c.subdomain)}/${encodeURIComponent(c.name)}/history`;
+      const scopeLabel = c.spaceName ? ` > ${c.spaceName} > ${c.instanceName}` : '';
+      entry += `\n- ${c.action}: ${c.region} > ${c.subdomain}${scopeLabel} → ${c.name} ([History](${histPath}))`;
     }
   }
 
@@ -1237,6 +1240,7 @@ export async function refreshDestinations(username = 'system', mode: 'auto' | 'm
       created += spaceResult.created;
       updated += spaceResult.updated;
       deleted += spaceResult.deleted;
+      destChanges.push(...spaceResult.changes);
     }
   }
 
@@ -1634,7 +1638,7 @@ export async function refreshSpaceDestinations(
   onInstProgress?:     (current: number, total: number, label: string) => void,
   routesTable:         Map<string, string> = new Map(),
   skipGlobalChangelog: boolean = false,
-): Promise<{ created: number; updated: number; deleted: number; errors: string[]; aodInstalled: number; aodUninstalled: number }> {
+): Promise<{ created: number; updated: number; deleted: number; errors: string[]; aodInstalled: number; aodUninstalled: number; changes: DestChange[] }> {
   // Collect all (region, subdomain, spaceId, spaceName) tuples with manageDest=true
   type SpaceTodo = { region: string; subdomain: string; spaceId: string; spaceName: string; orgId: string; aod?: boolean };
   const todos: SpaceTodo[] = [];
@@ -1644,9 +1648,10 @@ export async function refreshSpaceDestinations(
       if (sp.manageDest) todos.push({ region: sa.region, subdomain: sa.subdomain, spaceId: sp.spaceId, spaceName: sp.spaceName, orgId: sa.org.orgId, aod: sp.aod });
     }
   }
-  if (todos.length === 0) return { created: 0, updated: 0, deleted: 0, errors: [], aodInstalled: 0, aodUninstalled: 0 };
+  if (todos.length === 0) return { created: 0, updated: 0, deleted: 0, errors: [], aodInstalled: 0, aodUninstalled: 0, changes: [] };
 
   const issues: string[] = [];
+  const spaceChanges: DestChange[] = [];
   let created = 0, updated = 0, deleted = 0, done = 0, aodInstalledCount = 0, aodUninstalledCount = 0;
 
   const { orgs: keyStore, planGuids: instancePlanGuids } = await loadKeyStore();
@@ -1782,7 +1787,7 @@ export async function refreshSpaceDestinations(
 
   if (spaceInstances.length === 0) {
     logger.info({ todos: todos.length }, 'No destination service instances found in spaces with manageDest=true');
-    return { created, updated, deleted, errors: issues, aodInstalled: 0, aodUninstalled: 0 };
+    return { created, updated, deleted, errors: issues, aodInstalled: 0, aodUninstalled: 0, changes: [] };
   }
 
   let spaceReceived = 0;
@@ -1836,8 +1841,8 @@ export async function refreshSpaceDestinations(
         apiNames.add(name);
         instanceDests.push(d);
         const r = await persistSpaceDestination(instanceDir, name, d, username);
-        if (r === 'created') created++;
-        else if (r === 'updated') updated++;
+        if (r === 'created') { created++; spaceChanges.push({ region: inst.region, subdomain: inst.subdomain, name, action: 'created', spaceName: inst.spaceName, instanceName: inst.name, instanceGuid: inst.guid }); }
+        else if (r === 'updated') { updated++; spaceChanges.push({ region: inst.region, subdomain: inst.subdomain, name, action: 'updated', spaceName: inst.spaceName, instanceName: inst.name, instanceGuid: inst.guid }); }
         spaceReceived++;
       }
       // Mark deleted
@@ -1854,6 +1859,7 @@ export async function refreshSpaceDestinations(
         await rename(join(instanceDir, fname), instDeletedPath);
         const nowInst = new Date(); await utimes(instDeletedPath, nowInst, nowInst);
         deleted++;
+        spaceChanges.push({ region: inst.region, subdomain: inst.subdomain, name: destName, action: 'deleted', spaceName: inst.spaceName, instanceName: inst.name, instanceGuid: inst.guid });
       }
       return true;
     }
@@ -1963,7 +1969,7 @@ export async function refreshSpaceDestinations(
     emit('dest', { ts: Date.now() });
   }
 
-  return { created, updated, deleted, errors: issues, aodInstalled: aodInstalledCount, aodUninstalled: aodUninstalledCount };
+  return { created, updated, deleted, errors: issues, aodInstalled: aodInstalledCount, aodUninstalled: aodUninstalledCount, changes: spaceChanges };
 }
 
 export async function saveInstanceDestinationEntry(
