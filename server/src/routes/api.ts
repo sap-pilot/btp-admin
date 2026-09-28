@@ -16,9 +16,11 @@ const router = Router();
 
 // Public — exempt from session auth; used by the sidebar before login for site-switcher and title.
 router.get('/info', (_req, res) => {
+  const maxStorageStr = getVar('MAX_RESPONSE_STORAGE_DAYS');
+  const maxStorageDays = maxStorageStr ? (parseInt(maxStorageStr, 10) || 0) : config.MAX_RESPONSE_STORAGE_DAYS;
   const maxAuditStr  = getVar('MAX_AUDIT_LOG_STORAGE_DAYS');
   const maxAuditDays = maxAuditStr ? (parseInt(maxAuditStr, 10) || 0) : 0;
-  res.json({ syncRemote: !!config.SYNC_REMOTE, city: getCity(), sites: getSites(), maxStorageDays: config.MAX_RESPONSE_STORAGE_DAYS, maxAuditStorageDays: maxAuditDays });
+  res.json({ syncRemote: !!config.SYNC_REMOTE, city: getCity(), sites: getSites(), maxStorageDays, maxAuditStorageDays: maxAuditDays });
 });
 
 router.get('/events', (req, res) => {
