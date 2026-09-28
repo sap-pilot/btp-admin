@@ -4,17 +4,19 @@ export type LiveEventData = { service: string; ts: number };
 
 /**
  * Subscribe to server-sent events for live updates.
- * Pass `service` to scope events to one service (history page), or `null` for global events (overview).
- * Pass `null` for `service` to disable the subscription (e.g., when viewing a fixed date range).
+ * - string  → scope to one service (history page)
+ * - null    → subscribe to all events (overview)
+ * - false   → disabled (e.g. viewing a closed past date range)
  */
 export function useLiveEvents(
-  service: string | null,
+  service: string | null | false,
   onUpdate: (data: LiveEventData) => void,
 ): void {
   const cbRef = useRef(onUpdate);
   cbRef.current = onUpdate;
 
   useEffect(() => {
+    if (service === false) return;
     const url = service !== null
       ? `/api/events?service=${encodeURIComponent(service)}`
       : '/api/events';

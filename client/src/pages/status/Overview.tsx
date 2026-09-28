@@ -16,7 +16,7 @@ import { useWindowWidth } from '@/hooks/useWindowWidth';
 import { useAuth } from '@/hooks/useAuth';
 import { useTheme } from '@/hooks/useTheme';
 import { useSidebar } from '@/components/AppLayout';
-import { useTimeRange, fmtDateRange } from '@/hooks/useTimeRange';
+import { useTimeRange, fmtDateRange, isClosedDateRange } from '@/hooks/useTimeRange';
 import DateRangePicker from '@/components/DateRangePicker';
 import { useLiveEvents } from '@/hooks/useLiveEvents';
 
@@ -110,8 +110,12 @@ export default function Overview() {
     const sp = new URLSearchParams(window.location.search);
     if (next.mode === 'hours') {
       sp.set('hours', String(next.hours));
+      sp.delete('from');
+      sp.delete('until');
     } else {
       sp.delete('hours');
+      sp.set('from', next.fromDate);
+      sp.set('until', next.untilDate);
     }
     navigate('?' + sp.toString(), { replace: true });
   }
@@ -211,7 +215,7 @@ const [statusFilter, setStatusFilter] = useState<'failed' | 'partial' | null>(()
       .catch(() => null);
   }, [queryString]);
 
-  useLiveEvents(null, handleLiveUpdate);
+  useLiveEvents(isClosedDateRange(range) ? false : null, handleLiveUpdate);
 
   function applyStatusFilter(next: 'failed' | 'partial' | null) {
     setStatusFilter(next);

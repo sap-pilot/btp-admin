@@ -25,6 +25,8 @@ export function useTimeRange(initialSearch?: string) {
       const p = new URLSearchParams(initialSearch);
       const h = p.get('hours');
       if (h && !isNaN(Number(h)) && Number(h) > 0) return { mode: 'hours', hours: Number(h) };
+      const from = p.get('from'), until = p.get('until');
+      if (from && until) return { mode: 'dateRange', fromDate: from, untilDate: until };
     }
     return load();
   });
@@ -46,6 +48,14 @@ export function useTimeRange(initialSearch?: string) {
   })();
 
   return { range, setRange, queryString };
+}
+
+/** Returns true when the range is a past-only date range that cannot receive new executions. */
+export function isClosedDateRange(range: TimeRange): boolean {
+  if (range.mode !== 'dateRange') return false;
+  const d = new Date();
+  const today = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  return range.untilDate < today;
 }
 
 export function fmtDateRange(fromDate: string, untilDate: string): string {

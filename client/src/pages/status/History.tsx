@@ -10,7 +10,7 @@ import StatusDots from '@/components/status/StatusDots';
 import ResponseTimeChart from '@/components/status/ResponseTimeChart';
 import ResponseDetailModal from '@/components/status/ResponseDetailModal';
 import TestModal from '@/components/status/TestModal';
-import { useTimeRange, fmtDateRange } from '@/hooks/useTimeRange';
+import { useTimeRange, fmtDateRange, isClosedDateRange } from '@/hooks/useTimeRange';
 import DateRangePicker from '@/components/DateRangePicker';
 import { parseFilename } from '@/lib/parseFilename';
 import {
@@ -110,8 +110,12 @@ export default function History() {
     const sp = new URLSearchParams(window.location.search);
     if (next.mode === 'hours') {
       sp.set('hours', String(next.hours));
+      sp.delete('from');
+      sp.delete('until');
     } else {
       sp.delete('hours');
+      sp.set('from', next.fromDate);
+      sp.set('until', next.untilDate);
     }
     navigate('?' + sp.toString(), { replace: true });
   }
@@ -239,8 +243,8 @@ export default function History() {
     setChartSelTo(null);
   }, [effectiveQueryString]);
 
-  // Disable live updates when viewing a fixed date range (new files would be outside the range)
-  useLiveEvents(range.mode === 'dateRange' ? null : name, fetchDelta);
+  // Disable live updates when viewing a past-only date range (new executions cannot fall within it)
+  useLiveEvents(isClosedDateRange(range) ? false : name, fetchDelta);
 
   useEffect(() => {
     fetch(`/api/status/service-summary?${queryString}`)
