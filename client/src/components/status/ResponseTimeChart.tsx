@@ -4,6 +4,9 @@ import type { HistoryFile, ServiceConfig } from '@shared/types';
 interface Props {
   files: HistoryFile[];
   service: ServiceConfig | null;
+  onRangeSelect?: (from: number, to: number) => void;
+  selectedFrom?: number | null;
+  selectedTo?: number | null;
 }
 
 const COLORS = ['#3b82f6', '#22c55e', '#f97316', '#a855f7', '#ec4899', '#14b8a6'];
@@ -37,9 +40,16 @@ function fmtTick(ts: number, spanMs: number): string {
 // ResponseTimeChart is only used on /service/:name which receives full data from /api/history/:name
 type FullFile = HistoryFile & { timestamp: number; responseTime: number };
 
-export default function ResponseTimeChart({ files: rawFiles, service }: Props) {
+export default function ResponseTimeChart({ files: rawFiles, service, onRangeSelect, selectedFrom, selectedTo }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [width, setWidth] = useState(0);
+
+  // Drag state via refs to avoid stale-closure issues; dragVis drives the visual overlay
+  const dragAnchorRef = useRef<number | null>(null);
+  const dragCursorRef = useRef<number | null>(null);
+  const [dragVis, setDragVis] = useState<{ x1: number; x2: number } | null>(null);
+  // Stable bounds updated each render so event handlers always see current values
+  const boundsRef = useRef({ tsMin: 0, tsMax: 0, chartW: 1 });
 
   useEffect(() => {
     const el = containerRef.current;
@@ -101,6 +111,9 @@ export default function ResponseTimeChart({ files: rawFiles, service }: Props) {
   const yMax = niceMax(rtMax);
   const spanMs = tsMax - tsMin;
 
+  // Keep bounds fresh for event handlers
+  boundsRef.current = { tsMin, tsMax, chartW };
+
   const sx = (ts: number) =>
     tsMax === tsMin ? chartW / 2 : ((ts - tsMin) / (tsMax - tsMin)) * chartW;
   const sy = (ms: number) => chartH - (ms / yMax) * chartH;
@@ -124,6 +137,21 @@ export default function ResponseTimeChart({ files: rawFiles, service }: Props) {
 
   // Only render dots when data is sparse enough to avoid DOM bloat
   const showDots = files.length <= 200;
+
+  // Selection overlay in chart coordinates
+  const selX1 = selectedFrom != null ? Math.max(0, Math.min(chartW, sx(selectedFrom))) : null;
+  const selX2 = selectedTo != null ? Math.max(0, Math.min(chartW, sx(selectedTo))) : null;
+
+  function getOffsetPx(e: React.MouseEvent<SVGRectElement>): number {
+    return Math.max(0, Math.min(boundsRef.current.chartW, e.clientX - e.currentTarget.getBoundingClientRect().left));
+  }
+
+  function commitDrag(anchorPx: number, cursorPx: number) {
+    if (Math.abs(cursorPx - anchorPx) < 3) return;
+    const lo = Math.min(anchorPx, cursorPx), hi = Math.max(anchorPx, cursorPx);
+    const { tsMin: tMin, tsMax: tMax, chartW: cW } = boundsRef.current;
+    onRangeSelect!(tMin + (lo / cW) * (tMax - tMin), tMin + (hi / cW) * (tMax - tMin));
+  }
 
   return (
     <div ref={containerRef}>
@@ -180,11 +208,73 @@ export default function ResponseTimeChart({ files: rawFiles, service }: Props) {
                     cy={sy(p.responseTime)}
                     r={2.5}
                     fill={COLORS[i % COLORS.length]}
+                    style={{ pointerEvents: 'none' }}
                   >
                     <title>{`${s.name} · ${new Date(p.timestamp).toLocaleString()} · ${p.responseTime}ms`}</title>
                   </circle>
                 )),
               )}
+
+            {/* Active time-range selection overlay */}
+            {selX1 !== null && selX2 !== null && !dragVis && (
+              <rect
+                x={selX1} y={0}
+                width={Math.max(2, selX2 - selX1)} height={chartH}
+                fill="white" fillOpacity={0.12}
+                stroke="white" strokeOpacity={0.35} strokeWidth={1}
+                style={{ pointerEvents: 'none' }}
+              />
+            )}
+
+            {/* Drag-in-progress overlay */}
+            {dragVis && (
+              <rect
+                x={dragVis.x1} y={0}
+                width={Math.max(2, dragVis.x2 - dragVis.x1)} height={chartH}
+                fill="white" fillOpacity={0.25}
+                stroke="white" strokeOpacity={0.75} strokeWidth={1}
+                style={{ pointerEvents: 'none' }}
+              />
+            )}
+
+            {/* Transparent hit rect for drag-to-select */}
+            {onRangeSelect && (
+              <rect
+                x={0} y={0} width={chartW} height={chartH}
+                fill="transparent"
+                style={{ cursor: 'crosshair' }}
+                onMouseDown={e => {
+                  const px = getOffsetPx(e);
+                  dragAnchorRef.current = px;
+                  dragCursorRef.current = px;
+                  setDragVis({ x1: px, x2: px });
+                }}
+                onMouseMove={e => {
+                  if (dragAnchorRef.current === null) return;
+                  const px = getOffsetPx(e);
+                  dragCursorRef.current = px;
+                  const a = dragAnchorRef.current;
+                  setDragVis({ x1: Math.min(a, px), x2: Math.max(a, px) });
+                }}
+                onMouseUp={e => {
+                  if (dragAnchorRef.current === null) return;
+                  const anchor = dragAnchorRef.current, cursor = getOffsetPx(e);
+                  dragAnchorRef.current = null;
+                  dragCursorRef.current = null;
+                  setDragVis(null);
+                  commitDrag(anchor, cursor);
+                }}
+                onMouseLeave={() => {
+                  if (dragAnchorRef.current === null) return;
+                  const anchor = dragAnchorRef.current;
+                  const cursor = dragCursorRef.current ?? anchor;
+                  dragAnchorRef.current = null;
+                  dragCursorRef.current = null;
+                  setDragVis(null);
+                  commitDrag(anchor, cursor);
+                }}
+              />
+            )}
           </g>
         </svg>
       )}

@@ -29,7 +29,7 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { ArrowLeft, AlertCircle, ChevronDown, ExternalLink, MoreHorizontal, PanelLeft, PlayCircle, Star } from 'lucide-react';
+import { ArrowLeft, AlertCircle, ChevronDown, ExternalLink, MoreHorizontal, PanelLeft, PlayCircle, Star, X } from 'lucide-react';
 import { useWindowWidth } from '@/hooks/useWindowWidth';
 import { useAuth } from '@/hooks/useAuth';
 import { useSidebar } from '@/components/AppLayout';
@@ -65,6 +65,14 @@ function evalTriggerClass(mode: EvaluationMode): string {
   if (mode === 'alwaysok') return 'bg-emerald-950 border-emerald-700 text-emerald-300 hover:bg-emerald-900';
   if (mode === 'alwayserror') return 'bg-red-950 border-red-700 text-red-400 hover:bg-red-900';
   return ''; // condition: default shadcn trigger styling
+}
+
+function fmtChartRange(from: number, to: number): string {
+  const pad = (n: number) => String(n).padStart(2, '0');
+  const f = new Date(from), t = new Date(to);
+  const dt = (d: Date) => `${pad(d.getMonth() + 1)}/${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  const tm = (d: Date) => `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  return f.toDateString() === t.toDateString() ? `${dt(f)} – ${tm(t)}` : `${dt(f)} – ${dt(t)}`;
 }
 
 function formatTs(ms: number): string {
@@ -132,6 +140,10 @@ export default function History() {
   const [filterLocation, setFilterLocation] = useState(() => new URLSearchParams(location.search).get('location') ?? 'all');
   const [filterStatus, setFilterStatus] = useState(() => new URLSearchParams(location.search).get('status') ?? 'all');
   const [filterTag, setFilterTag] = useState(() => new URLSearchParams(location.search).get('tag') ?? 'all');
+
+  // Chart time-range selection (drag on the response time chart)
+  const [chartSelFrom, setChartSelFrom] = useState<number | null>(null);
+  const [chartSelTo, setChartSelTo] = useState<number | null>(null);
 
   // Re-apply URL params when navigating to same route with different params
   useEffect(() => {
@@ -220,6 +232,12 @@ export default function History() {
       })
       .catch(() => null);
   }, [name, range, starredMode]);
+
+  // Clear chart selection when the overall time range changes
+  useEffect(() => {
+    setChartSelFrom(null);
+    setChartSelTo(null);
+  }, [effectiveQueryString]);
 
   // Disable live updates when viewing a fixed date range (new files would be outside the range)
   useLiveEvents(range.mode === 'dateRange' ? null : name, fetchDelta);
@@ -341,9 +359,10 @@ export default function History() {
   }, [files]);
 
   const hasFilter = filterEndpoint !== 'all' || filterLocation !== 'all' || filterStatus !== 'all' || filterTag !== 'all';
+  const hasChartFilter = chartSelFrom !== null && chartSelTo !== null;
 
   const filteredFiles = useMemo(() => {
-    if (!hasFilter) return files;
+    if (!hasFilter && !hasChartFilter) return files;
     return files.filter(f => {
       if (filterEndpoint !== 'all' && endpointLabel(f) !== filterEndpoint) return false;
       if (filterLocation !== 'all' && (f.city ?? '—') !== filterLocation) return false;
@@ -357,10 +376,11 @@ export default function History() {
         }
       }
       if (filterTag === 'starred' && !f.starred) return false;
+      if (hasChartFilter && ((f.timestamp ?? 0) < chartSelFrom! || (f.timestamp ?? 0) > chartSelTo!)) return false;
       return true;
     });
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [files, service, filterEndpoint, filterLocation, filterStatus, filterTag, hasFilter]);
+  }, [files, service, filterEndpoint, filterLocation, filterStatus, filterTag, hasFilter, chartSelFrom, chartSelTo, hasChartFilter]);
 
   // Files for the response time chart: filtered by endpoint + location only (status does not affect the chart)
   const chartFiles = useMemo(() => {
@@ -738,12 +758,32 @@ export default function History() {
         {/* Response Time Chart */}
         <Card>
           <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium text-muted-foreground">
+            <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2 flex-wrap">
               Response Time
+              {hasChartFilter && (
+                <>
+                  <span className="font-normal text-xs tabular-nums">
+                    {fmtChartRange(chartSelFrom!, chartSelTo!)}
+                  </span>
+                  <button
+                    onClick={() => { setChartSelFrom(null); setChartSelTo(null); }}
+                    className="text-muted-foreground hover:text-foreground transition-colors"
+                    title="Clear chart time selection"
+                  >
+                    <X className="h-3.5 w-3.5" />
+                  </button>
+                </>
+              )}
             </CardTitle>
           </CardHeader>
           <CardContent>
-            <ResponseTimeChart files={chartFiles} service={service} />
+            <ResponseTimeChart
+              files={chartFiles}
+              service={service}
+              onRangeSelect={(from, to) => { setChartSelFrom(from); setChartSelTo(to); }}
+              selectedFrom={chartSelFrom}
+              selectedTo={chartSelTo}
+            />
           </CardContent>
         </Card>
 
