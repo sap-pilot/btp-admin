@@ -1734,20 +1734,28 @@ export async function refreshSpaceDestinations(
       if (sepIdx < 0) continue;
       const guid = instEnt.name.slice(0, sepIdx);
       if (knownGuids.has(guid)) continue; // still present in CF — skip
-      // Instance removed from CF: count active destinations then rename folder to {name}.deleted
-      const instanceDir  = join(spaceDir, instEnt.name);
-      const files        = await readdir(instanceDir).catch(() => [] as string[]);
-      const activeCount  = files.filter(f => f.endsWith('.json') && !f.endsWith('.deleted.json')).length;
+      // Instance removed from CF: enumerate active destinations, rename folder to {name}.deleted
+      const instanceDir    = join(spaceDir, instEnt.name);
+      const files          = await readdir(instanceDir).catch(() => [] as string[]);
+      const activeFiles    = files.filter(f => f.endsWith('.json') && !f.endsWith('.deleted.json'));
+      const activeCount    = activeFiles.length;
+      const instanceName   = instEnt.name.slice(sepIdx + 1);
       const deletedDirPath = join(spaceDir, `${instEnt.name}.deleted`);
+      const recordDeletes  = () => {
+        deleted += activeCount;
+        for (const f of activeFiles) {
+          spaceChanges.push({ region: todo.region, subdomain: todo.subdomain, name: f.slice(0, -5), action: 'deleted', spaceName: todo.spaceName, instanceName, instanceGuid: guid });
+        }
+      };
       try {
         await rename(instanceDir, deletedDirPath);
-        deleted += activeCount;
+        recordDeletes();
         logger.info({ spaceKey, instance: instEnt.name, count: activeCount }, 'Destination service instance removed from CF — folder renamed to .deleted');
       } catch (err) {
         if ((err as NodeJS.ErrnoException).code === 'EEXIST') {
           await rm(deletedDirPath, { recursive: true, force: true });
           await rename(instanceDir, deletedDirPath);
-          deleted += activeCount;
+          recordDeletes();
           logger.info({ spaceKey, instance: instEnt.name, count: activeCount }, 'Destination service instance removed from CF — overwrote existing .deleted folder');
         } else {
           logger.warn({ spaceKey, instance: instEnt.name, err }, 'Failed to rename removed instance folder to .deleted');
@@ -1787,7 +1795,7 @@ export async function refreshSpaceDestinations(
 
   if (spaceInstances.length === 0) {
     logger.info({ todos: todos.length }, 'No destination service instances found in spaces with manageDest=true');
-    return { created, updated, deleted, errors: issues, aodInstalled: 0, aodUninstalled: 0, changes: [] };
+    return { created, updated, deleted, errors: issues, aodInstalled: 0, aodUninstalled: 0, changes: spaceChanges };
   }
 
   let spaceReceived = 0;
