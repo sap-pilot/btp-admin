@@ -2,6 +2,7 @@ import { readdir, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import { config } from '../config.js';
 import { logger } from '../logger.js';
+import { getVar } from './variablesService.js';
 import { parseFilename } from './localStoreService.js';
 
 const INTERVAL_MS = 60 * 60 * 1000; // 1 hour
@@ -10,7 +11,8 @@ let timer: ReturnType<typeof setTimeout> | null = null;
 let stopped = false;
 
 export async function runHousekeeping(): Promise<void> {
-  const maxDays = config.MAX_RESPONSE_STORAGE_DAYS;
+  const maxDaysStr = getVar('MAX_RESPONSE_STORAGE_DAYS');
+  const maxDays = maxDaysStr ? (parseInt(maxDaysStr, 10) || 0) : config.MAX_RESPONSE_STORAGE_DAYS;
 
   // ── Response file cleanup ────────────────────────────────────────────────────
   if (maxDays > 0) {
