@@ -795,174 +795,199 @@ export async function refreshSubaccountAuditLogs(region: string, subdomain: stri
   saRefreshRunning.add(key);
   const warnings: string[] = [];
 
+  const MAX_ATTEMPTS = 3;
   try {
-    const allSas = await readSubaccounts();
-    const sa = allSas.find(s => s.region === region && s.subdomain.toLowerCase() === subdomain.toLowerCase());
-    if (!sa) {
-      const w = [`Subaccount not found: ${region}/${subdomain}`];
-      emitImmediate(topic, { type: 'audit-sa-done', warnings: w });
-      callbacks?.onDone?.(w, 0);
-      return;
-    }
-    const alias = sa.alias || sa.subaccountName;
-    emitImmediate(topic, { type: 'audit-sa-start' });
+    for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+      warnings.length = 0; // reset per attempt so stale errors from a failed run don't pollute the next
+      try {
+        const allSas = await readSubaccounts();
+        const sa = allSas.find(s => s.region === region && s.subdomain.toLowerCase() === subdomain.toLowerCase());
+        if (!sa) {
+          const w = [`Subaccount not found: ${region}/${subdomain}`];
+          emitImmediate(topic, { type: 'audit-sa-done', warnings: w });
+          callbacks?.onDone?.(w, 0);
+          return;
+        }
+        const alias = sa.alias || sa.subaccountName;
+        emitImmediate(topic, { type: 'audit-sa-start' });
 
-    const creds = await getAuditLogCredentials(sa, warnings);
-    if (!creds) { emitImmediate(topic, { type: 'audit-sa-done', warnings }); callbacks?.onDone?.(warnings, 0); return; }
+        const creds = await getAuditLogCredentials(sa, warnings);
+        if (!creds) { emitImmediate(topic, { type: 'audit-sa-done', warnings }); callbacks?.onDone?.(warnings, 0); return; }
 
-    const cacheKey = `${sa.region}/${sa.subdomain}`;
-    let token: string;
-    try {
-      token = await getAuditLogToken(creds, cacheKey);
-    } catch (err) {
-      warnings.push(`${alias} token error: ${err instanceof Error ? err.message : String(err)}`);
-      emitImmediate(topic, { type: 'audit-sa-done', warnings });
-      callbacks?.onDone?.(warnings, 0);
-      return;
-    }
-
-    const dir      = getAuditLogDir(sa.region, sa.subdomain);
-    const purged = await purgeOldAuditFiles(dir);
-    if (purged > 0) logger.info({ alias, purged }, 'audit-sa: purged old files before refresh');
-    const segments = await buildSegments(dir);
-    logger.debug(
-      { region: sa.region, subdomain: sa.subdomain, segments: segments.map(s => ({ startTs: s.startTs.toISOString(), endTs: s.endTs?.toISOString() ?? null })) },
-      'audit-sa: segments',
-    );
-
-    const saStartMs         = Date.now();
-    let   completedMinutes  = 0;
-    let   totalSaved        = 0;
-    let   page              = 0;  // global page count across segments (for display)
-    let   maxProcessedMinutes = 0; // high-water mark — SAP pages are not guaranteed chronological
-
-    emit(topic, { type: 'audit-sa-progress', phase: 'fetching', page: 0, lastTime: '', pct: 0, processedMinutes: 0, totalMinutes: 0, eta: null });
-
-    for (const seg of segments) {
-      if (saStopRequested.has(key)) break;
-
-      // Snapshot endTs now; open-ended segment uses current time as upper bound
-      const segEndTs = seg.endTs ?? new Date();
-      let url: string | null =
-        `${creds.url}/auditlog/v2/auditlogrecords` +
-        `?time_from=${encodeURIComponent(formatTimeForApi(seg.startTs))}` +
-        `&time_to=${encodeURIComponent(formatTimeForApi(segEndTs))}`;
-
-      let pendingRecords: AuditRecord[] = [];
-      let lastHourKey   = '';
-      let pageInSegment = 0;
-
-      while (url) {
-        if (saStopRequested.has(key)) {
-          logger.info({ alias, region: sa.region, subdomain: sa.subdomain }, 'audit-sa: stop requested — saving pending records and halting');
-          break;
+        const cacheKey = `${sa.region}/${sa.subdomain}`;
+        let token: string;
+        try {
+          token = await getAuditLogToken(creds, cacheKey);
+        } catch (err) {
+          warnings.push(`${alias} token error: ${err instanceof Error ? err.message : String(err)}`);
+          emitImmediate(topic, { type: 'audit-sa-done', warnings });
+          callbacks?.onDone?.(warnings, 0);
+          return;
         }
 
-        const delayMs = getRateLimitDelayMs(sa.region);
-        const pageUrl = url;
-        const t0Page  = Date.now();
-        let res: Response;
-        let attempts  = 0;
-        // eslint-disable-next-line no-constant-condition
-        while (true) {
-          res = await fetch(pageUrl, { headers: { Authorization: `Bearer ${token}` } });
-          if (res.status !== 429 || attempts >= 3) break;
-          const retryAfter = res.headers.get('Retry-After');
-          const wait = retryAfter ? parseFloat(retryAfter) * 1000 : delayMs * 4;
-          logger.warn({ alias, attempt: attempts + 1, wait }, 'audit-sa: rate limited');
-          await new Promise(r => setTimeout(r, wait));
-          attempts++;
-        }
-
-        const durationMs = Date.now() - t0Page;
-
-        if (res.status >= 500) {
-          logger.error({ region: sa.region, subdomain: sa.subdomain, status: res.status, durationMs }, 'audit-sa: 5xx error');
-          warnings.push(`${alias} audit log API HTTP ${res.status} at page ${page + 1}`);
-          break;
-        }
-        if (res.status >= 400) {
-          logger.warn({ region: sa.region, subdomain: sa.subdomain, status: res.status, durationMs }, 'audit-sa: 4xx error');
-          warnings.push(`${alias} audit log API HTTP ${res.status} at page ${page + 1}`);
-          break;
-        }
-
-        const records = await res.json() as AuditRecord[];
-        pageInSegment++;
-        page++;
-
-        const lastTime    = records[records.length - 1]?.time ?? '';
-        const lastTimeUtc = lastTime ? (lastTime.endsWith('Z') ? lastTime : lastTime + 'Z') : '';
-
-        // Compute progress (suppress pageInSegment === 1 — SAP returns a preview of most-recent on first time_from/time_to call)
-        let pct = 0, processed = completedMinutes, dynamicTotal = 0, eta: number | null = null;
-        if (pageInSegment > 1 && lastTimeUtc) {
-          const nowMs = Date.now();
-          dynamicTotal = segments.reduce((s, sg) => s + Math.max(0, countMinutes(sg.startTs, sg.endTs ?? new Date(nowMs))), 0);
-          const lastTimeMs    = new Date(lastTimeUtc).getTime();
-          const rawProcessed  = completedMinutes + Math.max(0, (lastTimeMs - seg.startTs.getTime()) / 60000);
-          processed           = Math.max(maxProcessedMinutes, rawProcessed);
-          maxProcessedMinutes = processed;
-          pct = Math.min(100, Math.round(processed / Math.max(1, dynamicTotal) * 10000) / 100);
-          const elapsedSec = (nowMs - saStartMs) / 1000;
-          if (pct >= 0.5) eta = Math.max(0, elapsedSec / pct * 100 - elapsedSec);
-        } else {
-          dynamicTotal = segments.reduce((s, sg) => s + Math.max(0, countMinutes(sg.startTs, sg.endTs ?? new Date())), 0);
-        }
-
+        const dir      = getAuditLogDir(sa.region, sa.subdomain);
+        const purged = await purgeOldAuditFiles(dir);
+        if (purged > 0) logger.info({ alias, purged }, 'audit-sa: purged old files before refresh');
+        const segments = await buildSegments(dir);
         logger.debug(
-          { target: `${sa.region}/${sa.subdomain}`, page, lastTime: lastTimeUtc, pct, processedMinutes: processed, totalMinutes: dynamicTotal, durationMs },
-          'audit-sa: page fetched',
+          { region: sa.region, subdomain: sa.subdomain, segments: segments.map(s => ({ startTs: s.startTs.toISOString(), endTs: s.endTs?.toISOString() ?? null })) },
+          'audit-sa: segments',
         );
-        emit(topic, { type: 'audit-sa-progress', phase: 'fetching', page: pageInSegment, lastTime: lastTimeUtc, pct, processedMinutes: processed, totalMinutes: dynamicTotal, eta });
-        if (pageInSegment > 1) callbacks?.onProgress?.(processed, dynamicTotal, lastTimeUtc, pct, sa.region, sa.subdomain);
 
-        const firstHourKey = records[0]?.time ? parseHourKey(records[0].time) : '';
-        const newHour = firstHourKey !== '' && firstHourKey !== lastHourKey && lastHourKey !== '';
-        if (pendingRecords.length > 0 && (newHour || pendingRecords.length > 2000)) {
-          await parseAndSaveRecords(dir, pendingRecords);
-          totalSaved += pendingRecords.length;
-          pendingRecords = [];
+        const saStartMs         = Date.now();
+        let   completedMinutes  = 0;
+        let   totalSaved        = 0;
+        let   page              = 0;  // global page count across segments (for display)
+        let   maxProcessedMinutes = 0; // high-water mark — SAP pages are not guaranteed chronological
+
+        emit(topic, { type: 'audit-sa-progress', phase: 'fetching', page: 0, lastTime: '', pct: 0, processedMinutes: 0, totalMinutes: 0, eta: null });
+
+        for (const seg of segments) {
+          if (saStopRequested.has(key)) break;
+
+          // Snapshot endTs now; open-ended segment uses current time as upper bound
+          const segEndTs = seg.endTs ?? new Date();
+          let url: string | null =
+            `${creds.url}/auditlog/v2/auditlogrecords` +
+            `?time_from=${encodeURIComponent(formatTimeForApi(seg.startTs))}` +
+            `&time_to=${encodeURIComponent(formatTimeForApi(segEndTs))}`;
+
+          let pendingRecords: AuditRecord[] = [];
+          let lastHourKey   = '';
+          let pageInSegment = 0;
+
+          while (url) {
+            if (saStopRequested.has(key)) {
+              logger.info({ alias, region: sa.region, subdomain: sa.subdomain }, 'audit-sa: stop requested — saving pending records and halting');
+              break;
+            }
+
+            const delayMs = getRateLimitDelayMs(sa.region);
+            const pageUrl = url;
+            const t0Page  = Date.now();
+            let res: Response;
+            let attempts  = 0;
+            // eslint-disable-next-line no-constant-condition
+            while (true) {
+              res = await fetch(pageUrl, { headers: { Authorization: `Bearer ${token}` } });
+              if (res.status !== 429 || attempts >= 3) break;
+              const retryAfter = res.headers.get('Retry-After');
+              const wait = retryAfter ? parseFloat(retryAfter) * 1000 : delayMs * 4;
+              logger.warn({ alias, attempt: attempts + 1, wait }, 'audit-sa: rate limited');
+              await new Promise(r => setTimeout(r, wait));
+              attempts++;
+            }
+
+            const durationMs = Date.now() - t0Page;
+
+            if (res.status >= 500) {
+              logger.error({ region: sa.region, subdomain: sa.subdomain, status: res.status, durationMs }, 'audit-sa: 5xx error');
+              warnings.push(`${alias} audit log API HTTP ${res.status} at page ${page + 1}`);
+              break;
+            }
+            if (res.status >= 400) {
+              logger.warn({ region: sa.region, subdomain: sa.subdomain, status: res.status, durationMs }, 'audit-sa: 4xx error');
+              warnings.push(`${alias} audit log API HTTP ${res.status} at page ${page + 1}`);
+              break;
+            }
+
+            const bodyText = await res.text();
+            let records: AuditRecord[];
+            try {
+              records = JSON.parse(bodyText) as AuditRecord[];
+            } catch (parseErr) {
+              logger.debug(
+                { region: sa.region, subdomain: sa.subdomain, status: res.status, bodyLength: bodyText.length, body: bodyText.slice(0, 1000) },
+                'audit-sa: failed to parse api response body',
+              );
+              throw parseErr;
+            }
+            pageInSegment++;
+            page++;
+
+            const lastTime    = records[records.length - 1]?.time ?? '';
+            const lastTimeUtc = lastTime ? (lastTime.endsWith('Z') ? lastTime : lastTime + 'Z') : '';
+
+            // Compute progress (suppress pageInSegment === 1 — SAP returns a preview of most-recent on first time_from/time_to call)
+            let pct = 0, processed = completedMinutes, dynamicTotal = 0, eta: number | null = null;
+            if (pageInSegment > 1 && lastTimeUtc) {
+              const nowMs = Date.now();
+              dynamicTotal = segments.reduce((s, sg) => s + Math.max(0, countMinutes(sg.startTs, sg.endTs ?? new Date(nowMs))), 0);
+              const lastTimeMs    = new Date(lastTimeUtc).getTime();
+              const rawProcessed  = completedMinutes + Math.max(0, (lastTimeMs - seg.startTs.getTime()) / 60000);
+              processed           = Math.max(maxProcessedMinutes, rawProcessed);
+              maxProcessedMinutes = processed;
+              pct = Math.min(100, Math.round(processed / Math.max(1, dynamicTotal) * 10000) / 100);
+              const elapsedSec = (nowMs - saStartMs) / 1000;
+              if (pct >= 0.5) eta = Math.max(0, elapsedSec / pct * 100 - elapsedSec);
+            } else {
+              dynamicTotal = segments.reduce((s, sg) => s + Math.max(0, countMinutes(sg.startTs, sg.endTs ?? new Date())), 0);
+            }
+
+            logger.debug(
+              { target: `${sa.region}/${sa.subdomain}`, page, lastTime: lastTimeUtc, pct, processedMinutes: processed, totalMinutes: dynamicTotal, durationMs },
+              'audit-sa: page fetched',
+            );
+            emit(topic, { type: 'audit-sa-progress', phase: 'fetching', page: pageInSegment, lastTime: lastTimeUtc, pct, processedMinutes: processed, totalMinutes: dynamicTotal, eta });
+            if (pageInSegment > 1) callbacks?.onProgress?.(processed, dynamicTotal, lastTimeUtc, pct, sa.region, sa.subdomain);
+
+            const firstHourKey = records[0]?.time ? parseHourKey(records[0].time) : '';
+            const newHour = firstHourKey !== '' && firstHourKey !== lastHourKey && lastHourKey !== '';
+            if (pendingRecords.length > 0 && (newHour || pendingRecords.length > 2000)) {
+              await parseAndSaveRecords(dir, pendingRecords);
+              totalSaved += pendingRecords.length;
+              pendingRecords = [];
+            }
+            pendingRecords.push(...records);
+            if (lastTime) lastHourKey = parseHourKey(lastTime);
+
+            const pagingHeader = res.headers.get('paging') ?? res.headers.get('Paging') ?? '';
+            const handleMatch  = pagingHeader.match(/handle=([^\s,]+)/);
+            if (handleMatch?.[1]) {
+              url = `${creds.url}/auditlog/v2/auditlogrecords?handle=${encodeURIComponent(handleMatch[1])}`;
+              await new Promise(r => setTimeout(r, delayMs));
+            } else {
+              url = null;
+            }
+          }
+
+          // Flush remaining buffer for this segment
+          if (pendingRecords.length > 0) {
+            await parseAndSaveRecords(dir, pendingRecords);
+            totalSaved += pendingRecords.length;
+          }
+
+          // Write empty placeholder files for hours with no records in the fetched range.
+          // Skip if stopped mid-segment — we may not have fetched those hours at all.
+          if (!saStopRequested.has(key)) {
+            await fillEmptyHours(dir, seg.startTs, segEndTs);
+          }
+
+          // Accumulate minutes covered by this completed segment
+          completedMinutes += Math.max(0, countMinutes(seg.startTs, segEndTs));
+
+          if (saStopRequested.has(key)) break;
         }
-        pendingRecords.push(...records);
-        if (lastTime) lastHourKey = parseHourKey(lastTime);
 
-        const pagingHeader = res.headers.get('paging') ?? res.headers.get('Paging') ?? '';
-        const handleMatch  = pagingHeader.match(/handle=([^\s,]+)/);
-        if (handleMatch?.[1]) {
-          url = `${creds.url}/auditlog/v2/auditlogrecords?handle=${encodeURIComponent(handleMatch[1])}`;
-          await new Promise(r => setTimeout(r, delayMs));
+        const stopped = saStopRequested.has(key);
+        if (stopped) {
+          logger.info({ alias, totalSaved, pages: page }, 'Single-SA audit log refresh stopped by user — partial records saved');
         } else {
-          url = null;
+          logger.info({ alias, totalSaved, pages: page }, 'Single-SA audit log refresh complete');
+        }
+        emitImmediate(topic, { type: 'audit-sa-done', warnings, stopped });
+        callbacks?.onDone?.(warnings, totalSaved);
+        return; // success — exit retry loop
+      } catch (err) {
+        if (attempt < MAX_ATTEMPTS && !saStopRequested.has(key)) {
+          const retryDelayMs = attempt * 5_000;
+          logger.warn({ err, region, subdomain, attempt, retryDelayMs }, `Single-SA audit log refresh attempt ${attempt}/${MAX_ATTEMPTS} failed, retrying in ${retryDelayMs}ms`);
+          await new Promise(r => setTimeout(r, retryDelayMs));
+        } else {
+          throw err; // propagate to outer catch after all attempts or when stopped
         }
       }
-
-      // Flush remaining buffer for this segment
-      if (pendingRecords.length > 0) {
-        await parseAndSaveRecords(dir, pendingRecords);
-        totalSaved += pendingRecords.length;
-      }
-
-      // Write empty placeholder files for hours with no records in the fetched range.
-      // Skip if stopped mid-segment — we may not have fetched those hours at all.
-      if (!saStopRequested.has(key)) {
-        await fillEmptyHours(dir, seg.startTs, segEndTs);
-      }
-
-      // Accumulate minutes covered by this completed segment
-      completedMinutes += Math.max(0, countMinutes(seg.startTs, segEndTs));
-
-      if (saStopRequested.has(key)) break;
     }
-
-    const stopped = saStopRequested.has(key);
-    if (stopped) {
-      logger.info({ alias, totalSaved, pages: page }, 'Single-SA audit log refresh stopped by user — partial records saved');
-    } else {
-      logger.info({ alias, totalSaved, pages: page }, 'Single-SA audit log refresh complete');
-    }
-    emitImmediate(topic, { type: 'audit-sa-done', warnings, stopped });
-    callbacks?.onDone?.(warnings, totalSaved);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     emitImmediate(topic, { type: 'audit-sa-error', error: msg, warnings });
