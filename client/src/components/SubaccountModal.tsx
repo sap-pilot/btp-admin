@@ -297,7 +297,7 @@ export default function SubaccountModal({ sa, onClose, cockpit, cockpitMenu, isA
   }
 
   const tabCls = (t: ModalTab) =>
-    `px-3 py-2 text-xs font-medium transition-colors border-b-2 -mb-px ${
+    `px-3 py-2 text-xs font-medium transition-colors border-b-2 ${
       activeTab === t
         ? 'border-primary text-foreground'
         : 'border-transparent text-muted-foreground hover:text-foreground'
@@ -486,8 +486,6 @@ export default function SubaccountModal({ sa, onClose, cockpit, cockpitMenu, isA
     );
   }
 
-  const tabLabel = TAB_LABEL[activeTab] ?? 'Overview';
-
   return (
     <DialogPrimitive.Root open={sa !== null} onOpenChange={v => { if (!v) onClose(); }}>
       <DialogPrimitive.Portal>
@@ -502,14 +500,14 @@ export default function SubaccountModal({ sa, onClose, cockpit, cockpitMenu, isA
         >
           {!sa ? null : (
             <>
-              {/* Header */}
-              <div className="flex items-center gap-2 px-4 py-3 border-b border-border shrink-0">
-                {/* Breadcrumb title */}
-                <DialogPrimitive.Title className="flex items-center gap-1.5 min-w-0 flex-1 overflow-hidden text-sm font-semibold">
+              {/* Header — consolidated with tab bar */}
+              <div className="flex items-stretch px-4 border-b border-border shrink-0">
+                {/* Name + Restricted badge */}
+                <DialogPrimitive.Title className="flex items-center gap-1.5 shrink min-w-0 py-3 pr-3 text-sm font-semibold">
                   {showSwitcher ? (
                     <DropdownMenu onOpenChange={open => { if (!open) setSaFilter(''); }}>
                       <DropdownMenuTrigger asChild>
-                        <button className="flex items-center gap-1 rounded px-1 -mx-1 hover:bg-accent transition-colors min-w-0 max-w-[50%]">
+                        <button className="flex items-center gap-1 rounded px-1 -mx-1 hover:bg-accent transition-colors min-w-0 max-w-[300px]">
                           <span className="truncate text-sm font-semibold">{sa.alias || sa.subaccountName}</span>
                           <span className="text-xs font-normal font-mono text-muted-foreground shrink-0">({sa.region}.{sa.subdomain})</span>
                           <ChevronDown className="h-3 w-3 text-muted-foreground shrink-0 opacity-60" />
@@ -528,73 +526,74 @@ export default function SubaccountModal({ sa, onClose, cockpit, cockpitMenu, isA
                       <ShieldBan className="h-3 w-3" /> Restricted
                     </span>
                   )}
-                  <span className="text-muted-foreground shrink-0 text-xs font-normal">›</span>
-                  <span className="text-xs text-muted-foreground shrink-0 font-medium">{tabLabel}</span>
                 </DialogPrimitive.Title>
 
-                {cockpit && (() => {
-                  const ctx     = buildCtx(sa, cockpit);
-                  const saUrl   = resolveUrl(SA_COCKPIT_TPL, ctx);
-                  const spaces  = sa.org?.spaces ?? [];
-                  const hasSubs = !!(cockpitMenu?.submenus && cockpitMenu.submenus.length > 0);
-                  const btnBase = 'flex items-center text-xs py-1 text-muted-foreground hover:bg-accent hover:text-foreground transition-colors';
-                  return (
-                    <div className="inline-flex rounded border border-border shrink-0 overflow-hidden">
-                      <a href={saUrl} target="_blank" rel="noopener noreferrer" className={`${btnBase} px-2 ${hasSubs ? 'border-r border-border' : ''}`}>Open Cockpit</a>
-                      {hasSubs && (
-                        <DropdownMenu>
-                          <DropdownMenuTrigger asChild>
-                            <button className={`${btnBase} px-1.5`}>
-                              <ChevronDown className="h-3 w-3 opacity-60" />
-                            </button>
-                          </DropdownMenuTrigger>
-                          <DropdownMenuContent align="end" className="max-h-[min(70vh,420px)] overflow-y-auto">
-                            {renderMenuItems(cockpitMenu!.submenus!, ctx, spaces)}
-                          </DropdownMenuContent>
-                        </DropdownMenu>
-                      )}
-                    </div>
-                  );
-                })()}
-                {!isPopup && (
-                  <button
-                    onClick={openInPopup}
-                    className="p-1.5 rounded hover:bg-accent text-muted-foreground hover:text-foreground transition-colors shrink-0"
-                    title={"Open this modal in a new window.\nCtrl-click a subaccount link to open directly in a popup.\nShift-click a subaccount link to open in a new tab."}
-                  >
-                    <ExternalLink className="h-4 w-4" />
-                  </button>
-                )}
-                {!isPopup && (
-                  <button
-                    onClick={() => setMaximized(v => !v)}
-                    className="p-1.5 rounded hover:bg-accent text-muted-foreground hover:text-foreground transition-colors shrink-0"
-                    title={maximized ? 'Restore' : 'Maximize'}
-                  >
-                    {maximized ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}
-                  </button>
-                )}
-                <button
-                  onClick={onClose}
-                  className="p-1.5 rounded hover:bg-accent text-muted-foreground hover:text-foreground transition-colors shrink-0"
-                >
-                  <X className="h-4 w-4" />
-                </button>
-              </div>
+                {/* Tabs — inline, vertically centered */}
+                <div className="flex items-center">
+                  <button className={tabCls('info')} onClick={() => handleTabSwitch('info')}>Overview</button>
+                  <button className={tabCls('services')} onClick={() => handleTabSwitch('services')}>Services</button>
+                  {isAdminMode && (
+                    <>
+                      <button className={tabCls('apps')} onClick={() => handleTabSwitch('apps')}>Apps</button>
+                      <button className={tabCls('destinations')} onClick={() => handleTabSwitch('destinations')}>Destinations</button>
+                      <button className={tabCls('roles')} onClick={() => handleTabSwitch('roles')}>Roles</button>
+                      <button className={tabCls('users')} onClick={() => handleTabSwitch('users')}>Users</button>
+                      <button className={tabCls('audit')} onClick={() => handleTabSwitch('audit')}>Audit Logs</button>
+                    </>
+                  )}
+                </div>
 
-              {/* Tab bar */}
-              <div className="flex border-b border-border shrink-0 px-2 bg-muted/5">
-                <button className={tabCls('info')} onClick={() => handleTabSwitch('info')}>Overview</button>
-                <button className={tabCls('services')} onClick={() => handleTabSwitch('services')}>Services</button>
-                {isAdminMode && (
-                  <>
-                    <button className={tabCls('apps')} onClick={() => handleTabSwitch('apps')}>Apps</button>
-                    <button className={tabCls('destinations')} onClick={() => handleTabSwitch('destinations')}>Destinations</button>
-                    <button className={tabCls('roles')} onClick={() => handleTabSwitch('roles')}>Roles</button>
-                    <button className={tabCls('users')} onClick={() => handleTabSwitch('users')}>Users</button>
-                    <button className={tabCls('audit')} onClick={() => handleTabSwitch('audit')}>Audit Logs</button>
-                  </>
-                )}
+                {/* Actions */}
+                <div className="flex items-center gap-1 ml-auto pl-2">
+                  {cockpit && (() => {
+                    const ctx     = buildCtx(sa, cockpit);
+                    const saUrl   = resolveUrl(SA_COCKPIT_TPL, ctx);
+                    const spaces  = sa.org?.spaces ?? [];
+                    const hasSubs = !!(cockpitMenu?.submenus && cockpitMenu.submenus.length > 0);
+                    const btnBase = 'flex items-center text-xs py-1 text-muted-foreground hover:bg-accent hover:text-foreground transition-colors';
+                    return (
+                      <div className="inline-flex rounded border border-border shrink-0 overflow-hidden">
+                        <a href={saUrl} target="_blank" rel="noopener noreferrer" className={`${btnBase} px-2 ${hasSubs ? 'border-r border-border' : ''}`}>Open Cockpit</a>
+                        {hasSubs && (
+                          <DropdownMenu>
+                            <DropdownMenuTrigger asChild>
+                              <button className={`${btnBase} px-1.5`}>
+                                <ChevronDown className="h-3 w-3 opacity-60" />
+                              </button>
+                            </DropdownMenuTrigger>
+                            <DropdownMenuContent align="end" className="max-h-[min(70vh,420px)] overflow-y-auto">
+                              {renderMenuItems(cockpitMenu!.submenus!, ctx, spaces)}
+                            </DropdownMenuContent>
+                          </DropdownMenu>
+                        )}
+                      </div>
+                    );
+                  })()}
+                  {!isPopup && (
+                    <button
+                      onClick={openInPopup}
+                      className="p-1.5 rounded hover:bg-accent text-muted-foreground hover:text-foreground transition-colors shrink-0"
+                      title={"Open this modal in a new window.\nCtrl-click a subaccount link to open directly in a popup.\nShift-click a subaccount link to open in a new tab."}
+                    >
+                      <ExternalLink className="h-4 w-4" />
+                    </button>
+                  )}
+                  {!isPopup && (
+                    <button
+                      onClick={() => setMaximized(v => !v)}
+                      className="p-1.5 rounded hover:bg-accent text-muted-foreground hover:text-foreground transition-colors shrink-0"
+                      title={maximized ? 'Restore' : 'Maximize'}
+                    >
+                      {maximized ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}
+                    </button>
+                  )}
+                  <button
+                    onClick={onClose}
+                    className="p-1.5 rounded hover:bg-accent text-muted-foreground hover:text-foreground transition-colors shrink-0"
+                  >
+                    <X className="h-4 w-4" />
+                  </button>
+                </div>
               </div>
 
               {/* Tab content */}
